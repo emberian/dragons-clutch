@@ -24,8 +24,10 @@ use dclutch_source::resolution::{
     ResolutionCertificateKindV2, ResolutionCertificateV2,
 };
 use dclutch_source::{
-    SOURCE_RESOLUTION_STATE_BYTES_V2, SourceResolutionPhaseV1, SourceResolutionRouteV1,
-    SourceResolutionStateV2,
+    PROVIDER_RELEASE_SCHEMA_ID_V1, ProviderReleaseV1, RECOVERY_POLICY_SCHEMA_ID_V2,
+    RecoveryPolicyV2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_RESOLUTION_STATE_BYTES_V2,
+    SOURCE_SPEC_SCHEMA_ID_V1, SourceMaterialV3, SourceResolutionPhaseV1, SourceResolutionRouteV1,
+    SourceResolutionStateV2, SourceSpecV1,
 };
 use solana_program::{
     account_info::AccountInfo,
@@ -145,6 +147,8 @@ pub(crate) fn process(
 
     let product = Box::new(authenticate_product(accounts, &state, &provider)?);
 
+    let certificate_route = authenticate_provider_route(accounts, &provider)?;
+
     invoke_resolution(
         accounts,
         provider_request_bytes,
@@ -154,7 +158,14 @@ pub(crate) fn process(
     )?;
     require_unchanged_market(account(accounts, MARKET)?, &state_bytes)?;
     let receipt = boxed_immediate_receipt(account(accounts, RESOLUTION_PROGRAM)?, &provider)?;
-    authenticate_terminal_poststate(accounts, &state, &provider, &receipt, &product)?;
+    authenticate_terminal_poststate(
+        accounts,
+        &state,
+        &provider,
+        &receipt,
+        &product,
+        certificate_route,
+    )?;
     Ok(())
 }
 
@@ -319,12 +330,162 @@ fn authenticate_product(
     Ok(product)
 }
 
+/// Select the certificate route from immutable records and the Source prestate.
+/// The Source clears its active attempt on resolution, so this join occurs
+/// before CPI; the child cannot substitute the route it later certifies.
+#[inline(never)]
+fn authenticate_provider_route(
+    accounts: &[AccountInfo<'_>],
+    request: &ProviderExecutionRequestV3,
+) -> Result<[u8; 32], CoreSbfError> {
+    let material = with_source_record(
+        accounts,
+        17,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
+        request.source_material,
+        SourceMaterialV3::decode,
+    )?;
+    let source_spec = with_source_record(
+        accounts,
+        19,
+        SOURCE_SPEC_SCHEMA_ID_V1,
+        request.source_spec,
+        SourceSpecV1::decode,
+    )?;
+    let route = source_spec.provider_release_id().to_bytes();
+    let provider = with_source_record(
+        accounts,
+        21,
+        PROVIDER_RELEASE_SCHEMA_ID_V1,
+        route,
+        ProviderReleaseV1::decode,
+    )?;
+    if material.product_record_digest().to_bytes() != request.product_record
+        || provider.provider_deployment_release_id().to_bytes() != request.provider_release
+    {
+        return Err(CoreSbfError::Reference);
+    }
+    let source_account = account(accounts, SOURCE_STATE)?;
+    let source_bytes =
+        read_exact::<SOURCE_RESOLUTION_STATE_BYTES_V2>(source_account, CoreSbfError::Reference)?;
+    let source =
+        SourceResolutionStateV2::decode(&source_bytes).map_err(|_| CoreSbfError::Reference)?;
+    let resolution = account(accounts, RESOLUTION_PROGRAM)?.key;
+    let seeds = source.pda_seeds();
+    let bump = [seeds.bump()];
+    let expected = Pubkey::create_program_address(
+        &[
+            seeds.domain(),
+            &seeds.market(),
+            &seeds.generation_le(),
+            &bump,
+        ],
+        resolution,
+    )
+    .map_err(|_| CoreSbfError::Reference)?;
+    if source_account.key != &expected
+        || source_account.owner != resolution
+        || source_account.executable
+        || source.market() != request.market
+        || source.generation() != request.generation
+        || source.material_id().to_bytes() != request.source_material
+        || source.next_terminal_sequence().ok() != Some(request.terminal_sequence)
+    {
+        return Err(CoreSbfError::Reference);
+    }
+    match (request.source_index, source.phase()) {
+        (0, SourceResolutionPhaseV1::Primary) if material.ensemble().is_single() => {
+            if material.primary_source_spec().to_bytes() != request.source_spec {
+                return Err(CoreSbfError::Reference);
+            }
+        }
+        (index, SourceResolutionPhaseV1::Recovery) if index != 0 => {
+            let attempt_index = index.checked_sub(1).ok_or(CoreSbfError::Reference)?;
+            if source.active_attempt() != attempt_index {
+                return Err(CoreSbfError::Reference);
+            }
+            authenticate_recovery_provider_route(
+                accounts,
+                request,
+                material,
+                source_spec,
+                attempt_index,
+            )?;
+        }
+        _ => return Err(CoreSbfError::Reference),
+    }
+    Ok(route)
+}
+
+#[inline(never)]
+fn authenticate_recovery_provider_route(
+    accounts: &[AccountInfo<'_>],
+    request: &ProviderExecutionRequestV3,
+    material: SourceMaterialV3,
+    source: SourceSpecV1,
+    attempt_index: u8,
+) -> Result<(), CoreSbfError> {
+    let policy_id = material.recovery_policy().ok_or(CoreSbfError::Reference)?;
+    let policy = with_source_record(
+        accounts,
+        EXECUTE_PROVIDER_ACCOUNT_COUNT_V3,
+        RECOVERY_POLICY_SCHEMA_ID_V2,
+        policy_id.to_bytes(),
+        RecoveryPolicyV2::decode,
+    )?;
+    let attempt = policy
+        .attempt(attempt_index)
+        .map_err(|_| CoreSbfError::Reference)?;
+    if attempt.source_spec_id().to_bytes() != request.source_spec
+        || attempt.provider_release_id() != source.provider_release_id()
+    {
+        return Err(CoreSbfError::Reference);
+    }
+    policy
+        .validate_capacity_profile(source.capacity_profile_id())
+        .map_err(|_| CoreSbfError::Reference)
+}
+
+fn with_source_record<T>(
+    accounts: &[AccountInfo<'_>],
+    index: usize,
+    schema: [u8; 32],
+    digest: [u8; 32],
+    decode: impl FnOnce(&[u8]) -> dclutch_source::Result<T>,
+) -> Result<T, CoreSbfError> {
+    let raw = account(accounts, index)?;
+    let data = raw
+        .try_borrow_data()
+        .map_err(|_| CoreSbfError::FinalizedRecord)?;
+    let bytes = crate::records::authenticate_finalized_record(
+        account(accounts, REGISTRY)?.key,
+        raw,
+        account(accounts, index + 1)?,
+        schema,
+        digest,
+        &data,
+    )?;
+    decode(bytes).map_err(|_| CoreSbfError::Reference)
+}
+
+fn authenticate_certificate_route(
+    observed: [u8; 32],
+    authenticated_source_provider: [u8; 32],
+) -> Result<(), CoreSbfError> {
+    if observed != authenticated_source_provider {
+        solana_program::msg!("provider certificate differs from selected Source ProviderRelease");
+        return Err(CoreSbfError::ChildAck);
+    }
+    Ok(())
+}
+
 fn authenticate_terminal_poststate(
     accounts: &[AccountInfo<'_>],
     state: &CoreState,
     request: &ProviderExecutionRequestV3,
     receipt: &ProviderExecutionReceiptV3,
     product: &Product,
+    certificate_route: [u8; 32],
 ) -> Result<(), CoreSbfError> {
     if receipt.outcome_count != product.outcome_count || receipt.selector >= product.outcome_count {
         return Err(CoreSbfError::ChildAck);
@@ -382,7 +543,14 @@ fn authenticate_terminal_poststate(
         return Err(CoreSbfError::ChildAck);
     }
     authenticate_lifecycle(accounts, request, receipt)?;
-    authenticate_certificate(accounts, state, request, receipt, product)
+    authenticate_certificate(
+        accounts,
+        state.identity.product_record.to_bytes(),
+        request,
+        receipt,
+        product.outcome_count,
+        certificate_route,
+    )
 }
 
 fn authenticate_lifecycle(
@@ -446,10 +614,11 @@ fn authenticate_lifecycle(
 
 fn authenticate_certificate(
     accounts: &[AccountInfo<'_>],
-    state: &CoreState,
+    product_record: [u8; 32],
     request: &ProviderExecutionRequestV3,
     receipt: &ProviderExecutionReceiptV3,
-    product: &Product,
+    outcome_count: u32,
+    certificate_route: [u8; 32],
 ) -> Result<(), CoreSbfError> {
     let resolution_program = account(accounts, RESOLUTION_PROGRAM)?.key;
     let certificate_account = account(accounts, CERTIFICATE)?;
@@ -457,6 +626,7 @@ fn authenticate_certificate(
         read_exact::<RESOLUTION_CERTIFICATE_BYTES_V2>(certificate_account, CoreSbfError::ChildAck)?;
     let certificate =
         ResolutionCertificateV2::decode(&bytes).map_err(|_| CoreSbfError::ChildAck)?;
+    authenticate_certificate_route(certificate.route, certificate_route)?;
     let kind = [1_u8];
     let sequence = request.terminal_sequence.to_le_bytes();
     let expected = Pubkey::find_program_address(
@@ -476,9 +646,8 @@ fn authenticate_certificate(
         || !funded_rent_persists_v1(certificate_account.lamports())
         || certificate.kind != ResolutionCertificateKindV2::ResolutionSuccess
         || certificate.market != request.market
-        || certificate.route != request.provider_release
         || certificate.source_material != request.source_material
-        || certificate.product_record_digest != state.identity.product_record.to_bytes()
+        || certificate.product_record_digest != product_record
         || certificate.provider_evidence != receipt.provider_evidence
         || certificate.funding_allocation != [0; 32]
         || certificate.receipt_account != request.certificate_account
@@ -497,7 +666,7 @@ fn authenticate_certificate(
         || certificate.result_denominator != receipt.result_denominator
         || certificate.observed_at != observed_at
         || certificate
-            .validate_terminal_product(request.product_record, product.outcome_count)
+            .validate_terminal_product(request.product_record, outcome_count)
             .is_err()
     {
         return Err(CoreSbfError::ChildAck);
@@ -576,4 +745,393 @@ fn account<'accounts, 'info>(
     index: usize,
 ) -> Result<&'accounts AccountInfo<'info>, CoreSbfError> {
     accounts.get(index).ok_or(CoreSbfError::AccountFrame)
+}
+
+#[cfg(test)]
+mod provider_route_tests {
+    use super::*;
+    use dclutch_source::{
+        ContentId, RecoveryAttemptV2, SourceAccessProfile, WindowKind, WindowSpecV1,
+    };
+
+    struct OwnedAccount {
+        key: Pubkey,
+        owner: Pubkey,
+        lamports: u64,
+        data: Vec<u8>,
+    }
+
+    impl OwnedAccount {
+        fn info(&mut self) -> AccountInfo<'_> {
+            AccountInfo::new(
+                &self.key,
+                false,
+                false,
+                &mut self.lamports,
+                &mut self.data,
+                &self.owner,
+                false,
+            )
+        }
+    }
+
+    fn id(tag: u8) -> ContentId {
+        ContentId::new([tag; 32]).expect("nonzero ID")
+    }
+
+    fn record(
+        accounts: &mut [OwnedAccount],
+        index: usize,
+        schema: [u8; 32],
+        data: Vec<u8>,
+    ) -> [u8; 32] {
+        let digest = hash(&data).to_bytes();
+        let registry = accounts[REGISTRY].key;
+        let (raw, staging, _) = crate::records::derive_record_pdas(&registry, schema, digest);
+        accounts[index] = OwnedAccount {
+            key: raw,
+            owner: registry,
+            lamports: 1,
+            data,
+        };
+        accounts[index + 1] = OwnedAccount {
+            key: staging,
+            owner: system_program::ID,
+            lamports: 0,
+            data: Vec::new(),
+        };
+        digest
+    }
+
+    fn fixture(recovery: bool) -> (Vec<OwnedAccount>, ProviderExecutionRequestV3, [u8; 32]) {
+        let mut accounts: Vec<_> = (0..EXECUTE_PROVIDER_RECOVERY_ACCOUNT_COUNT_V3)
+            .map(|_| OwnedAccount {
+                key: Pubkey::new_unique(),
+                owner: system_program::ID,
+                lamports: 1,
+                data: Vec::new(),
+            })
+            .collect();
+        let deployment = id(8);
+        let provider = ProviderReleaseV1::new(id(1), id(2), deployment, id(3), id(4));
+        let route = record(
+            &mut accounts,
+            21,
+            PROVIDER_RELEASE_SCHEMA_ID_V1,
+            provider.to_bytes().to_vec(),
+        );
+        let spec = SourceSpecV1::new(
+            id(5),
+            id(6),
+            ContentId::new(route).expect("route"),
+            SourceAccessProfile::PythTerminalOneTransaction,
+            id(7),
+            id(9),
+        );
+        let spec_id = record(
+            &mut accounts,
+            19,
+            SOURCE_SPEC_SCHEMA_ID_V1,
+            spec.to_bytes().to_vec(),
+        );
+        let selected = ContentId::new(spec_id).expect("spec");
+        let primary = if recovery { id(10) } else { selected };
+        let policy = RecoveryPolicyV2::new(
+            id(9),
+            [
+                Some(
+                    RecoveryAttemptV2::new(
+                        selected,
+                        ContentId::new(route).expect("route"),
+                        200,
+                        id(11),
+                    )
+                    .expect("attempt"),
+                ),
+                Some(
+                    RecoveryAttemptV2::new(
+                        selected,
+                        ContentId::new(route).expect("route"),
+                        300,
+                        id(12),
+                    )
+                    .expect("attempt"),
+                ),
+                None,
+                None,
+            ],
+            2,
+        )
+        .expect("policy");
+        let policy_id = ContentId::new(record(
+            &mut accounts,
+            EXECUTE_PROVIDER_ACCOUNT_COUNT_V3,
+            RECOVERY_POLICY_SCHEMA_ID_V2,
+            policy.to_bytes().to_vec(),
+        ))
+        .expect("policy ID");
+        let window =
+            WindowSpecV1::new(primary, WindowKind::Terminal, 1, 90, 10, 1, id(13)).expect("window");
+        let window_id = id(14);
+        let material = SourceMaterialV3::explicitly_unbounded(
+            id(15),
+            primary,
+            window_id,
+            id(16),
+            Some(policy_id),
+            id(17),
+        );
+        let material_id = record(
+            &mut accounts,
+            17,
+            SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
+            material.to_bytes().to_vec(),
+        );
+        let generation = 7_u64;
+        let market = accounts[MARKET].key.to_bytes();
+        let resolution = accounts[RESOLUTION_PROGRAM].key;
+        let (source_key, bump) = Pubkey::find_program_address(
+            &[
+                dclutch_source::SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
+                &market,
+                &generation.to_le_bytes(),
+            ],
+            &resolution,
+        );
+        let mut source = SourceResolutionStateV2::fresh(
+            market,
+            generation,
+            ContentId::new(material_id).expect("material ID"),
+            [18; 32],
+            bump,
+            0,
+            0,
+        )
+        .expect("source")
+        .state();
+        if recovery {
+            source
+                .crank_recovery_ladder(
+                    ContentId::new(material_id).expect("material"),
+                    material,
+                    window_id,
+                    window,
+                    policy_id,
+                    policy,
+                    generation,
+                    101,
+                    0,
+                )
+                .expect("first rung");
+            source
+                .crank_recovery_ladder(
+                    ContentId::new(material_id).expect("material"),
+                    material,
+                    window_id,
+                    window,
+                    policy_id,
+                    policy,
+                    generation,
+                    201,
+                    0,
+                )
+                .expect("second rung");
+        }
+        accounts[SOURCE_STATE] = OwnedAccount {
+            key: source_key,
+            owner: resolution,
+            lamports: 1,
+            data: source.to_bytes().to_vec(),
+        };
+        let request = ProviderExecutionRequestV3 {
+            caller: ProviderCallerV3::Core,
+            source_index: if recovery { 2 } else { 0 },
+            generation,
+            terminal_sequence: source.next_terminal_sequence().expect("sequence"),
+            market,
+            source_state: source_key.to_bytes(),
+            certificate_account: accounts[CERTIFICATE].key.to_bytes(),
+            source_material: material_id,
+            source_spec: spec_id,
+            product_record: id(15).to_bytes(),
+            result_domain: [20; 32],
+            provider_release: deployment.to_bytes(),
+            update_account: [21; 32],
+            expected_update_digest: [22; 32],
+            provider_submitter: [23; 32],
+            resolver: [24; 32],
+            caller_program: [25; 32],
+            release_set: [26; 32],
+            capability_program_set: [0; 32],
+            selected_capability_program: [0; 32],
+            parent_request_digest: [27; 32],
+            post_params_body_digest: [28; 32],
+        };
+        (accounts, request, route)
+    }
+
+    fn authenticate(
+        accounts: &mut [OwnedAccount],
+        request: &ProviderExecutionRequestV3,
+    ) -> Result<[u8; 32], CoreSbfError> {
+        let infos: Vec<_> = accounts.iter_mut().map(OwnedAccount::info).collect();
+        authenticate_provider_route(&infos, request)
+    }
+
+    fn certificate_poststate(
+        accounts: &mut [OwnedAccount],
+        request: &mut ProviderExecutionRequestV3,
+        route: [u8; 32],
+    ) -> ProviderExecutionReceiptV3 {
+        let key = Pubkey::find_program_address(
+            &[
+                RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
+                &request.source_state,
+                &[1],
+                &request.terminal_sequence.to_le_bytes(),
+            ],
+            &accounts[RESOLUTION_PROGRAM].key,
+        )
+        .0;
+        request.certificate_account = key.to_bytes();
+        let certificate = ResolutionCertificateV2 {
+            kind: ResolutionCertificateKindV2::ResolutionSuccess,
+            market: request.market,
+            route,
+            source_material: request.source_material,
+            product_record_digest: request.product_record,
+            provider_evidence: [31; 32],
+            funding_allocation: [0; 32],
+            receipt_account: key.to_bytes(),
+            generation: request.generation,
+            attempt_index: u32::from(request.source_index),
+            schedule_index: 0,
+            selector: 0,
+            work_paid: 0,
+            funding_remaining: 0,
+            result_numerator: 100_000_000,
+            result_denominator: 1,
+            observed_at: 250,
+        };
+        accounts[CERTIFICATE] = OwnedAccount {
+            key,
+            owner: accounts[RESOLUTION_PROGRAM].key,
+            lamports: 1,
+            data: certificate.to_bytes().expect("certificate").to_vec(),
+        };
+        ProviderExecutionReceiptV3 {
+            caller: request.caller,
+            generation: request.generation,
+            terminal_sequence: request.terminal_sequence,
+            request_digest: [32; 32],
+            provider_evidence: certificate.provider_evidence,
+            update_digest: request.expected_update_digest,
+            post_params_body_digest: request.post_params_body_digest,
+            market: request.market,
+            source_state: request.source_state,
+            certificate_account: request.certificate_account,
+            source_material: request.source_material,
+            product_record: request.product_record,
+            result_domain: request.result_domain,
+            provider_release: request.provider_release,
+            update_account: request.update_account,
+            provider_submitter: request.provider_submitter,
+            resolver: request.resolver,
+            caller_program: request.caller_program,
+            release_set: request.release_set,
+            capability_program_set: request.capability_program_set,
+            selected_capability_program: request.selected_capability_program,
+            selector: certificate.selector,
+            outcome_count: 4,
+            result_numerator: certificate.result_numerator,
+            result_denominator: certificate.result_denominator,
+            publish_time: 250,
+            posted_slot: 100,
+            consumed_slot: 101,
+        }
+    }
+
+    #[test]
+    fn terminal_certificate_uses_source_provider_with_distinct_pyth_deployment() {
+        for recovery in [false, true] {
+            let (mut accounts, mut request, route) = fixture(recovery);
+            assert_ne!(route, request.provider_release);
+            let selected =
+                authenticate(&mut accounts, &request).expect("selected native Source route");
+            assert_eq!(selected, route);
+            let receipt = certificate_poststate(&mut accounts, &mut request, route);
+            let infos: Vec<_> = accounts.iter_mut().map(OwnedAccount::info).collect();
+            assert_eq!(
+                authenticate_certificate(
+                    &infos,
+                    request.product_record,
+                    &request,
+                    &receipt,
+                    4,
+                    selected
+                ),
+                Ok(())
+            );
+            assert_eq!(authenticate_certificate_route(route, selected), Ok(()));
+            assert_eq!(
+                authenticate_certificate_route(request.provider_release, selected),
+                Err(CoreSbfError::ChildAck)
+            );
+            assert_eq!(
+                authenticate_certificate_route([99; 32], selected),
+                Err(CoreSbfError::ChildAck)
+            );
+        }
+    }
+
+    #[test]
+    fn selected_provider_refuses_valid_record_substitutions_and_wrong_active_rung() {
+        for recovery in [false, true] {
+            let (mut accounts, mut request, _) = fixture(recovery);
+            assert!(authenticate(&mut accounts, &request).is_ok());
+            request.provider_release = [99; 32];
+            assert_eq!(
+                authenticate(&mut accounts, &request),
+                Err(CoreSbfError::Reference)
+            );
+            let (mut accounts, mut request, _) = fixture(recovery);
+            let mut spec = SourceSpecV1::decode(&accounts[19].data).expect("spec");
+            spec = SourceSpecV1::new(
+                id(99),
+                spec.unit_id(),
+                spec.provider_release_id(),
+                spec.access_profile(),
+                spec.adapter_config_id(),
+                spec.capacity_profile_id(),
+            );
+            request.source_spec = record(
+                &mut accounts,
+                19,
+                SOURCE_SPEC_SCHEMA_ID_V1,
+                spec.to_bytes().to_vec(),
+            );
+            assert_eq!(
+                authenticate(&mut accounts, &request),
+                Err(CoreSbfError::Reference)
+            );
+            let (mut accounts, request, _) = fixture(recovery);
+            accounts[21].owner = Pubkey::new_unique();
+            assert_eq!(
+                authenticate(&mut accounts, &request),
+                Err(CoreSbfError::FinalizedRecord)
+            );
+            let (mut accounts, request, _) = fixture(recovery);
+            accounts[22].data.push(1);
+            assert_eq!(
+                authenticate(&mut accounts, &request),
+                Err(CoreSbfError::FinalizedRecord)
+            );
+        }
+        let (mut accounts, mut request, _) = fixture(true);
+        request.source_index = 1;
+        assert_eq!(
+            authenticate(&mut accounts, &request),
+            Err(CoreSbfError::Reference)
+        );
+    }
 }

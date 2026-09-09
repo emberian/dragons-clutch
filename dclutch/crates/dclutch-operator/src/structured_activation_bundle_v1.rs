@@ -26,17 +26,10 @@ pub const STRUCTURED_ACTIVATION_REQUEST_SCHEMA_ID_V1: [u8; 32] = [
     0x11, 0x5a, 0x46, 0xe4, 0x6b, 0xcb, 0x7e, 0x54, 0x76, 0xcc, 0xbe, 0xf8, 0x6a, 0x08, 0x74, 0x2c,
     0x2d, 0x5f, 0x85, 0x45, 0xab, 0x03, 0x6b, 0xca, 0x8b, 0x5a, 0x64, 0x2a, 0xe5, 0xe2, 0x7d, 0xe8,
 ];
-/// The emitted Structured capability-tail schema and fixed root tail.
-pub const STRUCTURED_CAPABILITY_ROOT_SCHEMA_ID_V1: [u8; 32] = [
-    0x0b, 0x63, 0x65, 0x31, 0xa3, 0xc2, 0x04, 0x29, 0x12, 0x6e, 0xcc, 0x1d, 0x75, 0xad, 0xc2, 0xfa,
-    0x7d, 0xde, 0x1a, 0x27, 0xe8, 0xd1, 0x95, 0x45, 0x6d, 0x48, 0x47, 0x99, 0xf6, 0x92, 0xac, 0x2c,
-];
-/// Fixed byte width of the Trading-owned Structured capability tail.
-pub const STRUCTURED_CAPABILITY_ROOT_BYTES_V1: usize = 16;
-/// Canonical active Structured capability-tail bytes.
-pub const STRUCTURED_CAPABILITY_ROOT_TAIL_V1: [u8; STRUCTURED_CAPABILITY_ROOT_BYTES_V1] = [
-    b'D', b'C', b'S', b'T', b'C', b'R', b'T', b'1', 1, 0, 1, 0, 0, 0, 0, 0,
-];
+pub use dclutch_trading::structured_root_v2::{
+    STRUCTURED_CAPABILITY_ROOT_BYTES_V2, STRUCTURED_CAPABILITY_ROOT_SCHEMA_ID_V2,
+    STRUCTURED_CAPABILITY_ROOT_TAIL_V2,
+};
 
 /// The exact root-creation selector request.
 pub fn structured_activation_request_v1() -> [u8; STRUCTURED_ACTIVATION_REQUEST_BYTES_V1] {
@@ -60,8 +53,8 @@ pub fn build_structured_activation_bundle_v1(
     let action = CapabilityProgramV4::decode(action_descriptor).ok()?;
     if action.kind().to_bytes() != STRUCTURED_CAPABILITY_KIND_ID_V2
         || action.capacity_profile().to_bytes() != STRUCTURED_CAPACITY_PROFILE_ID_V2
-        || action.root_schema().to_bytes() != STRUCTURED_CAPABILITY_ROOT_SCHEMA_ID_V1
-        || usize::try_from(action.root_state_bytes()).ok()? != STRUCTURED_CAPABILITY_ROOT_BYTES_V1
+        || action.root_schema().to_bytes() != STRUCTURED_CAPABILITY_ROOT_SCHEMA_ID_V2
+        || usize::try_from(action.root_state_bytes()).ok()? != STRUCTURED_CAPABILITY_ROOT_BYTES_V2
     {
         return None;
     }
@@ -69,11 +62,11 @@ pub fn build_structured_activation_bundle_v1(
         kind: ContentId::new(STRUCTURED_CAPABILITY_KIND_ID_V2).ok()?,
         config_schema: action.config_schema(),
         request_schema: ContentId::new(STRUCTURED_ACTIVATION_REQUEST_SCHEMA_ID_V1).ok()?,
-        root_schema: ContentId::new(STRUCTURED_CAPABILITY_ROOT_SCHEMA_ID_V1).ok()?,
+        root_schema: ContentId::new(STRUCTURED_CAPABILITY_ROOT_SCHEMA_ID_V2).ok()?,
         derivation_policy: action.derivation_policy(),
         capacity_profile: action.capacity_profile(),
-        root_state_bytes: u32::try_from(STRUCTURED_CAPABILITY_ROOT_BYTES_V1).ok()?,
-        constant_root_tail: &STRUCTURED_CAPABILITY_ROOT_TAIL_V1,
+        root_state_bytes: u32::try_from(STRUCTURED_CAPABILITY_ROOT_BYTES_V2).ok()?,
+        constant_root_tail: &STRUCTURED_CAPABILITY_ROOT_TAIL_V2,
         seam_fields: &[],
         funding_ledger_slot_count,
         delivers_creation_principal: false,

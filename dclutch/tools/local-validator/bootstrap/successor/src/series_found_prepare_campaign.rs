@@ -85,10 +85,12 @@ pub(crate) struct CompiledSeriesFoundPrepareSelectionV1 {
     pub(crate) parents: SeriesPrepareParentsV1,
     pub(crate) predicted_core: dclutch_market::CoreState,
     /// Canonical child requests before they are embedded in the selected
-    /// artifact closure.  The live geometry hydrator derives the 111 Prepare
+    /// artifact closure.  The live geometry hydrator derives the 116 Prepare
     /// account observations from this semantic-owner output before a caller
     /// publishes the selected bytes.
     pub(crate) prepare_children: SeriesChildBankV1,
+    /// Complete authenticated action geometry used to emit this immutable release.
+    pub(crate) geometry: crate::series_source::SeriesObservedGeometryV1,
     pub(crate) selected: crate::model::SelectedCapabilityV1,
     /// Private occurrence-derived words that seed the selected Prepare interpreter.
     pub(crate) derived_prepare:
@@ -544,6 +546,7 @@ pub(crate) fn compile_series_found_prepare_selection_v1(
         parents: preprofile.parents,
         predicted_core: preprofile.predicted_core,
         prepare_children: preprofile.prepare_children,
+        geometry,
         selected: assembled.selected,
         derived_prepare: preprofile.derived_prepare,
         consume_request: preprofile.consume_request,

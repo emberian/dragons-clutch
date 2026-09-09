@@ -5,8 +5,19 @@ import {
   AQUARIUM_STATUS_URL_V1,
   aquariumBeatV1,
   parseAquariumStatusV1,
+  type AquariumJoinBindingsV1,
   readAquariumStatusV1,
 } from './aquariumStatus';
+
+const EXAMPLE_MANIFEST = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+const EXAMPLE_MARKET = 'GtmpRvSL9y6RpqMth73VSdb9h1XRe7zqQZkhJkfgxKrA';
+
+function bindings(number = 18, manifestSha256: string | null = EXAMPLE_MANIFEST, market = EXAMPLE_MARKET): AquariumJoinBindingsV1 {
+  return Object.freeze({
+    cohort: () => Object.freeze({ number, manifestSha256 }),
+    bindingFor: (candidate) => candidate === market ? Object.freeze({ checked: true }) : undefined,
+  });
+}
 
 function mutated(change: (copy: Record<string, unknown>) => void): unknown {
   const copy = JSON.parse(JSON.stringify(example)) as Record<string, unknown>;
@@ -23,10 +34,18 @@ describe('the aquarium status decoder', () => {
     expect(JSON.stringify(status)).not.toContain('/Users/');
   });
 
-  it('refuses a status that would advertise a public joining path', () => {
+  it('accepts an open join only for the matching checked cohort and market binding', () => {
+    const open = mutated((copy) => {
+      ((copy.activity as Record<string, unknown>).active_markets as Array<Record<string, unknown>>)[0]!.join_open = true;
+    });
+    expect(parseAquariumStatusV1(open, bindings()).activity.activeMarkets[0]?.joinOpen).toBe(true);
+    expect(() => parseAquariumStatusV1(open, bindings(17))).toThrow('belongs to another cohort');
+  });
+
+  it('refuses an open join when the published binding omits that market', () => {
     expect(() => parseAquariumStatusV1(mutated((copy) => {
       ((copy.activity as Record<string, unknown>).active_markets as Array<Record<string, unknown>>)[0]!.join_open = true;
-    }))).toThrow('keep public joining closed');
+    }), bindings(18, EXAMPLE_MANIFEST, '11111111111111111111111111111111'))).toThrow('has no checked public first-admission binding');
   });
 
   it('accepts the checked cohort identity additions and still refuses malformed ones', () => {

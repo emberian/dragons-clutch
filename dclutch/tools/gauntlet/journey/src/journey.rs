@@ -8,8 +8,8 @@ use std::{
     process::Command,
 };
 
-use dclutch_market::CoreState;
-use serde::Serialize;
+use dclutch_market::{CoreState, Phase};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use solana_sdk::signature::Signer;
 
@@ -200,7 +200,7 @@ pub(crate) struct JourneyRequestV1 {
     pub(crate) bootstrap_bin: Option<PathBuf>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ParticipantHandoffV1 {
     schema: String,
@@ -217,6 +217,17 @@ struct ParticipantHandoffV1 {
     campaign_public_identities: std::collections::BTreeMap<String, String>,
     census: crate::ledger::HandoffCensusV1,
     resume_action: String,
+}
+
+/// Resume the canonical Journey after an externally driven Direct fill has
+/// reached Terminal on the validator retained by `--hold-after-participant`.
+#[derive(Debug)]
+pub(crate) struct HeldContinuationRequestV1 {
+    pub(crate) handoff: PathBuf,
+    pub(crate) direct_finalized: PathBuf,
+    pub(crate) direct_public: PathBuf,
+    pub(crate) work: PathBuf,
+    pub(crate) evidence: PathBuf,
 }
 
 /// A live campaign session over the checked-mutable substrate.
@@ -520,6 +531,348 @@ pub(crate) fn execute(request: JourneyRequestV1) -> Result<JourneyTranscriptV1> 
         )));
     }
     Ok(transcript)
+}
+
+/// Continue one retained Journey from authenticated Direct history after the
+/// Market has reached Terminal.
+///
+/// The held supervisor remains the validator's lifetime owner. This process
+/// connects to that exact loopback genesis and calls the same shipped payout,
+/// Position-close, terminal-sequence, maker-close and checkpoint drivers as a
+/// normal Journey. Until the Resolution producer is wired immediately before
+/// this seam, a non-Terminal Market refuses before any key file is opened.
+pub(crate) fn continue_held_after_terminal(
+    request: HeldContinuationRequestV1,
+) -> Result<serde_json::Value> {
+    validate_existing_file(&request.handoff, "--handoff")?;
+    validate_existing_file(&request.direct_finalized, "--direct-finalized")?;
+    validate_existing_file(&request.direct_public, "--direct-public")?;
+    validate_new_path(&request.evidence, "--evidence")?;
+    validate_work_directory(&request.work)?;
+
+    let handoff_bytes = std::fs::read(&request.handoff)?;
+    let handoff: ParticipantHandoffV1 = serde_json::from_slice(&handoff_bytes)?;
+    if handoff.schema != "dclutch-private-validator-participant-handoff-v1"
+        || handoff.resume_action
+            != "SIGCONT performs cleanup only after the external lifecycle has finished"
+    {
+        return Err(Error::new(
+            "--handoff is not the canonical held-Journey participant boundary",
+        ));
+    }
+    let plan = PathBuf::from(&handoff.plan);
+    let market_input = PathBuf::from(&handoff.market_input);
+    let campaign_report = PathBuf::from(&handoff.founding_evidence);
+    let buyer_report = PathBuf::from(&handoff.participant_evidence);
+    for (path, label) in [
+        (&plan, "handoff plan"),
+        (&market_input, "handoff Market input"),
+        (&campaign_report, "handoff founding evidence"),
+        (&buyer_report, "handoff participant evidence"),
+    ] {
+        validate_existing_file(path, label)?;
+    }
+    let admission_dir = buyer_report
+        .parent()
+        .ok_or_else(|| Error::new("handoff participant evidence omitted its parent"))?;
+    if buyer_report.file_name().and_then(|value| value.to_str()) != Some("admission-buyer.json") {
+        return Err(Error::new(
+            "the v1 handoff participant evidence is not the canonical admission-buyer.json",
+        ));
+    }
+    let stranger_report = admission_dir.join("admission-stranger.json");
+    let stranger_keypair = admission_dir.join("second-stranger.json");
+    validate_existing_file(&stranger_report, "held stranger admission evidence")?;
+    validate_existing_file(&stranger_keypair, "held stranger keypair")?;
+
+    let plan_bytes = std::fs::read(&plan)?;
+    let market_bytes = std::fs::read(&market_input)?;
+    let campaign_bytes = std::fs::read(&campaign_report)?;
+    let plan_sha256 = sha256_hex(&plan_bytes);
+    let market_sha256 = sha256_hex(&market_bytes);
+    let handoff_sha256 = sha256_hex(&handoff_bytes);
+    let campaign = crate::campaign::parse_campaign_terminal_evidence_with_expected_cluster_v1(
+        &campaign_bytes,
+        crate::cluster::ExpectedClusterV1::OwnedLoopback,
+    )?;
+    if campaign.plan_sha256 != plan_sha256 || campaign.market_sha256 != market_sha256 {
+        return Err(Error::new(
+            "held plan or Market input differs from the founding evidence",
+        ));
+    }
+    let campaign_key = |label: &str| -> Result<solana_sdk::pubkey::Pubkey> {
+        campaign
+            .accounts
+            .get(label)
+            .ok_or_else(|| Error::new(format!("founding evidence omitted {label}")))?
+            .address
+            .parse()
+            .map_err(|error| Error::new(format!("founding {label}: {error}")))
+    };
+    let market = campaign_key("founding_market")?;
+    let claims_market = campaign_key("claims_aggregate")?;
+    let source_receipt = campaign_key("resolution_closure_receipt")?;
+
+    let mut rpc = crate::rpc::Rpc::connect(&handoff.rpc_url)?;
+    let direct = crate::direct_trade::authenticate_owned_loopback_terminal_evidence_v1(
+        &mut rpc,
+        &request.direct_finalized,
+        market,
+        &plan_sha256,
+        &market_sha256,
+    )?;
+    let direct_finalized_bytes = std::fs::read(&request.direct_finalized)?;
+    let direct_document: serde_json::Value = serde_json::from_slice(&direct_finalized_bytes)?;
+    let direct_public_bytes = std::fs::read(&request.direct_public)?;
+    let direct_public_sha256 = sha256_hex(&direct_public_bytes);
+    let handoff_payer: solana_sdk::pubkey::Pubkey = handoff
+        .census
+        .payer
+        .parse()
+        .map_err(|error| Error::new(format!("held census payer: {error}")))?;
+    if direct_document
+        .get("publicManifestSha256")
+        .and_then(serde_json::Value::as_str)
+        != Some(direct_public_sha256.as_str())
+        || direct.direct.market != market
+        || direct.claims_market != claims_market
+        || handoff.census.aggregate != claims_market.to_string()
+        || handoff.census.mint != direct.direct.mint.to_string()
+    {
+        return Err(Error::new(
+            "held handoff, Direct evidence, public manifest and founding evidence do not join",
+        ));
+    }
+
+    let buyer =
+        crate::user_position_admission::parse_finalized_position_admission_evidence_for_cluster_v1(
+            &std::fs::read(&buyer_report)?,
+            &mut rpc,
+            crate::cluster::ExpectedClusterV1::OwnedLoopback,
+        )?;
+    let stranger =
+        crate::user_position_admission::parse_finalized_position_admission_evidence_for_cluster_v1(
+            &std::fs::read(&stranger_report)?,
+            &mut rpc,
+            crate::cluster::ExpectedClusterV1::OwnedLoopback,
+        )?;
+    if buyer.market != market
+        || buyer.claims_market != claims_market
+        || buyer.owner != direct.direct.buyer_owner
+        || buyer.position != direct.direct.buyer_position
+        || stranger.market != market
+        || stranger.claims_market != claims_market
+    {
+        return Err(Error::new(
+            "held participant admissions do not join the authenticated Direct/founding roots",
+        ));
+    }
+    let terminal = CoreState::decode(&rpc.required_account(market, "held Core Market")?.data)
+        .map_err(|error| Error::new(format!("held Core Market: {error:?}")))?;
+    if terminal.phase != Phase::Terminal || terminal.terminal_receipt.is_none() {
+        return Err(Error::new(
+            "held continuation requires the existing Resolution owner step to leave one authenticated Terminal Market",
+        ));
+    }
+
+    let payer_keypair = PathBuf::from(&handoff.campaign_payer_keypair);
+    validate_existing_file(&payer_keypair, "held campaign payer keypair")?;
+    let payer = request_payer(&handoff.campaign_payer_keypair)?;
+    if payer != handoff_payer {
+        return Err(Error::new(
+            "held campaign payer key does not match the authenticated handoff census",
+        ));
+    }
+    let key_directory = PathBuf::from(&handoff.key_directory);
+    let seller_keypair = key_directory.join("founding-founder.json");
+    let buyer_keypair = key_directory.join("participant.json");
+    validate_existing_file(&seller_keypair, "held seller keypair")?;
+    validate_existing_file(&buyer_keypair, "held buyer keypair")?;
+    let keypairs = std::collections::BTreeMap::from([(
+        "participant".to_owned(),
+        buyer_keypair.display().to_string(),
+    )]);
+    let founding_keypairs = std::collections::BTreeMap::from([(
+        "founding-founder".to_owned(),
+        seller_keypair.display().to_string(),
+    )]);
+    let context = spine::SpineContextV1 {
+        rpc_url: &handoff.rpc_url,
+        plan: &plan,
+        campaign_report: &campaign_report,
+        market_input: &market_input,
+        market,
+        work: &request.work,
+        keypairs: &keypairs,
+        founding_keypairs: &founding_keypairs,
+    };
+    let mut continuation = spine::SpineV1::new();
+    spine::settle_fee(
+        &mut rpc,
+        &context,
+        &mut continuation,
+        &request.direct_public,
+        direct.direct.buyer_owner,
+        &payer_keypair,
+    )?;
+    let holders = [
+        (
+            "seller",
+            "founding-founder",
+            direct.direct.seller_owner,
+            direct.direct.seller_collateral_destination,
+        ),
+        (
+            "buyer",
+            "participant",
+            direct.direct.buyer_owner,
+            direct.direct.buyer_collateral_source,
+        ),
+    ];
+    for (holder, role, owner, recipient) in &holders {
+        for claim_index in 0..direct.direct.outcome_count {
+            spine::redeem(
+                &mut rpc,
+                &context,
+                &mut continuation,
+                &format!("{holder}-claim-{claim_index}"),
+                role,
+                *owner,
+                *recipient,
+                claim_index,
+                payer,
+                &payer_keypair,
+            )?;
+        }
+    }
+    for (holder, role, owner, _) in &holders {
+        spine::close_direct_position(
+            &mut rpc,
+            &context,
+            &mut continuation,
+            holder,
+            role,
+            *owner,
+            &request.direct_finalized,
+            payer,
+            &payer_keypair,
+        )?;
+    }
+    spine::close_participant_position(
+        &mut rpc,
+        &context,
+        &mut continuation,
+        "stranger",
+        stranger.owner,
+        &stranger_keypair,
+        &stranger_report,
+        payer,
+        &payer_keypair,
+    )?;
+    spine::retire(
+        &mut rpc,
+        &context,
+        &mut continuation,
+        &request.direct_public,
+        &request.direct_finalized,
+        source_receipt,
+        payer,
+        &payer_keypair,
+    )?;
+    let post = CoreState::decode(&rpc.required_account(market, "retired Core Market")?.data)
+        .map_err(|error| Error::new(format!("retired Core Market: {error:?}")))?;
+    let completed = continuation.refusals.is_empty() && post.phase == Phase::Retired;
+    let result = serde_json::json!({
+        "schema": "dclutch-held-journey-continuation-evidence-v1",
+        "cluster": "owned-loopback",
+        "completed": completed,
+        "rpcUrl": handoff.rpc_url,
+        "market": market.to_string(),
+        "claimsMarket": claims_market.to_string(),
+        "terminalReceipt": terminal.terminal_receipt.map(|value| {
+            solana_sdk::pubkey::Pubkey::new_from_array(value.to_bytes()).to_string()
+        }),
+        "finalPhase": format!("{:?}", post.phase),
+        "inputs": {
+            "handoff": request.handoff.display().to_string(),
+            "handoffSha256": handoff_sha256,
+            "directFinalized": request.direct_finalized.display().to_string(),
+            "directFinalizedSha256": sha256_hex(&direct_finalized_bytes),
+            "directPublic": request.direct_public.display().to_string(),
+            "directPublicSha256": direct_public_sha256,
+            "planSha256": plan_sha256,
+            "marketInputSha256": market_sha256,
+        },
+        "stages": continuation.stages,
+        "reports": continuation.reports,
+        "transactions": continuation.transactions,
+        "refusals": continuation.refusals,
+        "retainedSupervisorPid": handoff.supervisor_pid,
+        "retainedValidatorPid": handoff.validator_pid,
+        "cleanupAction": "after archiving this evidence, SIGCONT the retained supervisor",
+    });
+    write_json(&request.evidence, &result)?;
+    if !completed {
+        return Err(Error::new(format!(
+            "held Journey continuation did not reach Retired; evidence is at {}",
+            request.evidence.display()
+        )));
+    }
+    Ok(result)
+}
+
+fn request_payer(path: &str) -> Result<solana_sdk::pubkey::Pubkey> {
+    Ok(crate::substrate::load_keypair(Path::new(path))?.pubkey())
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::Digest as _;
+    crate::plan::hex(&sha2::Sha256::digest(bytes))
+}
+
+fn validate_existing_file(path: &Path, label: &str) -> Result<()> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|error| Error::new(format!("{label} {}: {error}", path.display())))?;
+    if !path.is_absolute()
+        || metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() == 0
+        || metadata.len() > 16 * 1024 * 1024
+        || std::fs::canonicalize(path)? != path
+    {
+        return Err(Error::new(format!(
+            "{label} must be one canonical absolute regular file within 1..16777216 bytes"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_work_directory(path: &Path) -> Result<()> {
+    if !path.is_absolute() {
+        return Err(Error::new("--work must be absolute"));
+    }
+    if path.exists() || std::fs::symlink_metadata(path).is_ok() {
+        let metadata = std::fs::symlink_metadata(path)?;
+        if metadata.file_type().is_symlink()
+            || !metadata.is_dir()
+            || std::fs::canonicalize(path)? != path
+        {
+            return Err(Error::new(
+                "--work must be one canonical absolute directory and never a symlink",
+            ));
+        }
+        return Ok(());
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| Error::new("--work omitted its parent directory"))?;
+    if !parent.is_dir() || std::fs::canonicalize(parent)? != parent {
+        return Err(Error::new(
+            "--work parent must be one canonical absolute directory",
+        ));
+    }
+    std::fs::create_dir(path)?;
+    Ok(())
 }
 
 /// Run the campaign, and record the wall it met if it met one.
@@ -877,6 +1230,8 @@ fn campaign(
     // whole design rather than a convenience.
     let spine_work = request.work.join("spine");
     std::fs::create_dir_all(&spine_work)?;
+    let direct_public = spine_work.join("fill").join("direct-trade-public.json");
+    let direct_finalized = spine_work.join("fill").join("direct-trade-finalized.json");
     let payer_key = spine_key(&checked.report, "campaign-payer")?;
     let payer = crate::substrate::load_keypair(&payer_key)?.pubkey();
     let context = spine::SpineContextV1 {
@@ -1105,6 +1460,7 @@ fn campaign(
         &mut session.rpc,
         &context,
         &mut spine,
+        &direct_public,
         participant,
         &payer_key,
     )?;
@@ -1446,7 +1802,7 @@ fn campaign(
     // terminal payouts first` (`20260906T155320Z`) is the protocol saying the
     // retirement is gated on the winning outcome's whole supply, so both sides
     // of the fill redeem before anything retires.
-    let fill_manifest = spine_work.join("fill").join("direct-trade-public.json");
+    let fill_manifest = direct_public.clone();
     let holders: Vec<(
         String,
         String,
@@ -1501,16 +1857,16 @@ fn campaign(
     // which the terminal admission read off the finalized Product graph and
     // handed on rather than being re-derived here.
     let claim_indices = outcome_count.unwrap_or(1);
-    for (holder, role, owner, recipient) in holders {
+    for (holder, role, owner, recipient) in &holders {
         for claim_index in 0..claim_indices {
             spine::redeem(
                 &mut session.rpc,
                 &context,
                 &mut spine,
                 &format!("{holder}-claim-{claim_index}"),
-                &role,
-                owner,
-                recipient,
+                role,
+                *owner,
+                *recipient,
                 claim_index,
                 payer,
                 &payer_key,
@@ -1546,6 +1902,52 @@ fn campaign(
         ),
     )?;
 
+    // Positions are user-owned accounts and aggregate retirement refuses while
+    // any remain. Payout empties both Direct parties; the second stranger was
+    // admitted with a zero vector and never traded. Close all three through
+    // the wallet exterior before the market-level retirement begins.
+    for (holder, role, owner, _) in &holders {
+        spine::close_direct_position(
+            &mut session.rpc,
+            &context,
+            &mut spine,
+            holder,
+            role,
+            *owner,
+            &direct_finalized,
+            payer,
+            &payer_key,
+        )?;
+    }
+    let stranger = strangers
+        .get(1)
+        .ok_or_else(|| Error::new("the canonical zero-vector stranger disappeared"))?;
+    spine::close_participant_position(
+        &mut session.rpc,
+        &context,
+        &mut spine,
+        &stranger.label,
+        stranger.owner,
+        &stranger.keypair,
+        &stranger.report,
+        payer,
+        &payer_key,
+    )?;
+    progress.stages.append(&mut spine.stages);
+    session.transactions.append(&mut spine.transactions);
+    progress.unexpected_refusals.append(&mut spine.refusals);
+    ledger.observe(
+        &mut session.rpc,
+        "redemption: every emptied wallet Position and admission record is closed",
+        0,
+        0,
+        LamportClaimV1::inapplicable(
+            "each Position-close driver writes the exact live balances credited to RentCredit; \
+             L7 does not restate those three receipts",
+        ),
+        ClassClaimV1::unchanged(),
+    )?;
+
     // ---------------------------------------------- the spine: the retirement
     //
     // ONE AUTHOR FOR THE TERMINAL SEQUENCE, since 2026-09-06. This tier used to
@@ -1575,6 +1977,8 @@ fn campaign(
         &mut session.rpc,
         &context,
         &mut spine,
+        &direct_public,
+        &direct_finalized,
         resolution_addresses.closure_receipt,
         payer,
         &payer_key,

@@ -36,7 +36,7 @@
 //! count here would compile a release that refuses at its first dispatch.
 
 use dclutch_operator::structured_activation_bundle_v1::{
-    STRUCTURED_CAPABILITY_ROOT_BYTES_V1, STRUCTURED_CAPABILITY_ROOT_SCHEMA_ID_V1,
+    STRUCTURED_CAPABILITY_ROOT_BYTES_V2, STRUCTURED_CAPABILITY_ROOT_SCHEMA_ID_V2,
 };
 use dclutch_operator::structured_selected_release_v1::{
     STRUCTURED_MAXIMUM_REPRESENTATION_WIDTH_V1, STRUCTURED_SELECTED_ACTION_COUNT_V1,
@@ -62,9 +62,9 @@ pub(crate) struct StructuredSelectedRecordV1 {
 /// One compiled Structured closure in the byte shape the neutral seam consumes.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct StructuredSelectedClosureBytesV1 {
-    /// Exact eight-entry `CapabilityProgramSetV2` bytes: representation
-    /// selectors 1..=5, normalized V6 lifecycle selectors 6 and 7, and
-    /// root activation selector 255.
+    /// Exact eleven-entry `CapabilityProgramSetV2` bytes: representation
+    /// selectors 1..=5, normalized V6 lifecycle selectors 6..=9, root close
+    /// selector 254, and root activation selector 255.
     pub(crate) program_set: Vec<u8>,
     /// The denominate descriptor at selector 1. Every selected bundle agrees
     /// on its entry-authored capability coordinates.
@@ -213,8 +213,8 @@ pub(crate) fn demo_structured_market_input(
     let closure = structured_selected_closure_v1(StructuredSelectedReleaseInputV1 {
         realm: market_realm_identity_v1(collateral_mint)?,
         release_set: crate::plan::hex32(&plan.release_set_id)?,
-        root_schema: STRUCTURED_CAPABILITY_ROOT_SCHEMA_ID_V1,
-        root_state_bytes: u32::try_from(STRUCTURED_CAPABILITY_ROOT_BYTES_V1)
+        root_schema: STRUCTURED_CAPABILITY_ROOT_SCHEMA_ID_V2,
+        root_state_bytes: u32::try_from(STRUCTURED_CAPABILITY_ROOT_BYTES_V2)
             .map_err(|_| Error::new("Structured capability root width overflow"))?,
         representation_outcome_count,
         item_state_bytes: 64,
@@ -239,8 +239,8 @@ mod tests {
         StructuredSelectedReleaseInputV1 {
             realm,
             release_set: [0x15; 32],
-            root_schema: STRUCTURED_CAPABILITY_ROOT_SCHEMA_ID_V1,
-            root_state_bytes: u32::try_from(STRUCTURED_CAPABILITY_ROOT_BYTES_V1)
+            root_schema: STRUCTURED_CAPABILITY_ROOT_SCHEMA_ID_V2,
+            root_state_bytes: u32::try_from(STRUCTURED_CAPABILITY_ROOT_BYTES_V2)
                 .expect("root width"),
             representation_outcome_count: STRUCTURED_MAXIMUM_REPRESENTATION_WIDTH_V1,
             item_state_bytes: 64,

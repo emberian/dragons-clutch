@@ -94,7 +94,13 @@ const RUN_EVIDENCE_SCHEMA_V2: &str = "dclutch-local-successor-run-evidence-v2";
 /// believing in the same magic number.
 const DEFAULT_RPC_PORT: u16 = 20890;
 const AUTHORITY_LAMPORTS: u64 = 5_000_000_000;
-const VALIDATOR_READY_TIMEOUT: Duration = Duration::from_secs(60);
+/// Provisional operational bound covering the launcher's authenticated input
+/// walk and the validator's own startup. Two 2026-09-09 `/tank` tier-1 runs
+/// spent 46 seconds in launcher validation, leaving only five seconds for the
+/// validator under the former 60-second combined deadline. The lifting plan is
+/// to split launcher readiness from validator readiness and measure each phase.
+const VALIDATOR_READY_TIMEOUT_SECS: u64 = 180;
+const VALIDATOR_READY_TIMEOUT: Duration = Duration::from_secs(VALIDATOR_READY_TIMEOUT_SECS);
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PublishedRecord {
     pub(crate) schema: [u8; 32],
@@ -202,7 +208,7 @@ impl ValidatorChild {
             if Instant::now() >= deadline {
                 return Err(Error::new(format!(
                     "successor validator at {rpc_url} did not expose the exact prepared Core \
-                     ProgramData within 60 seconds"
+                     ProgramData within {VALIDATOR_READY_TIMEOUT_SECS} seconds"
                 )));
             }
             thread::sleep(Duration::from_millis(250));
@@ -819,45 +825,11 @@ const ACTIVATION_ROLES_V1: [ExecutionRoleV1; 5] = [
 /// Number of exact roles in the profile-1 activation walk-up.
 pub(crate) const ACTIVATION_ROLE_COUNT_V1: usize = ACTIVATION_ROLES_V1.len();
 
-/// Transaction ceiling requested by every successor campaign instruction.
-pub(crate) const ACTIVATION_TRANSACTION_CU_LIMIT_V1: u64 = 1_400_000;
-/// Agave's SHA-256 syscall base charge under the pinned 4.0.2 runtime.
-const ACTIVATION_SHA256_BASE_CU_V1: u64 = 85;
-/// Conservative allowance for every activation cost other than hashing the
-/// live ELF. The largest measured residual among the five permanent roles is
-/// 79,855 CU; this reserve adds the required 20,000-CU measurement tolerance
-/// and more than 50,000 CU of explicit growth/noise margin.
-const ACTIVATION_NON_HASH_CU_RESERVE_V1: u64 = 150_000;
-/// Largest live ELF tail whose estimate fits with the full non-hash reserve.
-/// This is a conservative planning threshold, never an impossibility bound.
-pub(crate) const MAX_ACTIVATION_ESTIMATE_FIT_LIVE_ELF_BYTES_V1: u64 = 2_499_831;
-/// Largest ELF whose SHA-256 charge alone fits the transaction ceiling.
-/// Derived from the pinned syscall schedule; all other activation work still
-/// has to fit in actual simulation and execution.
-pub(crate) const MAX_HASH_ACTIVATION_LIVE_ELF_BYTES_V1: u64 =
-    (ACTIVATION_TRANSACTION_CU_LIMIT_V1 - ACTIVATION_SHA256_BASE_CU_V1) * 2 + 1;
-
-/// Pinned SHA-256 charge for hashing the complete live ELF at first admission.
-pub(crate) fn activation_hash_compute_units_v1(live_elf_bytes: u64) -> Result<u64> {
-    ACTIVATION_SHA256_BASE_CU_V1
-        .checked_add(10_u64.max(live_elf_bytes / 2))
-        .ok_or_else(|| Error::new("activation SHA-256 compute projection overflow"))
-}
-
-/// Conservative planning estimate, not a lower bound on required compute.
-/// Agave charges SHA-256 at `85 + max(10, bytes / 2)` CU; the separate reserve
-/// covers record, Loader, release, rent, and cache authentication with margin.
-pub(crate) fn activation_compute_upper_bound_v1(live_elf_bytes: u64) -> Result<u64> {
-    ACTIVATION_NON_HASH_CU_RESERVE_V1
-        .checked_add(activation_hash_compute_units_v1(live_elf_bytes)?)
-        .ok_or_else(|| Error::new("activation total compute projection overflow"))
-}
-
 /// Exact ten-account frame admitting one role into the shared activation cache.
 ///
-/// Activation is one role per transaction: whole-ELF hashing costs about one
-/// compute unit per two bytes, and the real seven artifacts total roughly
-/// 4.2 MB, so a five-role transaction cannot fit under the 1,400,000 maximum.
+/// The existing cache admits one exact role at a time and resumes from its
+/// written prefix. Registry authenticates the finalized deployment through its
+/// Loader slot and authority; activation does not hash the ELF again.
 fn role_activation_instruction(
     plan: &SuccessorPlan,
     payer: Pubkey,
@@ -907,11 +879,11 @@ pub(crate) fn activation_instructions(
     for role in ACTIVATION_ROLES_V1 {
         ordered.push((
             match role {
-                ExecutionRoleV1::Core => "activate immutable release-set role: Core",
-                ExecutionRoleV1::Claims => "activate immutable release-set role: Claims",
-                ExecutionRoleV1::Trading => "activate immutable release-set role: Trading",
-                ExecutionRoleV1::Resolution => "activate immutable release-set role: Resolution",
-                ExecutionRoleV1::Custody => "activate immutable release-set role: Custody",
+                ExecutionRoleV1::Core => "activate release-set role: Core",
+                ExecutionRoleV1::Claims => "activate release-set role: Claims",
+                ExecutionRoleV1::Trading => "activate release-set role: Trading",
+                ExecutionRoleV1::Resolution => "activate release-set role: Resolution",
+                ExecutionRoleV1::Custody => "activate release-set role: Custody",
             },
             role_activation_instruction(plan, payer, role)?,
         ));
@@ -3041,53 +3013,6 @@ mod tests {
     }
 
     #[test]
-    fn activation_compute_guard_admits_canonical_roles_and_refuses_impossible_payloads() {
-        let canonical_live_elf_bytes = [
-            ("core", 934_088_u64),
-            ("claims", 1_010_496),
-            ("trading", 1_325_848),
-            ("resolution", 588_336),
-            ("custody", 360_328),
-        ];
-        for (role, bytes) in canonical_live_elf_bytes {
-            let upper = activation_compute_upper_bound_v1(bytes).expect("bounded canonical role");
-            assert!(
-                upper < ACTIVATION_TRANSACTION_CU_LIMIT_V1,
-                "canonical {role} needs size-only headroom"
-            );
-        }
-        assert_eq!(
-            activation_compute_upper_bound_v1(MAX_ACTIVATION_ESTIMATE_FIT_LIVE_ELF_BYTES_V1)
-                .expect("exact size ceiling"),
-            ACTIVATION_TRANSACTION_CU_LIMIT_V1
-        );
-        assert!(
-            activation_compute_upper_bound_v1(MAX_ACTIVATION_ESTIMATE_FIT_LIVE_ELF_BYTES_V1 + 1)
-                .expect("one-byte overflow is representable")
-                > ACTIVATION_TRANSACTION_CU_LIMIT_V1
-        );
-        assert_eq!(
-            activation_hash_compute_units_v1(MAX_HASH_ACTIVATION_LIVE_ELF_BYTES_V1)
-                .expect("exact hash ceiling"),
-            ACTIVATION_TRANSACTION_CU_LIMIT_V1
-        );
-        assert_eq!(
-            activation_hash_compute_units_v1(MAX_HASH_ACTIVATION_LIVE_ELF_BYTES_V1 + 1)
-                .expect("one-byte hash overflow"),
-            ACTIVATION_TRANSACTION_CU_LIMIT_V1 + 1
-        );
-        assert_eq!(
-            activation_hash_compute_units_v1(2_694_840).expect("bf06 hash"),
-            1_347_505
-        );
-        assert!(
-            activation_hash_compute_units_v1(9_034_536)
-                .expect("hostile Source substitution is representable")
-                > ACTIVATION_TRANSACTION_CU_LIMIT_V1
-        );
-    }
-
-    #[test]
     fn agave_4_0_2_loader_revoke_retains_inactive_authority_bytes() {
         let validator_path = PathBuf::from(
             which_validator().expect("solana-test-validator 4.0.2 must be installed"),
@@ -3248,24 +3173,6 @@ mod tests {
             ("core", core_elf.as_path()),
         ] {
             authenticate_role(role, elf);
-        }
-        for (role, elf) in [
-            ("core", core_elf.as_path()),
-            ("claims", claims_elf.as_path()),
-            ("trading", trading_elf.as_path()),
-            ("resolution", resolution_elf.as_path()),
-            ("custody", custody_elf.as_path()),
-        ] {
-            let bytes = u64::try_from(fs::metadata(elf).expect("role ELF metadata").len())
-                .expect("role ELF width");
-            let hash =
-                activation_hash_compute_units_v1(bytes).expect("activation hash compute charge");
-            assert!(
-                hash <= ACTIVATION_TRANSACTION_CU_LIMIT_V1,
-                "checked-release {role} ELF has {bytes} bytes and a {hash}-CU SHA-256 charge \
-                 alone, above the {}-CU transaction ceiling",
-                ACTIVATION_TRANSACTION_CU_LIMIT_V1
-            );
         }
         let authority = Keypair::new();
         let root = std::env::temp_dir().join(format!(

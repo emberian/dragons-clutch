@@ -398,9 +398,9 @@ mod tests {
             realm: id(18),
             release_set: id(15),
             root_schema:
-                crate::structured_activation_bundle_v1::STRUCTURED_CAPABILITY_ROOT_SCHEMA_ID_V1,
+                crate::structured_activation_bundle_v1::STRUCTURED_CAPABILITY_ROOT_SCHEMA_ID_V2,
             root_state_bytes: u32::try_from(
-                crate::structured_activation_bundle_v1::STRUCTURED_CAPABILITY_ROOT_BYTES_V1,
+                crate::structured_activation_bundle_v1::STRUCTURED_CAPABILITY_ROOT_BYTES_V2,
             )
             .expect("root width"),
             representation_outcome_count: 3,
@@ -464,10 +464,7 @@ mod tests {
                     Exact,
                     crate::general_selected_release_v1::RENT_SYSVAR_ACCOUNT_BYTES_V1,
                 ),
-                14 => (
-                    AdapterAuthenticatedVariableData,
-                    u32::try_from(DESCRIPTOR_HEADER_BYTES).expect("descriptor header"),
-                ),
+                14 => (AuthenticatedOpaqueReadonlyData, 0),
                 31 | 33 | 37 => (AuthenticatedRouteAlias, 0),
                 15 | 32 | 34 | 36 | 38 => (Exact, 0),
                 19 => (
@@ -505,10 +502,7 @@ mod tests {
                     u32::try_from(PROTOCOL_POSITION_ADMISSION_BYTES_V2)
                         .expect("Position admission"),
                 ),
-                35 => (
-                    AdapterAuthenticatedVariableData,
-                    u32::try_from(dclutch_product::DOMAIN_HEADER_BYTES).expect("result header"),
-                ),
+                35 => (AuthenticatedOpaqueReadonlyData, 0),
                 _ => (Exact, 0),
             };
             let rule = profile.rule(false, coordinate).expect("logical rule");
@@ -687,13 +681,10 @@ mod tests {
             );
         }
         let result = coordinate_profile.rule(false, 35).expect("result record");
-        assert_eq!(
-            result.data_length(),
-            u32::try_from(dclutch_product::DOMAIN_HEADER_BYTES).expect("result header width")
-        );
+        assert_eq!(result.data_length(), 0);
         assert_eq!(
             result.prestate(),
-            dclutch_vm::account_profile::v2::AccountPrestateV2::AdapterAuthenticatedVariableData
+            dclutch_vm::account_profile::v2::AccountPrestateV2::AuthenticatedOpaqueReadonlyData
         );
     }
 

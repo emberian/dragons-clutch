@@ -2,6 +2,44 @@
 
 2026-08-30, ROOTTAILS lane. `DECISION_PACKET` §4.
 
+## Current Structured contract (2026-09-08)
+
+Structured now selects `StructuredCapabilityRootV2` from
+`crates/dclutch-trading/src/structured_root_v2.rs`: 24 bytes, `DCSTCRT2`,
+version 2, active byte 1, canonical zero padding through byte 15, and a u64
+`outstanding_resource_groups` at offset 16. The V1 Structured proposal below
+is superseded; Rational's separate contract is unaffected.
+
+The count includes every successful receipt activation and coordinate
+activation across all descriptors admitted by the immutable capability.
+Native coordinate retirement discharges its shard Mint, Structured custody,
+Position and Admission together; native receipt retirement discharges its
+receipt Mint after complete-support vacancy checks. Their selected lifecycle
+artifacts project the count from the authenticated root, perform checked u64
+increment/decrement, and write its successor only when the native child route
+succeeds. It is a persisted resource obligation, not an offchain inventory.
+The u64 bound is mathematical integer representation; overflow and underflow
+refuse rather than saturate.
+
+V6 lifecycle artifacts transport the request's descriptor body digest to
+Claims. Child-owned descriptor/Domain records are opaque readonly observations
+to Trading; Claims authenticates their finalized content and Registry PDAs.
+The former raw-account-key/digest equality was an incorrect second authority
+and is removed together with its extra register.
+
+The same immutable ProgramSet includes selector 254 for the existing
+Core/Trading native close route. Its selected predicate requires the canonical
+V2 header and zero outstanding groups. Native closure removes the root and
+selected FundingLedger, credits canonical RentCredit and decrements Core's
+outstanding-capability count atomically. The host uses the existing two-ledger
+close profile (selected Trading plus Resolution dependency); broader partitions
+require lifting that profile through the native `CapabilityRouteLayoutV1`
+owner. A zero-supply but still activated coordinate remains an obligation and
+blocks root closure.
+
+The historical sections below describe the earlier design and its evidence;
+they do not establish acceptance of the V2 validator lifecycle.
+
 Rational and Structured are the two families the reviewed activation template
 (`docs/evidence/CAPABILITY_ACTIVATION_TEMPLATE_2026_08_30.md` §2) records as
 "blocked one layer deeper": they are not missing an activation artifact, they

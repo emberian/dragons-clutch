@@ -458,7 +458,7 @@ pub(crate) struct ConservationLedgerV1 {
 }
 
 /// The exact native aperture handed to a simulator while this ledger is live.
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub(crate) struct HandoffCensusV1 {
     pub(crate) mint: String,
     pub(crate) payer: String,

@@ -50,6 +50,7 @@ SCHEMA_STATUS = "dclutch-aquarium-status-v1"
 SCHEMA_JOURNAL = "dclutch-aquarium-epoch-journal-v1"
 SCHEMA_SUPERVISOR = "dclutch-aquarium-supervisor-v1"
 COHORT_SCHEMA = "dclutch-cohort-manifest-v1"
+PUBLIC_MARKET_BINDINGS_SCHEMA = "dclutch-public-market-bindings-v1"
 DEVNET_GENESIS = "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG"
 # PROVISIONAL operational caps. Their lifting plan is
 # docs/operators/AQUARIUM_V1.md "Bounded epochs": measure child process count,
@@ -419,6 +420,44 @@ def validate_config(path: Path) -> dict:
         if previous and previous == programs[role]:
             raise Refusal(f"cohort {cohort_number} reused prior {role} program identity")
 
+    binding_cfg = cohort_cfg.get("public_market_bindings")
+    public_bindings = {}
+    if binding_cfg is not None:
+        if not isinstance(binding_cfg, dict) or set(binding_cfg) != {"path", "sha256"}:
+            raise Refusal("cohort.public_market_bindings must name and hash one checked binding artifact")
+        binding_path = absolute(binding_cfg.get("path"), "cohort.public_market_bindings.path")
+        binding_digest = text(binding_cfg.get("sha256"), "cohort.public_market_bindings.sha256")
+        if (binding_path.name != "public-market-bindings-v1.json" or not HEX64.fullmatch(binding_digest)
+                or sha256_file(binding_path) != binding_digest):
+            raise Refusal("cohort.public_market_bindings must name and hash the exact public-market-bindings-v1.json")
+        binding_body = read_json(binding_path, "cohort.public_market_bindings")
+        if (not isinstance(binding_body, dict)
+                or set(binding_body) != {"schema", "cohort", "markets"}
+                or binding_body.get("schema") != PUBLIC_MARKET_BINDINGS_SCHEMA):
+            raise Refusal("cohort.public_market_bindings has another schema or fields")
+        binding_cohort = binding_body.get("cohort")
+        if binding_cohort != {"number": cohort_number, "manifest_sha256": stated_manifest_digest}:
+            raise Refusal("cohort.public_market_bindings describes another checked cohort")
+        raw_bindings = binding_body.get("markets")
+        if not isinstance(raw_bindings, dict):
+            raise Refusal("cohort.public_market_bindings markets must be an object")
+        manifest_addresses = {
+            entry.get("address") for entry in (manifest.get("markets") or [])
+            if isinstance(entry, dict) and isinstance(entry.get("address"), str)
+        }
+        for market_address, binding in raw_bindings.items():
+            address(market_address, "cohort.public_market_bindings market")
+            if market_address not in manifest_addresses:
+                raise Refusal(f"cohort.public_market_bindings names unknown manifest market {market_address}")
+            if not isinstance(binding, dict) or set(binding) != {"linked_basis_record_digest", "founding_report_sha256"}:
+                raise Refusal(f"cohort.public_market_bindings market {market_address} has another shape")
+            if (not isinstance(binding.get("linked_basis_record_digest"), str)
+                    or not HEX64.fullmatch(binding["linked_basis_record_digest"])
+                    or not isinstance(binding.get("founding_report_sha256"), str)
+                    or not HEX64.fullmatch(binding["founding_report_sha256"])):
+                raise Refusal(f"cohort.public_market_bindings market {market_address} has invalid evidence digests")
+        public_bindings = raw_bindings
+
     actors = body.get("synthetic_actors")
     if not isinstance(actors, list) or not actors:
         raise Refusal("synthetic_actors must name the finite configured actor population")
@@ -446,12 +485,11 @@ def validate_config(path: Path) -> dict:
         source = manifest_markets.get(source_label)
         if source is None or source.get("kind") != "direct" or source.get("address") != market_address:
             raise Refusal(f"markets[{index}] is not a checked live Direct market from this manifest")
-        # A public admission route may exist elsewhere, but the checked release
-        # material accepted by this v1 schema has no published first-admission
-        # linked-basis binding for this market. Configured actor keypair paths
-        # are intentionally never read here and are never a visitor join route.
-        if row.get("join_open", False) is not False:
-            raise Refusal("join_open=true is unavailable until a checked release binding proves public first admission")
+        join_open = row.get("join_open", False)
+        if not isinstance(join_open, bool):
+            raise Refusal(f"markets[{index}].join_open must be true or false")
+        if join_open and market_address not in public_bindings:
+            raise Refusal("join_open=true requires this market in the checked public first-admission bindings")
         epochs = row.get("epochs")
         if not isinstance(epochs, list) or not epochs:
             raise Refusal(f"markets[{index}].epochs must precommit at least one bounded epoch")
@@ -484,7 +522,8 @@ def validate_config(path: Path) -> dict:
                         raise Refusal(f"a Direct {side} ticket digest appears in more than one aquarium cycle")
                     seen_ticket_digests.add(digest)
             parsed_epochs.append({"epoch_id": epoch_id, "cycles": cycles, "simulator_config": sim_path})
-        parsed_markets.append({"market_id": market_id, "address": market_address, "epochs": parsed_epochs})
+        parsed_markets.append({"market_id": market_id, "address": market_address,
+                               "join_open": join_open, "epochs": parsed_epochs})
     if len(parsed_markets) < min_active:
         raise Refusal("inventory is below limits.min_active_markets")
     # Every child owns an independent payer-spend ledger. The aquarium owns
@@ -560,7 +599,7 @@ class Aquarium:
             done = sum((market["market_id"], epoch["epoch_id"]) in self.completed for epoch in epochs)
             rows.append({"market_id": market["market_id"], "address": market["address"],
                          "state": "activity-running" if self.last_event and self.last_event.get("market_id") == market["market_id"] else "active",
-                         "join_open": False,
+                         "join_open": market["join_open"],
                          "observed_at": self.last_event.get("at") if self.last_event and self.last_event.get("market_id") == market["market_id"] else None,
                          "epochs_completed": done, "epochs_precommitted": len(epochs)})
         return rows
@@ -586,7 +625,9 @@ class Aquarium:
                 "activity": {"synthetic_actors": True, "last_event_at": None if self.last_event is None else self.last_event["at"],
                              "last_event_kind": None if self.last_event is None else self.last_event["kind"],
                              "counts": self.counts, "active_markets": self.market_rows(),
-                             "join_note": "Configured synthetic actors only. A public noncustodial admission entrance is not yet delivered."},
+                             "join_note": ("Public joining is listed only for checked cohort markets with a published first-admission binding; the market page rechecks chain state before wallet signing."
+                                           if any(market["join_open"] for market in self.config["markets"])
+                                           else "Configured synthetic actors only. No checked public first-admission binding is published for these markets.")},
                 "limits": {"max_active_markets": self.config["limits"]["max_active_markets"]},
                 "artifacts": {"driver": "tools/load-simulator/simulator.py",
                               "epoch_journal_schema": SCHEMA_JOURNAL,
@@ -942,14 +983,15 @@ def checked_public_snapshot(config: dict, source: Path) -> bytes:
     if not isinstance(activity, dict) or activity.get("synthetic_actors") is not True:
         raise Refusal("aquarium public status must explicitly name synthetic actors")
     rows = activity.get("active_markets")
-    expected_rows = {(market["market_id"], market["address"]) for market in config["markets"]}
+    expected_rows = {(market["market_id"], market["address"], market["join_open"])
+                     for market in config["markets"]}
     actual_rows = set()
     if not isinstance(rows, list) or len(rows) > config["limits"]["max_active_markets"]:
         raise Refusal("aquarium public status active market inventory differs")
     for index, row in enumerate(rows):
-        if not isinstance(row, dict) or row.get("join_open") is not False:
-            raise Refusal(f"aquarium public status active market {index} admits public joining")
-        actual_rows.add((row.get("market_id"), row.get("address")))
+        if not isinstance(row, dict) or not isinstance(row.get("join_open"), bool):
+            raise Refusal(f"aquarium public status active market {index} has no boolean join state")
+        actual_rows.add((row.get("market_id"), row.get("address"), row.get("join_open")))
     if actual_rows != expected_rows or len(actual_rows) != len(rows):
         raise Refusal("aquarium public status active market inventory differs")
     if status.get("limits") != {"max_active_markets": config["limits"]["max_active_markets"]}:

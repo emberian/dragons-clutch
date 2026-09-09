@@ -816,12 +816,13 @@ fn capture_through_durable_cli_v1(
     let input_path = work.join("input.json");
     let checkpoint_path = work.join("checkpoint.json");
     let mut invocation = 0_usize;
-    let mut run = |label: &str, args: Vec<String>| -> Result<()> {
+    let flagship_command = "local-private-validator-flagship-resolution-v1";
+    let mut run = |command: &str, label: &str, args: Vec<String>| -> Result<()> {
         invocation = invocation
             .checked_add(1)
             .ok_or_else(|| Error::new("durable invocation overflow"))?;
         let output = std::process::Command::new(&binary)
-            .arg("local-private-validator-flagship-resolution-v1")
+            .arg(command)
             .args(["--rpc-url", &checked.rpc_url])
             .args(args)
             .output()?;
@@ -843,11 +844,38 @@ fn capture_through_durable_cli_v1(
         }
         Ok(())
     };
+    // Cranks lawfully debit the Resolution ledger. The existing refresh
+    // reauthenticates every immutable founding record before carrying current
+    // mutable rows to the producer, whose byte-exact live checks remain intact.
+    let refresh_path = work.join("refreshed-evidence.json");
+    let market_input_path = request.work.join("market.json");
+    let campaign_path = request.work.join("founding-evidence.json");
+    run(
+        "local-private-validator-refresh-evidence-v1",
+        "refresh",
+        vec![
+            "--plan".into(),
+            checked.plan_path.display().to_string(),
+            "--expected-plan-sha256".into(),
+            checked.plan_sha256.clone(),
+            "--market-input".into(),
+            market_input_path.display().to_string(),
+            "--expected-market-input-sha256".into(),
+            crate::plan::hex(&Sha256::digest(std::fs::read(&market_input_path)?)),
+            "--campaign-report".into(),
+            campaign_path.display().to_string(),
+            "--expected-campaign-report-sha256".into(),
+            crate::plan::hex(&Sha256::digest(std::fs::read(&campaign_path)?)),
+            "--output".into(),
+            refresh_path.display().to_string(),
+        ],
+    )?;
     // Each pass either emits the ready input or finalizes one explicit table
     // mutation. Require the persisted journal to advance; there is no silent
     // success retry count that can turn an unchanged journal into completion.
     loop {
         run(
+            flagship_command,
             "produce",
             vec![
                 "--produce-input".into(),
@@ -859,6 +887,8 @@ fn capture_through_durable_cli_v1(
                     .join("founding-evidence.json")
                     .display()
                     .to_string(),
+                "--refreshed-evidence".into(),
+                refresh_path.display().to_string(),
                 "--pyth-facts".into(),
                 facts_path.display().to_string(),
                 "--producer-checkpoint".into(),
@@ -874,6 +904,7 @@ fn capture_through_durable_cli_v1(
         }
         let before = std::fs::read(&table_path).ok();
         run(
+            flagship_command,
             "provision",
             vec![
                 "--provision-tables".into(),
@@ -915,32 +946,43 @@ fn capture_through_durable_cli_v1(
                 request.max_wait_seconds,
             )?;
         }
-        if stage == "execute" {
-            let certificate = pubkey(
-                input["accounts"]["certificate"]
-                    .as_str()
-                    .ok_or_else(|| Error::new("durable input omitted certificate"))?,
-            )?;
-            let rent =
-                rpc.minimum_balance(dclutch_source::resolution::RESOLUTION_CERTIFICATE_BYTES_V2)?;
-            let current = rpc.account(certificate)?;
+        if matches!(stage, "submit" | "execute") {
+            let (destination, bytes, label) = if stage == "submit" {
+                (
+                    provider.lifecycle,
+                    dclutch_source::resolution::PROVIDER_UPDATE_LIFECYCLE_BYTES_V3,
+                    "provider lifecycle",
+                )
+            } else {
+                (
+                    pubkey(
+                        input["accounts"]["certificate"]
+                            .as_str()
+                            .ok_or_else(|| Error::new("durable input omitted certificate"))?,
+                    )?,
+                    dclutch_source::resolution::RESOLUTION_CERTIFICATE_BYTES_V2,
+                    "terminal certificate",
+                )
+            };
+            let rent = rpc.minimum_balance(bytes)?;
+            let current = rpc.account(destination)?;
             if current.as_ref().is_some_and(|account| {
                 account.owner != solana_sdk_ids::system_program::ID
                     || account.executable
                     || !account.data.is_empty()
             }) {
-                return Err(Error::new(
-                    "terminal certificate prepay requires a vacant system account",
-                ));
+                return Err(Error::new(format!(
+                    "{label} prepay requires a vacant system account"
+                )));
             }
             let missing =
                 rent.saturating_sub(current.as_ref().map_or(0, |account| account.lamports));
             if missing > 0 {
                 let evidence = rpc.send(
-                    "ladder: prepay exact terminal certificate rent before durable Execute",
+                    &format!("ladder: prepay exact {label} rent before durable {stage}"),
                     &[solana_system_interface::instruction::transfer(
                         &founder.pubkey(),
-                        &certificate,
+                        &destination,
                         missing,
                     )],
                     founder,
@@ -949,20 +991,24 @@ fn capture_through_durable_cli_v1(
                     .checked_add(
                         evidence
                             .fee_lamports
-                            .ok_or_else(|| Error::new("certificate prepay omitted fee"))?,
+                            .ok_or_else(|| Error::new("provider prepay omitted fee"))?,
                     )
-                    .ok_or_else(|| Error::new("certificate prepay fee overflow"))?;
-                compute_units =
-                    compute_units
-                        .checked_add(evidence.compute_units_consumed.ok_or_else(|| {
-                            Error::new("certificate prepay omitted compute units")
-                        })?)
-                        .ok_or_else(|| Error::new("certificate prepay compute overflow"))?;
+                    .ok_or_else(|| Error::new("provider prepay fee overflow"))?;
+                compute_units = compute_units
+                    .checked_add(
+                        evidence
+                            .compute_units_consumed
+                            .ok_or_else(|| Error::new("provider prepay omitted compute units"))?,
+                    )
+                    .ok_or_else(|| Error::new("provider prepay compute overflow"))?;
                 transactions.push(evidence);
             }
+        }
+        if stage == "execute" {
             primary_countercontrol =
                 durable_primary_countercontrol_v1(rpc, &input, work, provider.lifecycle)?;
             run(
+                flagship_command,
                 "execute-preflight",
                 vec![
                     "--input".into(),
@@ -994,6 +1040,7 @@ fn capture_through_durable_cli_v1(
         }
         loop {
             run(
+                flagship_command,
                 stage,
                 vec![
                     "--input".into(),
@@ -1028,6 +1075,7 @@ fn capture_through_durable_cli_v1(
     }
     let accepted_bytes = std::fs::read(&checkpoint_path)?;
     run(
+        flagship_command,
         "restart-complete",
         vec![
             "--input".into(),

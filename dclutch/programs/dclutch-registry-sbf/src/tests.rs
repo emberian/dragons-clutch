@@ -23,7 +23,7 @@ use solana_sdk_ids::{bpf_loader_upgradeable, native_loader, system_program, sysv
 
 use super::{
     RegistryError, RoleFrame, activate_and_write_role, authenticate_release_set_record,
-    deployment_observation, process_instruction,
+    cached_role_deployment_observation, process_instruction,
 };
 
 fn bytes(seed: u8) -> [u8; 32] {
@@ -419,10 +419,11 @@ fn distinct_core_and_registry_activate_all_exact_aliased_roles() {
 }
 
 #[test]
-fn current_loader_observation_binds_fixed_elf_tail_and_slot() {
+fn current_loader_observation_binds_finalized_deployment_and_slot() {
     let fixture = Fixture::new();
-    let observed = deployment_observation(&fixture.program, &fixture.programdata, fixture.release)
-        .expect("current Loader observation");
+    let observed =
+        cached_role_deployment_observation(&fixture.program, &fixture.programdata, fixture.release)
+            .expect("current Loader observation");
     fixture
         .release
         .authenticate_deployment(observed)
@@ -437,8 +438,9 @@ fn current_loader_observation_binds_fixed_elf_tail_and_slot() {
         bpf_loader_upgradeable::ID,
         false,
     );
-    let stale = deployment_observation(&fixture.program, &stale_programdata, fixture.release)
-        .expect("well-shaped stale observation");
+    let stale =
+        cached_role_deployment_observation(&fixture.program, &stale_programdata, fixture.release)
+            .expect("well-shaped stale observation");
     assert_eq!(
         fixture.release.authenticate_deployment(stale),
         Err(dclutch_registry::Error::DeploymentSlotMismatch)
@@ -986,8 +988,7 @@ fn immutable_role_activation_reuses_the_finalized_digest() {
     .expect("immutable activation reuses the digest authenticated at finalization");
 }
 
-#[test]
-fn upgradeable_role_activation_refuses_a_same_slot_elf_substitution() {
+fn upgradeable_activation_fixture() -> Fixture {
     let mut fixture = Fixture::new();
     let authority = bytes(0x44);
     let release = ArtifactReleaseV1::new(
@@ -1033,37 +1034,130 @@ fn upgradeable_role_activation_refuses_a_same_slot_elf_substitution() {
         programdata_bytes(
             fixture.release.deployment_slot(),
             Some(authority),
+            &[0xa5; 96],
+        ),
+        bpf_loader_upgradeable::ID,
+        false,
+    );
+    fixture
+}
+
+#[test]
+fn upgradeable_role_activation_reuses_finalized_slot_and_refuses_supersession() {
+    let fixture = upgradeable_activation_fixture();
+    let canonical = fixture.role_activation_accounts(fixture.empty_cache_account());
+    process_instruction(
+        &fixture.registry,
+        &canonical,
+        &RegistryInstructionV1::ActivateRole(ExecutionRoleV1::Core).to_bytes(),
+    )
+    .expect("the finalized exact-authority deployment activates");
+
+    let mut superseded = fixture.role_activation_accounts(fixture.empty_cache_account());
+    superseded[7] = account(
+        *fixture.programdata.key,
+        false,
+        false,
+        fixture.programdata.lamports(),
+        programdata_bytes(
+            fixture.release.deployment_slot() + 1,
+            fixture.release.upgrade_authority(),
             &[0x5a; 96],
         ),
         bpf_loader_upgradeable::ID,
         false,
     );
-    let accounts = fixture.role_activation_accounts(fixture.empty_cache_account());
-    // A mutable deployment may be substituted even without moving its observed
-    // slot in an adversarial account image. Activation therefore hashes this
-    // branch and catches the byte change independently of the slot pin.
     assert_eq!(
         process_instruction(
             &fixture.registry,
-            &accounts,
-            &RegistryInstructionV1::ActivateRole(ExecutionRoleV1::Core).to_bytes(),
+            &superseded,
+            &RegistryInstructionV1::ActivateRole(ExecutionRoleV1::Core).to_bytes()
         ),
-        Err(RegistryError::Release.into())
+        Err(RegistryError::ReleaseSuperseded.into())
     );
-    let cache = accounts
-        .get(1)
-        .expect("activation cache account")
-        .try_borrow_data()
-        .expect("cache after refusal");
     assert_eq!(
-        cache.as_ref(),
+        superseded[1]
+            .try_borrow_data()
+            .expect("refused cache")
+            .as_ref(),
         fixture
             .empty_cache_account()
             .try_borrow_data()
             .expect("pristine cache")
-            .as_ref(),
-        "a refused role activation leaves no admitted role behind"
+            .as_ref()
     );
+}
+
+#[test]
+fn upgradeable_role_activation_refuses_loader_envelope_substitution() {
+    let fixture = upgradeable_activation_fixture();
+    for case in 0..6 {
+        let mut accounts = fixture.role_activation_accounts(fixture.empty_cache_account());
+        let index = if case == 4 || case == 5 { 6 } else { 7 };
+        let original = accounts[index].clone();
+        let data = if case == 0 {
+            programdata_bytes(
+                fixture.release.deployment_slot(),
+                Some(bytes(0x45)),
+                &[0xa5; 96],
+            )
+        } else if case == 1 {
+            programdata_bytes(
+                fixture.release.deployment_slot() - 1,
+                fixture.release.upgrade_authority(),
+                &[0xa5; 96],
+            )
+        } else if case == 5 {
+            loader_program_bytes(Pubkey::new_unique())
+        } else {
+            original.try_borrow_data().expect("original").to_vec()
+        };
+        accounts[index] = account(
+            *original.key,
+            false,
+            false,
+            original.lamports(),
+            data,
+            if case == 2 {
+                system_program::ID
+            } else {
+                *original.owner
+            },
+            if case == 3 {
+                true
+            } else if case == 4 {
+                false
+            } else {
+                original.executable
+            },
+        );
+        assert_eq!(
+            process_instruction(
+                &fixture.registry,
+                &accounts,
+                &RegistryInstructionV1::ActivateRole(ExecutionRoleV1::Core).to_bytes()
+            ),
+            Err(if matches!(case, 3 | 4) {
+                // Executability is already enforced by the outer role frame.
+                RegistryError::AccountFrame
+            } else {
+                RegistryError::Deployment
+            }
+            .into()),
+            "envelope case {case}"
+        );
+        assert_eq!(
+            accounts[1]
+                .try_borrow_data()
+                .expect("refused cache")
+                .as_ref(),
+            fixture
+                .empty_cache_account()
+                .try_borrow_data()
+                .expect("pristine cache")
+                .as_ref()
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -6,17 +6,16 @@
 //!
 //! This program is the sole writer of the release-set activation cache. It
 //! authenticates finalized headerless records, parses current Loader V3 state,
-//! reuses the digest that finalization checked for immutable deployments (and
-//! hashes upgradeable deployments), invokes the SDK-free Registry contract
+//! reuses the digest finalization checked while the Loader deployment slot and
+//! upgrade authority remain pinned, invokes the SDK-free Registry contract
 //! once, and persists only that derived result.
 //! Capability programs may CPI into the read-only reauthentication route and
 //! consume its fixed return-data receipt after checking this program as the
 //! producer.
 //!
-//! Activation admits **one role per transaction**. Whole-ELF hashing costs
-//! about one compute unit per two bytes, so admitting five real multi-hundred-
-//! kilobyte artifacts in one transaction cannot fit under the chain compute
-//! maximum. The activation cache was already an incrementally written,
+//! Activation admits **one role per transaction**. ArtifactRelease finalization
+//! performs the complete ELF hash once; activation reuses its admitted digest.
+//! The activation cache is an incrementally written,
 //! idempotent, alias-checked buffer, and a partially written cache cannot
 //! `decode`, so no reader can consume a half-activated release set.
 
@@ -35,15 +34,12 @@ use dclutch_registry::release_set::{
     EXECUTION_RELEASE_SET_BYTES_V1, EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1,
     ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1,
 };
-use dclutch_registry::svm::{
-    ProgramDataV3View, ProgramV3View, REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1,
-    RegistryInstructionV1,
-};
+use dclutch_registry::svm::{REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1, RegistryInstructionV1};
 use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_BYTES_V1,
     ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetViewV1, ArtifactActivationInputV1,
-    ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1,
-    activate_execution_role_into_v1, initialize_activation_cache_v1, put_activation_cache_bump_v1,
+    ArtifactReleaseV1, DeploymentObservationV1, activate_execution_role_into_v1,
+    initialize_activation_cache_v1, put_activation_cache_bump_v1,
 };
 use solana_program::{
     account_info::{AccountInfo, next_account_info},
@@ -55,7 +51,7 @@ use solana_program::{
     rent::Rent,
     sysvar::SysvarSerialize,
 };
-use solana_sdk_ids::{bpf_loader_upgradeable, native_loader, system_program, sysvar};
+use solana_sdk_ids::{native_loader, system_program, sysvar};
 use solana_system_interface::instruction::create_account;
 
 mod batch_v2;
@@ -480,21 +476,12 @@ fn authenticate_artifact_role(
         return Err(RegistryError::Release.into());
     }
     drop(data);
-    // Finalizing an ArtifactRelease already compared its claimed digest with
-    // the complete live ELF. If that admitted deployment is immutable and its
-    // ProgramData still has no authority, the Loader cannot change those bytes:
-    // recheck the pinned slot/link/owners and carry the admitted digest forward.
-    // Upgradeable releases keep the complete hash here. Besides preserving
-    // their independent first activation check, this catches even a hostile
-    // same-slot byte substitution instead of relying on Loader scheduling.
-    let observation = match release.upgrade_policy() {
-        ArtifactUpgradePolicyV1::Immutable => {
-            cached_role_deployment_observation(frame.program, frame.programdata, release)?
-        }
-        ArtifactUpgradePolicyV1::ExactAuthority => {
-            deployment_observation(frame.program, frame.programdata, release)?
-        }
-    };
+    // Finalization already hashed this deployment. Loader V3 refuses Upgrade,
+    // Extend and Close in its recorded slot; successful byte-changing operations
+    // write a later slot. The same pinned observation used by recurring readers
+    // therefore authenticates first activation under both admitted policies.
+    let observation =
+        cached_role_deployment_observation(frame.program, frame.programdata, release)?;
     Ok(ArtifactActivationInputV1::new(
         expected.artifact_release(),
         release,
@@ -502,28 +489,14 @@ fn authenticate_artifact_role(
     ))
 }
 
-/// Observe one deployment already admitted into the activation cache.
+/// Observe a deployment whose Registry-owned ArtifactRelease is finalized.
 ///
-/// ArtifactRelease finalization hashed this artifact's complete ELF once,
-/// before activation could consume the Registry-owned record.
-/// `immutable_release_elf_digest_v1` owns the argument that an immutable Loader
-/// V3 deployment's admitted digest is therefore still its exact current digest:
-/// the release must be `Immutable`, carry no upgrade authority, and the
-/// observed ProgramData must currently carry none either.
-/// Re-hashing a multi-hundred-kilobyte ELF on every recurring reauthentication
-/// recomputes an already authenticated fact, and at about one compute unit per
-/// two bytes that single hash was the whole reason canonical Found exceeded the
-/// chain compute maximum.
-///
-/// This is strictly stronger than hashing, not weaker: the fast path *requires*
-/// the immutable policy and an absent live upgrade authority, which the hashing
-/// path never demanded on its own. An `ExactAuthority` release has no such
-/// guarantee and keeps the full current-ELF hash. Identity, link, ownership,
-/// executability, deployment slot, and authority are rechecked either way by
-/// `authenticate_deployment`.
-/// The single implementation lives in `dclutch-registry::activation_auth_v1`,
-/// because the same observation is now made by every role adapter reading the
-/// cache directly. This wrapper only remaps its refusal onto Registry's own.
+/// `record_v1` compares the complete live ELF before finalizing that record.
+/// The shared reader rechecks Loader ownership, executability, the Program to
+/// ProgramData link, deployment slot and authority, then calls the canonical
+/// `slot_pinned_release_elf_digest_v1` owner. Both initial activation and later
+/// reauthentication consume that same admitted fact; neither adds a second
+/// full-ELF admission hash. See decision 0012 and the native Loader slot tests.
 fn cached_role_deployment_observation(
     program: &AccountInfo<'_>,
     programdata: &AccountInfo<'_>,
@@ -531,61 +504,6 @@ fn cached_role_deployment_observation(
 ) -> Result<DeploymentObservationV1, ProgramError> {
     cached_role_deployment_observation_v1(program, programdata, release)
         .map_err(|error| RegistryError::from(error).into())
-}
-
-/// Observe one deployment by hashing its complete current ELF tail.
-///
-/// ArtifactRelease finalization calls the equivalent observation in
-/// `record_v1` before it makes the record immutable. Activation calls this
-/// implementation again only for an `ExactAuthority` release, whose Loader
-/// ProgramData remains mutable. It must never use a cached digest for that
-/// policy: an adversarial same-slot account image must still be rejected by
-/// the byte comparison, independently of Loader scheduling.
-fn deployment_observation(
-    program: &AccountInfo<'_>,
-    programdata: &AccountInfo<'_>,
-    release: ArtifactReleaseV1,
-) -> Result<DeploymentObservationV1, ProgramError> {
-    if release.loader_program().to_bytes() != bpf_loader_upgradeable::ID.to_bytes()
-        || program.key.to_bytes() != release.program().to_bytes()
-        || programdata.key.to_bytes() != release.programdata()
-        || program.owner != &bpf_loader_upgradeable::ID
-        || programdata.owner != &bpf_loader_upgradeable::ID
-        || !program.executable
-        || programdata.executable
-    {
-        return Err(RegistryError::Deployment.into());
-    }
-    let program_bytes = program
-        .try_borrow_data()
-        .map_err(|_| RegistryError::Borrow)?;
-    let program_view =
-        ProgramV3View::parse(&program_bytes).map_err(|_| RegistryError::Deployment)?;
-    let derived =
-        Pubkey::find_program_address(&[program.key.as_ref()], &bpf_loader_upgradeable::ID).0;
-    if program_view.programdata() != release.programdata() || programdata.key != &derived {
-        return Err(RegistryError::Deployment.into());
-    }
-    drop(program_bytes);
-    let programdata_bytes = programdata
-        .try_borrow_data()
-        .map_err(|_| RegistryError::Borrow)?;
-    let programdata_view =
-        ProgramDataV3View::parse(&programdata_bytes).map_err(|_| RegistryError::Deployment)?;
-    DeploymentObservationV1::new(
-        program.key.to_bytes(),
-        program.owner.to_bytes(),
-        program.executable,
-        programdata.key.to_bytes(),
-        programdata.owner.to_bytes(),
-        programdata.executable,
-        program_view.programdata(),
-        bpf_loader_upgradeable::ID.to_bytes(),
-        programdata_view.deployment_slot(),
-        hash(programdata_view.elf()).to_bytes(),
-        programdata_view.upgrade_authority(),
-    )
-    .map_err(|_| RegistryError::Deployment.into())
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -61,6 +61,7 @@ class AquariumTests(unittest.TestCase):
         self.checked_bootstrap = {"path": self.boot, "sha256": aquarium.sha256_file(self.boot),
                                   "bytes": self.boot.stat().st_size}
         aquarium.verify_release_pack = lambda _path, _digest, _revision, _tree: self.checked_bootstrap
+        self.bindings = self.root / "public-market-bindings-v1.json"
 
     def tearDown(self):
         aquarium.verify_release_gate = self.release_gate_verifier
@@ -86,6 +87,17 @@ class AquariumTests(unittest.TestCase):
 
     def write(self, body):
         path = self.root / "aquarium.json"; path.write_text(json.dumps(body)); return path
+
+    def enable_public_join(self, body, *, cohort=18, manifest_digest=None, markets=None):
+        bindings = {key(100): {"linked_basis_record_digest": "2" * 64,
+                               "founding_report_sha256": "3" * 64}} if markets is None else markets
+        self.bindings.write_text(json.dumps({"schema": aquarium.PUBLIC_MARKET_BINDINGS_SCHEMA,
+            "cohort": {"number": cohort, "manifest_sha256": manifest_digest or aquarium.sha256_file(self.manifest)},
+            "markets": bindings}))
+        body["cohort"]["public_market_bindings"] = {
+            "path": str(self.bindings), "sha256": aquarium.sha256_file(self.bindings)}
+        body["markets"][0]["join_open"] = True
+        return body
 
     def test_checked_manifest_and_nonreused_ticket_epochs_are_accepted(self):
         calls = []
@@ -121,12 +133,39 @@ class AquariumTests(unittest.TestCase):
         with self.assertRaisesRegex(aquarium.Refusal, "release_gate does not authenticate"):
             aquarium.validate_config(self.write(self.body()))
 
-    def test_refuses_ticket_cycle_reuse_and_unearned_public_join(self):
+    def test_refuses_ticket_cycle_reuse_and_public_join_without_a_market_binding(self):
         body = self.body(); body["markets"][0]["epochs"][0]["cycles"] = 3
         with self.assertRaisesRegex(aquarium.Refusal, "only 2 pinned ticket pairs"):
             aquarium.validate_config(self.write(body))
         body = self.body(); body["markets"][0]["join_open"] = True
-        with self.assertRaisesRegex(aquarium.Refusal, "checked release binding"):
+        with self.assertRaisesRegex(aquarium.Refusal, "requires this market"):
+            aquarium.validate_config(self.write(body))
+
+    def test_accepts_public_join_for_a_market_in_the_checked_cohort_binding(self):
+        parsed = aquarium.validate_config(self.write(self.enable_public_join(self.body())))
+        self.assertTrue(parsed["markets"][0]["join_open"])
+        instance = aquarium.Aquarium(parsed, execute=False)
+        instance.publish("preflight")
+        status = json.loads(parsed["public_status"].read_text())
+        self.assertTrue(status["activity"]["active_markets"][0]["join_open"])
+        self.assertIn("market page rechecks chain state", status["activity"]["join_note"])
+        published = json.loads(aquarium.checked_public_snapshot(parsed, parsed["public_status"]))
+        self.assertTrue(published["activity"]["active_markets"][0]["join_open"])
+
+    def test_refuses_public_join_binding_for_another_cohort(self):
+        body = self.enable_public_join(self.body(), cohort=17)
+        with self.assertRaisesRegex(aquarium.Refusal, "another checked cohort"):
+            aquarium.validate_config(self.write(body))
+
+    def test_refuses_public_join_when_the_checked_binding_omits_the_market(self):
+        body = self.enable_public_join(self.body(), markets={})
+        with self.assertRaisesRegex(aquarium.Refusal, "requires this market"):
+            aquarium.validate_config(self.write(body))
+
+    def test_refuses_a_binding_for_an_unknown_manifest_market(self):
+        body = self.enable_public_join(self.body(), markets={key(101): {
+            "linked_basis_record_digest": "2" * 64, "founding_report_sha256": "3" * 64}})
+        with self.assertRaisesRegex(aquarium.Refusal, "unknown manifest market"):
             aquarium.validate_config(self.write(body))
 
     def test_refuses_one_ticket_digest_reused_on_another_side(self):

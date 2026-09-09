@@ -20,6 +20,7 @@ mod compact_artifacts_v4;
 mod compact_operator_v4;
 mod dynamic_retirement_v1;
 mod effect;
+mod resource_counter;
 pub use dynamic_retirement_v1::build_dynamic_retirement_bundle_v1;
 mod lifecycle_policy_v5;
 mod operator;

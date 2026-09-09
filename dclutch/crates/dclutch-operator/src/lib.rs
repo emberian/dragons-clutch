@@ -45,6 +45,7 @@ pub mod source_readiness;
 pub mod structured;
 /// Market-free root-creation artifacts for Structured representations.
 pub mod structured_activation_bundle_v1;
+pub mod structured_root_close_v1;
 /// Market-free lifecycle activation artifacts for Structured representations.
 pub mod structured_lifecycle_selected_v1;
 /// Wallet-terminal payout input derivation, callable from a browser.

@@ -4,22 +4,19 @@ use dclutch_claims::rational_kernel::DESCRIPTOR_HEADER_BYTES;
 use dclutch_claims::rational_lifecycle::{
     LifecycleActionV2,
     hot_v3::{
-        RATIONAL_LIFECYCLE_IDENTITY_DESCRIPTOR_V3,
         RATIONAL_LIFECYCLE_SCALAR_PRODUCT_OUTCOME_COUNT_V3, RationalLifecycleHotRegisterLayoutV3,
     },
     hot_v6::RationalLifecycleHotRegisterLayoutV6,
 };
 use dclutch_custody::token_svm::TOKEN_BEHAVIOR_SELECTION_BYTES_V2;
-use dclutch_product::DOMAIN_HEADER_BYTES;
 use dclutch_product::payoff::runtime_v3::{BASIS_WIDTH_OFFSET_V3, ProductBasisV3};
 use dclutch_vm::account_profile::v2::{
     AccountPrestateV2, DYNAMIC_FIXED_SPAN_HEADER_BYTES, OPERATION_BYTES as ACCOUNT_OPERATION_BYTES,
     RULE_BYTES as ACCOUNT_RULE_BYTES, TrustedBuiltinIdentityV2, TrustedEnvironmentV2,
-    TrustedIdentityEnvironmentV2,
     encode::{
         AccountAliasInputV2, AccountCoordinateV2, AccountOperationInputV2,
-        AccountRuleWithPrestateInputV2, IdentityCoordinateV2, RegisterGeometryV2,
-        ScalarCoordinateV2, encode_account_profile_with_dynamic_fixed_span_v2_atomic,
+        AccountRuleWithPrestateInputV2, RegisterGeometryV2, ScalarCoordinateV2,
+        encode_account_profile_with_dynamic_fixed_span_v2_atomic,
     },
 };
 
@@ -42,15 +39,38 @@ pub fn encode_rational_lifecycle_selected_account_profile_v5(
     action: LifecycleActionV2,
     input: RationalLifecycleSelectedAccountProfileInputV5<'_>,
 ) -> Result<Vec<u8>> {
-    encode_rational_lifecycle_selected_account_profile(action, input, SelectedRegisterLayout::V3)
+    encode_rational_lifecycle_selected_account_profile(
+        action,
+        input,
+        SelectedRegisterLayout::V3,
+        false,
+    )
 }
 
-/// Encode the V6 Profile13 interpreter with a separate request-descriptor identity.
+/// Encode the V6 Profile13 interpreter with Claims-owned descriptor authentication.
 pub fn encode_rational_lifecycle_selected_account_profile_v6(
     action: LifecycleActionV2,
     input: RationalLifecycleSelectedAccountProfileInputV5<'_>,
 ) -> Result<Vec<u8>> {
-    encode_rational_lifecycle_selected_account_profile(action, input, SelectedRegisterLayout::V6)
+    encode_rational_lifecycle_selected_account_profile(
+        action,
+        input,
+        SelectedRegisterLayout::V6,
+        false,
+    )
+}
+
+pub(super) fn encode_selected_account_profile_with_counter_v6(
+    action: LifecycleActionV2,
+    input: RationalLifecycleSelectedAccountProfileInputV5<'_>,
+    counter: bool,
+) -> Result<Vec<u8>> {
+    encode_rational_lifecycle_selected_account_profile(
+        action,
+        input,
+        SelectedRegisterLayout::V6,
+        counter,
+    )
 }
 
 #[derive(Clone, Copy)]
@@ -63,6 +83,7 @@ fn encode_rational_lifecycle_selected_account_profile(
     action: LifecycleActionV2,
     input: RationalLifecycleSelectedAccountProfileInputV5<'_>,
     layout: SelectedRegisterLayout,
+    counter: bool,
 ) -> Result<Vec<u8>> {
     let coordinate_count = match action {
         LifecycleActionV2::ActivateReceipt => 0,
@@ -95,6 +116,9 @@ fn encode_rational_lifecycle_selected_account_profile(
     let mut rules = Vec::with_capacity(logical_count);
     for index in 0..logical_count {
         let mut value = rule(action, index, input.logical_data_lengths)?;
+        if index == 0 {
+            super::resource_counter::root_rule(&mut value, counter)?;
+        }
         let alias = match index {
             31 => Some(4),
             33 => Some(2),
@@ -116,15 +140,12 @@ fn encode_rational_lifecycle_selected_account_profile(
                         .map_err(|_| Error::InvalidLength)?;
                 AccountPrestateV2::AdapterAuthenticatedVariableData
             }
-            (14, _, _) => {
-                value.data_length =
-                    u32::try_from(DESCRIPTOR_HEADER_BYTES).map_err(|_| Error::InvalidLength)?;
-                AccountPrestateV2::AdapterAuthenticatedVariableData
-            }
-            (35, _, _) => {
-                value.data_length =
-                    u32::try_from(DOMAIN_HEADER_BYTES).map_err(|_| Error::InvalidLength)?;
-                AccountPrestateV2::AdapterAuthenticatedVariableData
+            (14 | 35, _, _) => {
+                // Claims authenticates these Registry bodies. The Hot adapter
+                // authenticates variable data only in its shared prefix; this
+                // profile observes the descriptor key, never either body.
+                value.data_length = 0;
+                AccountPrestateV2::AuthenticatedOpaqueReadonlyData
             }
             (_, Some(_), _) => {
                 value.data_length = 0;
@@ -141,33 +162,35 @@ fn encode_rational_lifecycle_selected_account_profile(
             prestate,
         });
     }
-    let operations = [
-        AccountOperationInputV2::ProjectTailCountU32 {
-            account: AccountCoordinateV2::fixed(4),
-            destination: ScalarCoordinateV2::common(narrow_u16(
-                RATIONAL_LIFECYCLE_SCALAR_PRODUCT_OUTCOME_COUNT_V3,
-            )?),
-            data_offset: u32::try_from(BASIS_WIDTH_OFFSET_V3).map_err(|_| Error::InvalidLength)?,
-        },
-        AccountOperationInputV2::ProjectKey {
-            account: AccountCoordinateV2::fixed(14),
-            destination: IdentityCoordinateV2::common(narrow_u16(
-                RATIONAL_LIFECYCLE_IDENTITY_DESCRIPTOR_V3,
-            )?),
-        },
-    ];
+    let mut operations = vec![AccountOperationInputV2::ProjectTailCountU32 {
+        account: AccountCoordinateV2::fixed(4),
+        destination: ScalarCoordinateV2::common(narrow_u16(
+            RATIONAL_LIFECYCLE_SCALAR_PRODUCT_OUTCOME_COUNT_V3,
+        )?),
+        data_offset: u32::try_from(BASIS_WIDTH_OFFSET_V3).map_err(|_| Error::InvalidLength)?,
+    }];
     let v3_registers = RationalLifecycleHotRegisterLayoutV3::new(coordinates);
     let v6_registers = RationalLifecycleHotRegisterLayoutV6::new(coordinates);
+    super::resource_counter::project(
+        &mut operations,
+        v3_registers.scalar_count().ok_or(Error::InvalidLength)?,
+        v6_registers.identity_count().ok_or(Error::InvalidLength)?,
+        counter,
+    )?;
     let geometry = RegisterGeometryV2 {
-        common_scalars: narrow_u16(v3_registers.scalar_count().ok_or(Error::InvalidLength)?)?,
+        common_scalars: narrow_u16(super::resource_counter::scalar_count(
+            v3_registers.scalar_count().ok_or(Error::InvalidLength)?,
+            counter,
+        )?)?,
         item_scalar_stride: 0,
-        common_identities: narrow_u16(
+        common_identities: narrow_u16(super::resource_counter::identity_count(
             match layout {
                 SelectedRegisterLayout::V3 => v3_registers.identity_count(),
                 SelectedRegisterLayout::V6 => v6_registers.identity_count(),
             }
             .ok_or(Error::InvalidLength)?,
-        )?,
+            counter,
+        )?)?,
         item_identity_stride: 0,
     };
     let bytes = DYNAMIC_FIXED_SPAN_HEADER_BYTES
@@ -188,7 +211,10 @@ fn encode_rational_lifecycle_selected_account_profile(
     let mut output = vec![0_u8; bytes];
     encode_account_profile_with_dynamic_fixed_span_v2_atomic(
         TrustedEnvironmentV2::None,
-        TrustedIdentityEnvironmentV2::None,
+        super::resource_counter::trusted_identity(
+            v6_registers.identity_count().ok_or(Error::InvalidLength)?,
+            counter,
+        )?,
         TrustedBuiltinIdentityV2::None,
         &[],
         &rules,

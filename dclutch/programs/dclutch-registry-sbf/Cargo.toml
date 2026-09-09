@@ -30,6 +30,10 @@ solana-sdk-ids = "=3.1.0"
 solana-system-interface = { version = "=2.0.0", features = ["bincode"] }
 
 [dev-dependencies]
+# Canonical native Loader instructions/state for the slot-pin runtime control.
+agave-feature-set = { version = "=4.3.0-beta.2", features = ["agave-unstable-api"] }
+bincode = "1.3.3"
+solana-loader-v3-interface = { version = "=7.0.0", features = ["bincode"] }
 # The host builder under test. `DeclareSuccessor` is the one route whose frame
 # nothing outside the operator crate can construct, so the campaign drives the
 # real ELF with the real builder rather than a second hand-assembled frame that

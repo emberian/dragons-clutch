@@ -446,7 +446,7 @@ fn require_complete_local_succession_v1(state: crate::campaign::StageStateV1) ->
 /// persisted plan remains the predecessor history; this projection changes
 /// only the three facts necessarily created by the Loader write and successor
 /// artifact record.
-fn authenticated_successor_registry_pin_v1(
+pub(crate) fn authenticated_successor_registry_pin_v1(
     plan: &SuccessorPlan,
     programdata: &RpcAccount,
     v2_profile: &RpcAccount,

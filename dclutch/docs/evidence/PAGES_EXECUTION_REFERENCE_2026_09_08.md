@@ -155,3 +155,25 @@ and existing Pages deployment `6338614401` succeeded at
 `/private/tmp/dclutch-reference-check-dd756b79e-20260908.log`.
 This publishes the implementation checkpoint; the fresh devnet cohort and
 complete current-source lifecycles remain outstanding.
+
+
+## Addendum — close routes and simulator continuation, 2026-09-09 00:38 UTC
+
+Cut `37e926956b21a4fe2805cc6a1e3c848ac2f1075b` publishes source
+`4a9fb0fb26988e8049522b339dd8fadd554c6c26`, tree
+`c38e36281f8e4797bd707fb00bd6e9f7d94baca1`. It carries the committed Dealer
+and Resolution close paths, Structured wallet settlement, the Direct simulator
+continuation fixes, and the corrected hbox work paths. The credential sweep
+found zero findings, the source and published trees matched exactly, and the
+committed reference check converged unchanged.
+
+[Workflow 34295764913](https://github.com/emberian/dragons-clutch/actions/runs/34295764913)
+and existing Pages deployment `6340003807` succeeded at
+`2026-09-09T00:38:03Z`. Logs are
+`/private/tmp/dclutch-cut-4a9fb0fb2-20260909.log` and
+`/private/tmp/dclutch-reference-check-4a9fb0fb2-20260909.log`.
+The intervening cut `7a3dff50fbd4ff747d963928e52a8b4bb65b5791` published source
+`490700259d27f399eb7ccd596d0483f981cb3903`; its
+[workflow 34289613083](https://github.com/emberian/dragons-clutch/actions/runs/34289613083)
+also succeeded. These remain implementation checkpoints; the fresh devnet
+cohort and complete current-source lifecycles are still outstanding.

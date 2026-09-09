@@ -36,10 +36,10 @@
 //! and those two write DIFFERENT certificate seats — `RecoveryAdvanced` and
 //! `Exhausted` are separate kind seeds, so the two addresses differ. The seat
 //! is a caller-supplied account, so this driver has to say which one before it
-//! sends. It predicts exactly as the transition does: `entering` is zero on
-//! `Primary` and `active_attempt + 1` on `Recovery`, and the policy funding
-//! that index is the whole of the difference between the two arms. A wrong
-//! prediction cannot pass — the program derives the seat from the crank it
+//! sends. It predicts exactly as the transition does: `entering` is the first
+//! post-member rung on `Primary` and `active_attempt + 1` on `Recovery`, and
+//! the policy funding that index is the whole of the difference between the
+//! two arms. A wrong prediction cannot pass — the program derives the seat from the crank it
 //! actually took and refuses an address that is not it — so the prediction is
 //! fail-closed and never a second authority.
 
@@ -69,8 +69,8 @@ use dclutch_source::resolution::{
 };
 use dclutch_source::{
     RECOVERY_POLICY_SCHEMA_ID_V2, RecoveryPolicyV2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
-    SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2, SourceResolutionPhaseV1, SourceResolutionStateV2,
-    WINDOW_SPEC_SCHEMA_ID_V1, WindowSpecV1,
+    SOURCE_RESOLUTION_STATE_BYTES_V2, SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2, SourceMaterialV3,
+    SourceResolutionPhaseV1, SourceResolutionStateV2, WINDOW_SPEC_SCHEMA_ID_V1, WindowSpecV1,
 };
 
 use crate::campaign::{
@@ -128,7 +128,7 @@ pub(crate) fn devnet_usage() -> &'static str {
 
 pub(crate) fn usage() -> &'static str {
     "dclutch-local-successor-bootstrap local-private-validator-advance-recovery-v1 --rpc-url http://127.0.0.1:PORT --plan ABSOLUTE_JSON --evidence ABSOLUTE_JSON --market PUBKEY --terminal-sequence U64 --worker PUBKEY --output ABSOLUTE_JSON [--wait --max-wait-seconds I64] [--execute --worker-keypair ABSOLUTE_JSON]\n\
-     \nOne crank of a market's funded ordered-recovery ladder. Which rung, which source and when it expires are read off the market's own state, so nothing economic is passed in: the driver assembles the 18-account frame the relay contract declares, derives the certificate seat at the kind this crank will write, and refuses by name while the current leg's deadline has not passed. --wait sleeps to that deadline through one bounded wait against the chain's own clock and refuses a target further away than --max-wait-seconds; it never warps. Preflight opens no key. Execute pre-funds the seat if it is short, sends one transaction, and reads the Source state back to prove the ladder moved."
+     \nOne crank of a market's funded ordered-recovery ladder. Which rung, which source and when it expires are read off the market's own state, so nothing economic is passed in: the driver assembles the 18-account frame the relay contract declares, derives the certificate seat at the kind this crank will write, and refuses by name while the current leg's deadline has not passed. --wait sleeps to that deadline through one bounded wait against the chain's own clock and refuses a target further away than --max-wait-seconds; it never warps. Preflight opens no key. Execute preserves the single-source same-transaction prepay; an Ensemble spends only its pre-liability Source reserve. The driver then reads the Source state back to prove the ladder moved."
 }
 
 /// Which arm of the crank the market's own state selects.
@@ -198,6 +198,11 @@ struct PlanV1 {
     /// Lamports the certificate seat is short of its rent, and zero when it is
     /// already funded.
     seat_shortfall_lamports: u64,
+    /// Whether this non-single Source spends the reserve capitalized before
+    /// liabilities, rather than asking the current worker for terminal rent.
+    source_reserve_funding: bool,
+    /// Spendable lamports above the Source state's own rent floor.
+    source_reserve_available_lamports: u64,
 }
 
 pub(crate) fn run_owned_loopback_v1(arguments: Vec<String>) -> Result<()> {
@@ -287,12 +292,13 @@ pub(crate) fn run_v1(
         )));
     }
 
-    // The seat is allocated by the program from lamports it already holds, so a
-    // short seat is pre-funded in the SAME transaction rather than in a second
-    // one nobody would remember to send. Exactly the shortfall: a seat that
-    // already holds its rent is not topped up at all.
+    // Single-source markets retain their existing same-transaction prepay.
+    // An Ensemble has already capitalized this physical output on its Source
+    // before Core accepted liabilities, so asking today's worker to prepay it
+    // would hide an underfunded founding. The instruction alone must spend the
+    // Source reserve on that branch.
     let mut instructions = Vec::with_capacity(2);
-    if plan.seat_shortfall_lamports != 0 {
+    if !plan.source_reserve_funding && plan.seat_shortfall_lamports != 0 {
         instructions.push(transfer(
             &worker.pubkey(),
             &plan.certificate,
@@ -464,6 +470,14 @@ fn plan(rpc: &mut Rpc, arguments: &ArgumentsV1, expected: ExpectedClusterV1) -> 
     let source_account = rpc.required_account(source_state, "Source resolution state")?;
     let source = SourceResolutionStateV2::decode(&source_account.data)
         .map_err(|error| Error::new(format!("Source resolution state: {error:?}")))?;
+    let material_account = rpc.required_account(material.raw, "SourceMaterialV3 record")?;
+    let source_material = SourceMaterialV3::decode(&material_account.data)
+        .map_err(|error| Error::new(format!("SourceMaterialV3 record: {error:?}")))?;
+    if source.material_id().to_bytes() != material.digest {
+        return Err(Error::new(
+            "Source state does not name the finalized SourceMaterialV3 record",
+        ));
+    }
 
     let policy_account = rpc.required_account(policy_pair.raw, "RecoveryPolicyV2 record")?;
     let policy = RecoveryPolicyV2::decode(&policy_account.data)
@@ -471,10 +485,33 @@ fn plan(rpc: &mut Rpc, arguments: &ArgumentsV1, expected: ExpectedClusterV1) -> 
     let window_account = rpc.required_account(window.raw, "WindowSpecV1 record")?;
     let window_spec = WindowSpecV1::decode(&window_account.data)
         .map_err(|error| Error::new(format!("WindowSpecV1 record: {error:?}")))?;
+    if source_material.recovery_policy().map(|id| id.to_bytes()) != Some(policy_pair.digest) {
+        return Err(Error::new(
+            "SourceMaterialV3 does not name the finalized RecoveryPolicyV2 record",
+        ));
+    }
+    if !source_material.ensemble().is_single() {
+        let primary_deadline = window_spec
+            .end_unix_seconds()
+            .checked_add(i64::from(window_spec.max_age_seconds()))
+            .ok_or_else(|| Error::new("Ensemble primary deadline overflow"))?;
+        policy
+            .validate_ensemble_membership(
+                source_material.ensemble(),
+                source_material.ensemble_rungs(),
+                primary_deadline,
+            )
+            .map_err(|error| Error::new(format!("Ensemble recovery policy: {error:?}")))?;
+    }
 
-    let CrankDecisionV1 { entering, due, arm } =
-        crank_decision_v1(source.phase(), source.active_attempt(), window_spec, policy)
-            .map_err(|error| Error::new(format!("market {market}: {error}")))?;
+    let CrankDecisionV1 { entering, due, arm } = crank_decision_v1(
+        source.phase(),
+        source.active_attempt(),
+        source_material,
+        window_spec,
+        policy,
+    )
+    .map_err(|error| Error::new(format!("market {market}: {error}")))?;
 
     // THE WAIT, or the refusal. A crank is admissible strictly after the leg's
     // deadline, so the target is one second past it.
@@ -521,6 +558,16 @@ fn plan(rpc: &mut Rpc, arguments: &ArgumentsV1, expected: ExpectedClusterV1) -> 
     let required = rent.minimum_balance(RESOLUTION_CERTIFICATE_BYTES_V2);
     let held = rpc.account(certificate)?.map_or(0, |seat| seat.lamports);
     let seat_shortfall_lamports = required.saturating_sub(held);
+    let source_reserve_funding = !source_material.ensemble().is_single();
+    let source_reserve_available_lamports = source_account
+        .lamports
+        .saturating_sub(rent.minimum_balance(SOURCE_RESOLUTION_STATE_BYTES_V2));
+    if source_reserve_funding && source_reserve_available_lamports < seat_shortfall_lamports {
+        return Err(Error::new(format!(
+            "Ensemble Source reserve holds {source_reserve_available_lamports} lamports above its rent floor but the canonical {} certificate needs {seat_shortfall_lamports}; founding did not prepay this liability",
+            arm.label()
+        )));
+    }
 
     // THE FRAME, DRIVEN BY THE RELAY CONTRACT'S OWN TABLE. Signer and writable
     // come from `relay_frame_roles_v1`, never from this file, and
@@ -608,6 +655,8 @@ fn plan(rpc: &mut Rpc, arguments: &ArgumentsV1, expected: ExpectedClusterV1) -> 
         due_unix_seconds: due,
         observed_unix_seconds: observed,
         seat_shortfall_lamports,
+        source_reserve_funding,
+        source_reserve_available_lamports,
     })
 }
 
@@ -639,12 +688,13 @@ struct CrankDecisionV1 {
 fn crank_decision_v1(
     phase: SourceResolutionPhaseV1,
     active_attempt: u8,
+    material: SourceMaterialV3,
     window: WindowSpecV1,
     policy: RecoveryPolicyV2,
 ) -> Result<CrankDecisionV1> {
     let (entering, due) = match phase {
         SourceResolutionPhaseV1::Primary => (
-            0_u8,
+            material.ensemble().first_rung_index(),
             window
                 .end_unix_seconds()
                 .checked_add(i64::from(window.max_age_seconds()))
@@ -770,6 +820,18 @@ fn report(plan: &PlanV1) {
     println!("terminal sequence    {}", plan.terminal_sequence);
     println!("certificate seat     {}", plan.certificate);
     println!("seat shortfall       {}", plan.seat_shortfall_lamports);
+    println!(
+        "certificate funding  {}",
+        if plan.source_reserve_funding {
+            "pre-liability Source reserve"
+        } else {
+            "same-transaction worker prepay"
+        }
+    );
+    println!(
+        "Source reserve       {} lamports above rent floor",
+        plan.source_reserve_available_lamports
+    );
     println!("funding ledger       {}", plan.funding_ledger);
     println!("frame accounts       {}", plan.instruction.accounts.len());
 }
@@ -803,6 +865,12 @@ fn write_evidence(
         "terminalSequence": plan.terminal_sequence,
         "certificate": plan.certificate.to_string(),
         "certificateSeatShortfallLamports": plan.seat_shortfall_lamports,
+        "certificateFunding": if plan.source_reserve_funding {
+            "pre-liability-source-reserve"
+        } else {
+            "same-transaction-worker-prepay"
+        },
+        "sourceReserveAvailableLamports": plan.source_reserve_available_lamports,
         "fundingLedger": plan.funding_ledger.to_string(),
         "frameAccounts": plan.instruction.accounts.len(),
         "landed": landed.map(|evidence| json!({
@@ -1041,9 +1109,17 @@ mod tests {
     /// entering that index advances the ladder or ends it.
     #[test]
     fn the_decision_walks_a_two_rung_ladder_and_then_ends_it() {
-        use dclutch_source::{ContentId, RecoveryAttemptV2, WindowKind};
+        use dclutch_source::{ContentId, EnsembleSpecV1, RecoveryAttemptV2, WindowKind};
 
         let id = |tag: u8| ContentId::new([tag; 32]).expect("nonzero");
+        let single = SourceMaterialV3::explicitly_unbounded(
+            id(0x31),
+            id(0x32),
+            id(0x33),
+            id(0x34),
+            Some(id(0x35)),
+            id(0x36),
+        );
         // The window's own source link is inert to this decision -- what the
         // primary leg contributes is its closing second and its liveness grace,
         // and nothing else.
@@ -1073,7 +1149,7 @@ mod tests {
         // after the window's own closing plus its liveness grace -- 2,000 + 300
         // -- which is a fact about the MARKET's window and not about any rung.
         assert_eq!(
-            crank_decision_v1(SourceResolutionPhaseV1::Primary, 0, window, policy)
+            crank_decision_v1(SourceResolutionPhaseV1::Primary, 0, single, window, policy)
                 .expect("primary decision"),
             CrankDecisionV1 {
                 entering: 0,
@@ -1086,7 +1162,7 @@ mod tests {
         // rather than the window's, which is the whole difference between the
         // two legs' clock rules, and the ladder still has a rung to enter.
         assert_eq!(
-            crank_decision_v1(SourceResolutionPhaseV1::Recovery, 0, window, policy)
+            crank_decision_v1(SourceResolutionPhaseV1::Recovery, 0, single, window, policy,)
                 .expect("first rung decision"),
             CrankDecisionV1 {
                 entering: 1,
@@ -1099,7 +1175,7 @@ mod tests {
         // the exhaustion arm is the advance arm's exact complement and the
         // crank writes the other certificate kind.
         assert_eq!(
-            crank_decision_v1(SourceResolutionPhaseV1::Recovery, 1, window, policy)
+            crank_decision_v1(SourceResolutionPhaseV1::Recovery, 1, single, window, policy,)
                 .expect("last rung decision"),
             CrankDecisionV1 {
                 entering: 2,
@@ -1111,11 +1187,78 @@ mod tests {
         // A market that has already reached a terminal is not cranked at all,
         // and the refusal names the phase rather than reporting a frame it
         // could not build.
-        let refusal = crank_decision_v1(SourceResolutionPhaseV1::Exhausted, 0, window, policy)
-            .expect_err("an exhausted market is not crankable");
+        let refusal = crank_decision_v1(
+            SourceResolutionPhaseV1::Exhausted,
+            0,
+            single,
+            window,
+            policy,
+        )
+        .expect_err("an exhausted market is not crankable");
         assert!(
             format!("{refusal}").contains("already reached a terminal"),
             "got {refusal}"
+        );
+
+        // ENSEMBLE PRIMARY. Attempts zero and one are member slots already
+        // governed by the terminal window. The recovery crank enters slot two,
+        // exactly where the material says its post-member suffix begins.
+        let ensemble = single
+            .with_ensemble(EnsembleSpecV1::new(3, 1).expect("ensemble"), 2)
+            .expect("Ensemble recovery material");
+        let ensemble_policy = RecoveryPolicyV2::new(
+            id(0x05),
+            [
+                Some(
+                    RecoveryAttemptV2::new(id(0x41), id(0x03), 2_300, id(0x51))
+                        .expect("member one"),
+                ),
+                Some(
+                    RecoveryAttemptV2::new(id(0x42), id(0x03), 2_301, id(0x52))
+                        .expect("member two"),
+                ),
+                Some(
+                    RecoveryAttemptV2::new(id(0x43), id(0x03), 5_000, id(0x53))
+                        .expect("recovery rung zero"),
+                ),
+                Some(
+                    RecoveryAttemptV2::new(id(0x44), id(0x03), 9_000, id(0x54))
+                        .expect("recovery rung one"),
+                ),
+            ],
+            4,
+        )
+        .expect("member prefix plus two-rung suffix");
+        assert_eq!(
+            crank_decision_v1(
+                SourceResolutionPhaseV1::Primary,
+                0,
+                ensemble,
+                window,
+                ensemble_policy,
+            )
+            .expect("Ensemble primary decision"),
+            CrankDecisionV1 {
+                entering: 2,
+                due: 2_300,
+                arm: CrankArmV1::Advance,
+            },
+            "the crank must not enter a leading member slot"
+        );
+        assert_eq!(
+            crank_decision_v1(
+                SourceResolutionPhaseV1::Recovery,
+                3,
+                ensemble,
+                window,
+                ensemble_policy,
+            )
+            .expect("Ensemble final-rung decision"),
+            CrankDecisionV1 {
+                entering: 4,
+                due: 9_000,
+                arm: CrankArmV1::Exhaust,
+            }
         );
     }
 

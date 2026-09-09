@@ -21,10 +21,8 @@ struct Progress {
     representation_retired: bool,
 }
 
-/// Run the checked substrate, Structured-selected founding, and the shipped
-/// successor publication command.  Receipt activation remains a later action
-/// in the same command lineage; this function refuses to call it until the
-/// publication command has produced all seven finalized records.
+/// Run the checked substrate and one selected Structured lifecycle through
+/// representation settlement, resource retirement, and capability-root close.
 pub(crate) fn execute(request: JourneyRequestV1) -> Result<()> {
     std::fs::create_dir_all(&request.work)?;
     let mut progress = Progress {
@@ -156,7 +154,7 @@ fn campaign_on_checked_substrate(
     )?;
     let publication: Value = serde_json::from_slice(&std::fs::read(&publication_path)?)?;
     progress.representation_retired = publication
-        .pointer("/receiptActivation/retirement/receipt/closed")
+        .pointer("/receiptActivation/retirement/rootClose/rootClosed")
         .and_then(Value::as_bool)
         == Some(true);
     let records = publication
@@ -221,7 +219,14 @@ impl crate::structured_campaign::StructuredTerminalDriverV1 for StructuredTermin
         market: solana_sdk::pubkey::Pubkey,
         transactions: &mut Vec<TransactionEvidence>,
     ) -> Result<crate::structured_campaign::StructuredTerminalAccountsV1> {
-        resolve_structured_terminal_v1(self.request, self.checked, rpc, payer, transactions)?;
+        resolve_structured_terminal_v1(
+            self.request,
+            self.checked,
+            rpc,
+            payer,
+            false,
+            transactions,
+        )?;
         let payer_path = self
             .checked
             .report
@@ -259,6 +264,30 @@ impl crate::structured_campaign::StructuredTerminalDriverV1 for StructuredTermin
             hoard: settled.hoard,
         })
     }
+
+    fn finish_source_before_retirement(
+        &mut self,
+        rpc: &mut crate::rpc::Rpc,
+        payer: &solana_sdk::signature::Keypair,
+        market: solana_sdk::pubkey::Pubkey,
+        transactions: &mut Vec<TransactionEvidence>,
+    ) -> Result<Value> {
+        resolve_structured_terminal_v1(self.request, self.checked, rpc, payer, true, transactions)?;
+        let work = self.request.work.join("structured-terminal");
+        let terminal = crate::flagship_resolution::authenticate_direct_resolution_terminal_v1(
+            rpc,
+            &work.join("input.json"),
+            &work.join("checkpoint.json"),
+        )?;
+        if terminal.market != market.to_string() {
+            return Err(Error::new(
+                "Structured completed provider names another Market",
+            ));
+        }
+        let value = serde_json::to_value(terminal)?;
+        write_json(&work.join("complete.json"), &value)?;
+        Ok(value)
+    }
 }
 
 /// Resolve the already-founded Primary Source through the shipped durable CLI.
@@ -270,6 +299,7 @@ fn resolve_structured_terminal_v1(
     checked: &crate::substrate::CheckedSubstrateV1,
     rpc: &mut crate::rpc::Rpc,
     payer: &solana_sdk::signature::Keypair,
+    finish_provider: bool,
     transactions: &mut Vec<TransactionEvidence>,
 ) -> Result<()> {
     use crate::provider::{ProviderPlanV1, PublicationV1};
@@ -396,22 +426,34 @@ fn resolve_structured_terminal_v1(
         }
     }
     let input: Value = serde_json::from_slice(&std::fs::read(&input_path)?)?;
-    for (stage, receipt) in [
+    let stages = [
         ("submit", "submit"),
         ("execute", "resolution-provider-execute-v1"),
         ("accept", "core-terminal-accept-v1"),
-    ] {
+        ("reclaim", "reclaim"),
+        ("complete", ""),
+    ];
+    for &(stage, receipt) in stages.iter().take(if finish_provider { 5 } else { 3 }) {
         let existing: Option<Value> = std::fs::read(&checkpoint_path)
             .ok()
             .map(|bytes| serde_json::from_slice(&bytes))
             .transpose()?;
         let has_receipt = |checkpoint: &Value| {
+            if stage == "complete" {
+                return checkpoint["verifiedTerminal"].as_bool() == Some(true);
+            }
             checkpoint["receipts"]
                 .as_array()
                 .is_some_and(|rows| rows.iter().any(|row| row["stage"] == receipt))
         };
         if existing.as_ref().is_some_and(has_receipt) {
             continue;
+        }
+        if stage == "reclaim" {
+            let reclaim_after = input["reclaimAfterUnixSeconds"].as_i64().ok_or_else(|| {
+                Error::new("Structured provider input omitted its immutable reclaim floor")
+            })?;
+            wait_for_structured_reclaim_floor_v1(rpc, reclaim_after)?;
         }
         if stage == "execute" {
             let certificate = crate::plan::pubkey(
@@ -497,4 +539,31 @@ fn resolve_structured_terminal_v1(
         )?;
     }
     Ok(())
+}
+
+/// Scheduling hint only: the canonical Reclaim builder and native handler
+/// independently enforce the immutable floor against their own fresh Clock.
+fn wait_for_structured_reclaim_floor_v1(
+    rpc: &mut crate::rpc::Rpc,
+    reclaim_after: i64,
+) -> Result<()> {
+    loop {
+        let key = solana_sdk_ids::sysvar::clock::ID;
+        let snapshot = crate::terminal_lifecycle::finalized_snapshot(rpc, &[key])?;
+        let account = snapshot
+            .account(key)
+            .map_err(|error| Error::new(format!("Structured reclaim Clock: {error}")))?;
+        let clock = dclutch_operator::observation::decode_clock(account)
+            .map_err(|error| Error::new(format!("Structured reclaim Clock: {error:?}")))?;
+        if clock.unix_timestamp >= reclaim_after {
+            return Ok(());
+        }
+        let remaining = reclaim_after
+            .checked_sub(clock.unix_timestamp)
+            .ok_or_else(|| Error::new("Structured reclaim wait interval overflows"))?;
+        eprintln!(
+            "Structured provider reclaim remains time-locked for {remaining} seconds; Core stays Terminal"
+        );
+        std::thread::sleep(std::time::Duration::from_secs(30));
+    }
 }

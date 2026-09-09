@@ -508,6 +508,131 @@ struct AcquiredSeriesSelectedV1 {
     selected: SeriesSelectedHotReportV5,
 }
 
+/// In-memory, source-derived address frame for the first real Prepare.
+///
+/// This is deliberately not the terminal campaign's serialized acquisition
+/// recipe. The Found -> Prepare driver derives every address from finalized
+/// publication facts and the canonical 116-role layout, then this adapter
+/// performs the same one-snapshot acquisition as the durable campaign.
+pub(crate) struct SeriesPrepareAddressFrameV1<'a> {
+    pub(crate) fixed:
+        &'a [Pubkey; dclutch_market::capability_program::hot_v3::HOT_FIXED_ACCOUNT_COUNT_V3],
+    pub(crate) logical: &'a [Pubkey],
+    pub(crate) occurrence_record: Pubkey,
+    pub(crate) occurrence_staging: Pubkey,
+    pub(crate) ticket_record: Pubkey,
+    pub(crate) ticket_staging: Pubkey,
+    pub(crate) siblings: &'a [[u8; 32]],
+    pub(crate) payer: Pubkey,
+    pub(crate) release: SeriesCurrentReleaseInputV5<'a>,
+}
+
+/// Acquire and authenticate the first Prepare through the same current-source
+/// operator used by the recurring terminal campaign. The returned instruction
+/// is owned and contains the profile-derived physical account metas; no
+/// caller-provided privilege or request bank survives this boundary.
+pub(crate) fn acquire_series_prepare_from_addresses_v1(
+    rpc: &mut Rpc,
+    input: SeriesPrepareAddressFrameV1<'_>,
+) -> Result<SeriesSelectedHotReportV5> {
+    use dclutch_market::capability_program::hot_v3::*;
+
+    let key = |coordinate: usize| {
+        input
+            .fixed
+            .get(coordinate)
+            .copied()
+            .ok_or_else(|| refusal("Series Prepare fixed frame was truncated"))
+    };
+    let record = |raw: usize, staging: usize| -> Result<SeriesFinalizedRecordAddressesV2> {
+        Ok(SeriesFinalizedRecordAddressesV2 {
+            raw: key(raw)?.to_string(),
+            staging: key(staging)?.to_string(),
+        })
+    };
+    let fixed = SeriesHotFixedAddressesV2 {
+        market: key(HOT_MARKET_ACCOUNT_V3)?.to_string(),
+        root: key(HOT_ROOT_ACCOUNT_V3)?.to_string(),
+        manifest: record(HOT_MANIFEST_RAW_ACCOUNT_V3, HOT_MANIFEST_STAGING_ACCOUNT_V3)?,
+        program_set: record(
+            HOT_PROGRAM_SET_RAW_ACCOUNT_V3,
+            HOT_PROGRAM_SET_STAGING_ACCOUNT_V3,
+        )?,
+        descriptor: record(
+            HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
+            HOT_DESCRIPTOR_STAGING_ACCOUNT_V3,
+        )?,
+        config: record(HOT_CONFIG_RAW_ACCOUNT_V3, HOT_CONFIG_STAGING_ACCOUNT_V3)?,
+        account_profile: record(
+            HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,
+            HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
+        )?,
+        request_profile: record(
+            HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3,
+            HOT_REQUEST_PROFILE_STAGING_ACCOUNT_V3,
+        )?,
+        transition: record(
+            HOT_TRANSITION_RAW_ACCOUNT_V3,
+            HOT_TRANSITION_STAGING_ACCOUNT_V3,
+        )?,
+        effect: record(HOT_EFFECT_RAW_ACCOUNT_V3, HOT_EFFECT_STAGING_ACCOUNT_V3)?,
+        lifecycle: record(
+            HOT_LIFECYCLE_RAW_ACCOUNT_V3,
+            HOT_LIFECYCLE_STAGING_ACCOUNT_V3,
+        )?,
+        strategy: record(HOT_STRATEGY_RAW_ACCOUNT_V3, HOT_STRATEGY_STAGING_ACCOUNT_V3)?,
+        activation_cache: key(HOT_ACTIVATION_CACHE_ACCOUNT_V3)?.to_string(),
+        core_program: key(HOT_CORE_PROGRAM_ACCOUNT_V3)?.to_string(),
+        core_programdata: key(HOT_CORE_PROGRAMDATA_ACCOUNT_V3)?.to_string(),
+        trading_program: key(HOT_TRADING_PROGRAM_ACCOUNT_V3)?.to_string(),
+        trading_programdata: key(HOT_TRADING_PROGRAMDATA_ACCOUNT_V3)?.to_string(),
+        registry_program: key(HOT_REGISTRY_PROGRAM_ACCOUNT_V3)?.to_string(),
+        rent_sysvar: key(HOT_RENT_SYSVAR_ACCOUNT_V3)?.to_string(),
+        instructions_sysvar: key(HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3)?.to_string(),
+        product: record(HOT_PRODUCT_RAW_ACCOUNT_V3, HOT_PRODUCT_STAGING_ACCOUNT_V3)?,
+        result_domain: record(
+            HOT_RESULT_DOMAIN_RAW_ACCOUNT_V3,
+            HOT_RESULT_DOMAIN_STAGING_ACCOUNT_V3,
+        )?,
+        portfolio: record(
+            HOT_PORTFOLIO_RAW_ACCOUNT_V3,
+            HOT_PORTFOLIO_STAGING_ACCOUNT_V3,
+        )?,
+        linked_basis: record(
+            HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
+            HOT_LINKED_BASIS_STAGING_ACCOUNT_V3,
+        )?,
+        capability_seal: key(HOT_CAPABILITY_SEAL_ACCOUNT_V3)?.to_string(),
+    };
+    let source = DecodedSeriesCurrentSourceV1::from_release_v1(input.release)?;
+    let recipe = SeriesHotAcquisitionRecipeV2 {
+        sequence: 0,
+        fixed,
+        runtime_logical_accounts: input.logical.iter().map(ToString::to_string).collect(),
+        consume_shadow: None,
+        current_occurrence: Some(SeriesCurrentOccurrenceRouteV1 {
+            occurrence_record: input.occurrence_record.to_string(),
+            occurrence_staging: input.occurrence_staging.to_string(),
+            ticket_record: input.ticket_record.to_string(),
+            ticket_staging: input.ticket_staging.to_string(),
+            ticket_replay: None,
+            siblings: input.siblings.iter().map(|value| hex32(*value)).collect(),
+        }),
+        terminal_ticket: None,
+        lifecycle_rent_credit: None,
+        expire_permit: None,
+    };
+    let acquired = acquire_current_series_selected_v1(
+        rpc,
+        &recipe,
+        &source,
+        input.payer,
+        input.payer,
+        SeriesCampaignPolicyV1::for_act(SeriesActionV3::Prepare),
+    )?;
+    Ok(acquired.selected)
+}
+
 /// Durable journal phase. `Dispatching` is the fsync-before-send boundary.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -732,6 +857,38 @@ impl SelectedSeriesPhysicalActionV1 for SeriesSelectedHotReportV5 {
 }
 
 impl DecodedSeriesCurrentSourceV1 {
+    fn from_release_v1(input: SeriesCurrentReleaseInputV5<'_>) -> Result<Self> {
+        if input.consume_funding_count == 0 || input.prepare_ticket_rent_lamports == 0 {
+            return Err(refusal(
+                "Series Prepare release omitted funding span or Ticket rent",
+            ));
+        }
+        Ok(Self {
+            template_occurrence_count: input.template_occurrence_count,
+            consume_shadow_certificate_program: input.consume_shadow_certificate_program,
+            prepare_fixed_data_lengths: *input.prepare_profile.fixed_data_lengths,
+            prepare_ticket_rent_lamports: input.prepare_ticket_rent_lamports,
+            prepare_projected_initialize: *input.prepare_requests.projected_initialize,
+            prepare_projected_open: *input.prepare_requests.projected_open,
+            prepare_replay_initialize: *input.prepare_requests.replay_initialize,
+            prepare_escrow_open: *input.prepare_requests.escrow_open,
+            prepare_escrow_lock: *input.prepare_requests.escrow_lock,
+            consume_fixed_data_lengths: *input.consume_observed_data_lengths,
+            consume_lock: *input.consume_requests.lock,
+            consume_core: *input.consume_requests.core,
+            consume_realize: *input.consume_requests.realize,
+            consume_claims: *input.consume_requests.claims,
+            consume_funding_count: input.consume_funding_count,
+            expire_fixed_data_lengths: *input.expire_profile.fixed_data_lengths,
+            expire_refund: *input.expire_requests.refund,
+            expire_close_vault: *input.expire_requests.close_vault,
+            expire_close_replay: *input.expire_requests.close_replay,
+            expire_projected_abort: *input.expire_requests.projected_abort,
+            expire_permit_expiry: input.expire_requests.permit_expiry,
+            expire_core: input.expire_requests.core_expire,
+        })
+    }
+
     fn decode(candidate: &SeriesCurrentSourceCorpusV1) -> Result<Self> {
         let consume_shadow_certificate_program = ContentId::new(parse_hex32_v1(
             &candidate.consume_shadow_certificate_program,

@@ -1,5 +1,7 @@
 import { PublicKey } from '@solana/web3.js';
 
+import { publicFirstAdmissionBindingV1, publicMarketBindingsCohortV1 } from '@/lib/publicMarketBindings';
+
 /** The bounded simulator's public observation, published beside the static app. */
 export const AQUARIUM_STATUS_SCHEMA_V1 = 'dclutch-aquarium-status-v1';
 export const AQUARIUM_STATUS_URL_V1 = '/aquarium-status-v1.json';
@@ -33,7 +35,7 @@ export type AquariumStatusV1 = Readonly<{
       marketId: string;
       address: string | null;
       state: string;
-      joinOpen: false;
+      joinOpen: boolean;
       observedAt: string | null;
       epochsCompleted: number;
       epochsPrecommitted: number;
@@ -104,8 +106,21 @@ function addressOrNull(value: unknown, field: string): string | null {
 const ACTIVITY_COUNT_KEYS = ['found', 'admitted', 'fill', 'resolved', 'deadline_failure', 'redeemed', 'retired', 'census', 'refused', 'unattempted', 'blocked'] as const;
 const STATES = ['preflight', 'running', 'stopping', 'stopped', 'halted', 'stale'] as const;
 
+export type AquariumJoinBindingsV1 = Readonly<{
+  cohort: () => Readonly<{ number: number; manifestSha256: string | null }>;
+  bindingFor: (market: string) => unknown;
+}>;
+
+const PUBLIC_JOIN_BINDINGS_V1: AquariumJoinBindingsV1 = Object.freeze({
+  cohort: publicMarketBindingsCohortV1,
+  bindingFor: publicFirstAdmissionBindingV1,
+});
+
 /** Decode the whole public record or render none of it. */
-export function parseAquariumStatusV1(value: unknown): AquariumStatusV1 {
+export function parseAquariumStatusV1(
+  value: unknown,
+  joinBindings: AquariumJoinBindingsV1 = PUBLIC_JOIN_BINDINGS_V1,
+): AquariumStatusV1 {
   const root = object(value, 'aquarium status');
   exactKeys(root, ['schema', 'cohort', 'state', 'run', 'activity', 'limits', 'artifacts', 'failure'], 'aquarium status');
   if (root.schema !== AQUARIUM_STATUS_SCHEMA_V1) throw new Error('aquarium status has another schema');
@@ -168,12 +183,24 @@ export function parseAquariumStatusV1(value: unknown): AquariumStatusV1 {
       if (addresses.has(address)) throw new Error(`active market ${index} repeats address ${address}`);
       addresses.add(address);
     }
-    if (market.join_open !== false) throw new Error(`active market ${index} must keep public joining closed`);
+    if (typeof market.join_open !== 'boolean') throw new Error(`active market ${index} join_open must be boolean`);
+    if (market.join_open) {
+      if (address === null) throw new Error(`active market ${index} cannot open joining without one market address`);
+      const bindingCohort = joinBindings.cohort();
+      if (bindingCohort.manifestSha256 === null
+          || bindingCohort.number !== count(cohort.number, 'cohort number')
+          || bindingCohort.manifestSha256 !== manifestSha256) {
+        throw new Error(`active market ${index} public join binding belongs to another cohort`);
+      }
+      if (joinBindings.bindingFor(address) === undefined) {
+        throw new Error(`active market ${index} has no checked public first-admission binding`);
+      }
+    }
     return Object.freeze({
       marketId,
       address,
       state: text(market.state, `active market ${index} state`),
-      joinOpen: false as const,
+      joinOpen: market.join_open,
       observedAt: instantOrNull(market.observed_at, `active market ${index} observed_at`),
       epochsCompleted: count(market.epochs_completed, `active market ${index} epochs_completed`),
       epochsPrecommitted: count(market.epochs_precommitted, `active market ${index} epochs_precommitted`),

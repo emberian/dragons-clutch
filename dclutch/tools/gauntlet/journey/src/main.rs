@@ -273,13 +273,15 @@ mod structured_composition_admission;
 #[path = "../../../local-validator/bootstrap/successor/src/structured_market.rs"]
 #[allow(dead_code)]
 mod structured_market;
+#[path = "../../../local-validator/bootstrap/successor/src/structured_native_settlement.rs"]
+mod structured_native_settlement;
 #[path = "../../../local-validator/bootstrap/successor/src/structured_physical_frame.rs"]
 #[allow(dead_code)]
 mod structured_physical_frame;
 #[path = "../../../local-validator/bootstrap/successor/src/structured_representation_campaign.rs"]
 mod structured_representation_campaign;
-#[path = "../../../local-validator/bootstrap/successor/src/structured_native_settlement.rs"]
-mod structured_native_settlement;
+#[path = "../../../local-validator/bootstrap/successor/src/structured_root_close.rs"]
+mod structured_root_close;
 #[path = "../../../local-validator/bootstrap/successor/src/terminal_exterior_pyth.rs"]
 #[allow(dead_code)]
 mod terminal_exterior_pyth;
@@ -423,6 +425,7 @@ fn run() -> Result<()> {
     let _program = arguments.next();
     match arguments.next().as_deref() {
         Some("run") => run_journey(arguments.collect()),
+        Some("continue-held-after-terminal") => run_held_after_terminal(arguments.collect()),
         Some("dealer") => dealer_campaign::execute(parse_journey_request(arguments.collect())?),
         Some("economics") => {
             economics_campaign::execute(parse_journey_request(arguments.collect())?)
@@ -451,6 +454,53 @@ fn run_journey(arguments: Vec<String>) -> Result<()> {
     stdout.write_all(&serde_json::to_vec_pretty(&transcript)?)?;
     stdout.write_all(b"\n")?;
     Ok(())
+}
+
+fn run_held_after_terminal(arguments: Vec<String>) -> Result<()> {
+    let result =
+        journey::continue_held_after_terminal(parse_held_continuation_request(arguments)?)?;
+    stdout_json_value_v1(&result)
+}
+
+fn parse_held_continuation_request(
+    arguments: Vec<String>,
+) -> Result<journey::HeldContinuationRequestV1> {
+    let mut values = std::collections::BTreeMap::new();
+    let mut iterator = arguments.into_iter();
+    while let Some(flag) = iterator.next() {
+        let value = iterator
+            .next()
+            .ok_or_else(|| Error::new(format!("{flag} needs a value")))?;
+        if !matches!(
+            flag.as_str(),
+            "--handoff" | "--direct-finalized" | "--direct-public" | "--work" | "--evidence"
+        ) {
+            return Err(Error::new(format!(
+                "unknown continue-held-after-terminal flag: {flag}"
+            )));
+        }
+        if values.insert(flag.clone(), value).is_some() {
+            return Err(Error::new(format!("{flag} was given twice")));
+        }
+    }
+    let absolute = |flag: &str| -> Result<PathBuf> {
+        let path = PathBuf::from(
+            values
+                .get(flag)
+                .ok_or_else(|| Error::new(format!("{flag} is required")))?,
+        );
+        if !path.is_absolute() {
+            return Err(Error::new(format!("{flag} must be an absolute path")));
+        }
+        Ok(path)
+    };
+    Ok(journey::HeldContinuationRequestV1 {
+        handoff: absolute("--handoff")?,
+        direct_finalized: absolute("--direct-finalized")?,
+        direct_public: absolute("--direct-public")?,
+        work: absolute("--work")?,
+        evidence: absolute("--evidence")?,
+    })
 }
 
 fn parse_journey_request(arguments: Vec<String>) -> Result<journey::JourneyRequestV1> {
@@ -546,7 +596,8 @@ fn usage() {
          --transcript ABSOLUTE_NEW_JSON --work ABSOLUTE_DIR --rpc-port PORT \\\n      \
          --checked-release-gate ABSOLUTE_CHECKED_UPGRADE_GATE_JSON \\\n      \
          --expected-gate-sha256 HEX64 --expected-source-revision HEX40 \\\n      \
-         --expected-source-tree-sha256 HEX64 --seed HEX64 [--holders N]\n\nThe campaign brings up \
+         --expected-source-tree-sha256 HEX64 --seed HEX64 [--holders N]\n\n  \
+         dclutch-journey-campaign continue-held-after-terminal \\\n+         --handoff ABSOLUTE_PRIVATE_JSON --direct-finalized ABSOLUTE_JSON \\\n+         --direct-public ABSOLUTE_JSON --work ABSOLUTE_DIR \\\n+         --evidence ABSOLUTE_NEW_JSON\n\nThe campaign brings up \
          its own checked-mutable loopback substrate from the named checked\nrelease gate \
          (local-mutable-prepare-v1), boots a fresh solana-test-validator over\nthe prepared \
          account directory, administers it through activation, compiles a\nMarket against the LIVE \
@@ -566,6 +617,38 @@ fn usage() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn held_continuation_parser_requires_every_canonical_absolute_input() {
+        let complete = vec![
+            "--handoff".into(),
+            "/tmp/handoff.json".into(),
+            "--direct-finalized".into(),
+            "/tmp/direct-finalized.json".into(),
+            "--direct-public".into(),
+            "/tmp/direct-public.json".into(),
+            "--work".into(),
+            "/tmp/continuation".into(),
+            "--evidence".into(),
+            "/tmp/continuation.json".into(),
+        ];
+        let parsed = super::parse_held_continuation_request(complete.clone())
+            .expect("the exact five-path continuation contract");
+        assert_eq!(parsed.handoff, std::path::Path::new("/tmp/handoff.json"));
+
+        let mut relative = complete;
+        relative[1] = "handoff.json".into();
+        let error = super::parse_held_continuation_request(relative)
+            .expect_err("a relative authority path must refuse");
+        assert!(error.0.contains("--handoff must be an absolute path"));
+
+        let error = super::parse_held_continuation_request(vec![
+            "--handoff".into(),
+            "/tmp/handoff.json".into(),
+        ])
+        .expect_err("an incomplete continuation contract must refuse");
+        assert!(error.0.contains("--direct-finalized is required"));
+    }
+
     #[test]
     fn standalone_demo_market_refuses_to_invent_direct_authority() {
         let error = super::run_demo_market(vec![

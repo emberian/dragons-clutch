@@ -101,6 +101,7 @@ mod structured_composition_admission;
 mod structured_market;
 mod structured_physical_frame;
 mod structured_representation_campaign;
+mod structured_root_close;
 mod terminal_exterior_pyth;
 mod terminal_lifecycle;
 mod terminal_sequence;
@@ -307,6 +308,9 @@ fn run() -> Result<()> {
         }
         Some(command) if command == series_founder::SERIES_FOUNDER_INPUT_COMMAND_V1 => {
             series_founder::run(arguments.collect())
+        }
+        Some(command) if command == series_found_prepare_driver::SERIES_FOUND_PREPARE_COMMAND_V1 => {
+            series_found_prepare_driver::run_series_found_prepare_v1(arguments.collect())
         }
         Some(command) if command == series_found_prepare_driver::SERIES_ROOT_ACTIVATE_COMMAND_V1 => {
             series_found_prepare_driver::run_root_activate_v1(arguments.collect())

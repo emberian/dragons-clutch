@@ -1200,7 +1200,6 @@ fn initialize_replay(
         || rent_account.key != &sysvar::rent::ID
         || payer.key.to_bytes() != request.payer
         || rent_refund.key.to_bytes() != request.rent_refund
-        || rent_refund.key == payer.key
         || rent_refund.key == replay.key
     {
         return Err(CustodySbfError::AccountFrame.into());
@@ -1639,10 +1638,18 @@ fn require_account_count(
             .account(coordinate)
             .map_err(|_| CustodySbfError::AccountFrame)?
             .privileges();
-        if observed.is_signer != expected.signer()
-            || observed.is_writable != expected.writable()
-            || observed.executable != expected.executable()
-        {
+        let payer_alias = operation == OperationV1::InitializeReplay
+            && index == 12
+            && accounts
+                .get(9)
+                .is_some_and(|payer| payer.key == observed.key);
+        if !custody_frame_privileges_match_v1(
+            expected,
+            observed.is_signer,
+            observed.is_writable,
+            observed.executable,
+            payer_alias,
+        ) {
             return Err(CustodySbfError::AccountFrame.into());
         }
     }
@@ -1662,6 +1669,26 @@ fn require_account_count(
         }
     }
     Ok(())
+}
+
+/// Match one observed CPI privilege tuple to the canonical Custody frame.
+///
+/// Solana unions privileges for duplicate keys within one instruction.  The
+/// General order route deliberately names its maker as both the payer and the
+/// immutable rent-refund beneficiary, so InitializeReplay coordinates 9 and
+/// 12 are the same key and both arrive as signers.  That extra signer bit is
+/// accepted only for that exact payer alias; a distinct refund account remains
+/// an exact writable non-signer.
+fn custody_frame_privileges_match_v1(
+    expected: dclutch_custody::CustodyFramePrivilegesV1,
+    signer: bool,
+    writable: bool,
+    executable: bool,
+    initialize_refund_aliases_payer: bool,
+) -> bool {
+    let signer_matches = signer == expected.signer()
+        || (initialize_refund_aliases_payer && signer && !expected.signer());
+    signer_matches && writable == expected.writable() && executable == expected.executable()
 }
 
 fn continuation_roles(operation: OperationV1) -> Option<&'static [ExecutionRoleV1]> {
@@ -2132,6 +2159,7 @@ fn poststate_commitment(projection: PoststateProjection) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
 
     /// THE INVARIANT THE CALLER-AUTHORITY BUMP CARRY RESTS ON.
     ///
@@ -2342,6 +2370,81 @@ mod tests {
         assert_eq!(TRANSFER_ACCOUNT_COUNT_V1, 14);
         assert_eq!(CLOSE_VAULT_ACCOUNT_COUNT_V1, 14);
         assert_eq!(CLOSE_REPLAY_ACCOUNT_COUNT_V1, 10);
+    }
+
+    #[test]
+    fn initialize_replay_accepts_only_the_runtime_signer_union_of_its_payer_alias() {
+        let refund = CustodyFrameSpecV1::new(OperationV1::InitializeReplay)
+            .account(12)
+            .expect("rent-refund coordinate")
+            .privileges();
+        assert!(custody_frame_privileges_match_v1(
+            refund, true, true, false, true,
+        ));
+        assert!(
+            !custody_frame_privileges_match_v1(refund, true, true, false, false),
+            "a distinct refund account may not smuggle an unrelated signer"
+        );
+        assert!(
+            !custody_frame_privileges_match_v1(refund, true, false, false, true),
+            "the exact writable privilege remains required for the payer alias"
+        );
+        assert!(
+            !custody_frame_privileges_match_v1(refund, true, true, true, true),
+            "the payer alias cannot turn the refund wallet into a program"
+        );
+        assert_initialize_replay_frame(true, true, Ok(()));
+        assert_initialize_replay_frame(false, true, Err(CustodySbfError::AccountFrame.into()));
+    }
+
+    fn assert_initialize_replay_frame(
+        refund_aliases_payer: bool,
+        refund_signer: bool,
+        expected: ProgramResult,
+    ) {
+        let spec = CustodyFrameSpecV1::new(OperationV1::InitializeReplay);
+        let count = usize::from(spec.account_count());
+        let mut keys = (0..count)
+            .map(|index| {
+                Pubkey::new_from_array([u8::try_from(index + 1).expect("small index"); 32])
+            })
+            .collect::<Vec<_>>();
+        if refund_aliases_payer {
+            keys[12] = keys[9];
+        }
+        let owners = vec![system_program::ID; count];
+        let mut lamports = vec![0_u64; count];
+        let mut data = vec![Vec::<u8>::new(); count];
+        let accounts = keys
+            .iter()
+            .zip(owners.iter())
+            .zip(lamports.iter_mut())
+            .zip(data.iter_mut())
+            .enumerate()
+            .map(|(index, (((key, owner), lamports), data))| {
+                let privileges = spec
+                    .account(u16::try_from(index).expect("small frame"))
+                    .expect("canonical coordinate")
+                    .privileges();
+                AccountInfo::new(
+                    key,
+                    if index == 12 {
+                        refund_signer
+                    } else {
+                        privileges.signer()
+                    },
+                    privileges.writable(),
+                    lamports,
+                    data.as_mut_slice(),
+                    owner,
+                    privileges.executable(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            require_account_count(&accounts, OperationV1::InitializeReplay, false),
+            expected
+        );
     }
 
     fn premarket_series_initialize_request() -> CustodyRequestV1 {

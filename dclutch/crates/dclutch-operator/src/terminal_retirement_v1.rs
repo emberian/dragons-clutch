@@ -408,6 +408,42 @@ pub struct DirectNativeCloseSnapshotV1 {
     pub rent_credit: ObservedAccount,
 }
 
+/// Shared finalized native-close graph for the selected Trading root and its
+/// Resolution dependency. This measured profile has exactly two physical
+/// ledgers; wider partitions require extending the native layout projection.
+pub type NativeCapabilityCloseSnapshotV1 = DirectNativeCloseSnapshotV1;
+
+#[derive(Clone, Copy)]
+enum NativeCloseFamilyV1 {
+    Direct,
+    Structured,
+}
+
+impl NativeCloseFamilyV1 {
+    fn request(self) -> [u8; 16] {
+        match self {
+            Self::Direct => direct_native_close_request_v1(),
+            Self::Structured => crate::structured_root_close_v1::structured_root_close_request_v1(),
+        }
+    }
+    fn schema(self) -> [u8; 32] {
+        match self {
+            Self::Direct => {
+                dclutch_trading::native_close_bundle_v1::DIRECT_NATIVE_CLOSE_REQUEST_SCHEMA_ID_V1
+            }
+            Self::Structured => {
+                crate::structured_root_close_v1::structured_root_close_request_schema_v1()
+            }
+        }
+    }
+    fn selector(self) -> u32 {
+        match self {
+            Self::Direct => DIRECT_NATIVE_CLOSE_SELECTOR_V1,
+            Self::Structured => crate::structured_root_close_v1::STRUCTURED_ROOT_CLOSE_SELECTOR_V1,
+        }
+    }
+}
+
 /// Request-bound caller coordinate discovered before its vacant account is fetched.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TerminalCallerPreflightV1 {
@@ -555,6 +591,8 @@ pub enum TerminalRetirementErrorV1 {
     Registry(dclutch_registry::Error),
     /// `dclutch_trading` refused; the cause is its own.
     Successor(dclutch_trading::successor::SuccessorError),
+    /// Canonical Structured root encoding or outstanding obligations refused.
+    StructuredRoot(dclutch_trading::structured_root_v2::StructuredRootErrorV2),
     /// `dclutch_market::capability_program` refused; the cause is its own.
     ProgramSet(dclutch_market::capability_program::set_v2::ProgramSetErrorV2),
     /// `dclutch_vm::account_profile` refused; the cause is its own.
@@ -786,6 +824,22 @@ pub fn project_retirement_replay_handoff_coordinate_closure_v1(
 pub fn preflight_direct_native_close_caller_v1(
     snapshot: &DirectNativeCloseSnapshotV1,
 ) -> Result<TerminalCallerPreflightV1, TerminalRetirementErrorV1> {
+    preflight_native_close_caller_v1(snapshot, NativeCloseFamilyV1::Direct)
+}
+
+/// Discover the request-bound vacant caller before fetching it.
+/// Uses the same finalized record, deployment, funding and rent authentication
+/// as Direct; the Structured native root owner supplies its closure predicate.
+pub fn preflight_structured_root_close_caller_v1(
+    snapshot: &NativeCapabilityCloseSnapshotV1,
+) -> Result<TerminalCallerPreflightV1, TerminalRetirementErrorV1> {
+    preflight_native_close_caller_v1(snapshot, NativeCloseFamilyV1::Structured)
+}
+
+fn preflight_native_close_caller_v1(
+    snapshot: &DirectNativeCloseSnapshotV1,
+    family: NativeCloseFamilyV1,
+) -> Result<TerminalCallerPreflightV1, TerminalRetirementErrorV1> {
     if snapshot.caller_authority.is_some() {
         return Err(TerminalRetirementErrorV1::Frame);
     }
@@ -824,7 +878,7 @@ pub fn preflight_direct_native_close_caller_v1(
     .map_err(TerminalRetirementErrorV1::MarketCore)?;
     let mut role_request = wire_selection.to_bytes().to_vec();
     role_request.extend_from_slice(&funding_header.encode());
-    role_request.extend_from_slice(&direct_native_close_request_v1());
+    role_request.extend_from_slice(&family.request());
     let request_digest = hash(&role_request).to_bytes();
     let seeds = CallerAuthoritySeedsV1::from_bytes(
         market.identity.selected_release_set.to_bytes(),
@@ -838,7 +892,7 @@ pub fn preflight_direct_native_close_caller_v1(
         Pubkey::find_program_address(&seeds.as_slices(), &snapshot.core_program.key).0;
     let mut complete = snapshot.clone();
     complete.caller_authority = Some(vacant_caller(observation, caller_authority));
-    let report = build_direct_native_close_v1(&complete)?;
+    let report = build_native_close_v1(&complete, family)?;
     if report.observation != observation
         || report.role_request_digest != request_digest
         || report.caller_authority != caller_authority
@@ -856,9 +910,25 @@ pub fn preflight_direct_native_close_caller_v1(
 pub fn build_direct_native_close_v1(
     snapshot: &DirectNativeCloseSnapshotV1,
 ) -> Result<DirectNativeCloseReportV1, TerminalRetirementErrorV1> {
+    build_native_close_v1(snapshot, NativeCloseFamilyV1::Direct)
+}
+
+/// Build the checked Structured zero-obligation native root close.
+/// Uses the same finalized record, deployment, funding and rent authentication
+/// as Direct; the Structured native root owner supplies its closure predicate.
+pub fn build_structured_root_close_v1(
+    snapshot: &NativeCapabilityCloseSnapshotV1,
+) -> Result<DirectNativeCloseReportV1, TerminalRetirementErrorV1> {
+    build_native_close_v1(snapshot, NativeCloseFamilyV1::Structured)
+}
+
+fn build_native_close_v1(
+    snapshot: &DirectNativeCloseSnapshotV1,
+    family: NativeCloseFamilyV1,
+) -> Result<DirectNativeCloseReportV1, TerminalRetirementErrorV1> {
     let observation = close_observation(snapshot)?;
     require_live_funding_ledgers_v1(snapshot)?;
-    let market = authenticate_close_market(snapshot)?;
+    let market = authenticate_close_market(snapshot, family)?;
     authenticate_close_releases(snapshot, market)?;
     // The Rent sysvar is still AUTHENTICATED here -- key, owner, executable bit,
     // exact width, canonical body -- even though nothing prices a floor against
@@ -893,8 +963,8 @@ pub fn build_direct_native_close_v1(
     }
     let manifest = CapabilityManifestV1::decode(&snapshot.manifest.data)
         .map_err(TerminalRetirementErrorV1::Capability)?;
-    let (root_header, root_state) = authenticate_close_root(snapshot, market, manifest)?;
-    authenticate_close_records(snapshot, root_header, manifest)?;
+    let root_header = authenticate_close_root(snapshot, market, manifest, family)?;
+    authenticate_close_records(snapshot, root_header, manifest, family)?;
     let selection = root_header.selection();
     let entry_index = selection.entry_index();
     let entry = manifest
@@ -937,7 +1007,7 @@ pub fn build_direct_native_close_v1(
     let funding_header =
         CapabilityFundingHeaderV2::new(physical_count, logical_count, required_union)
             .map_err(TerminalRetirementErrorV1::MarketCore)?;
-    let family_request = direct_native_close_request_v1();
+    let family_request = family.request();
     let mut role_request = wire_selection.to_bytes().to_vec();
     role_request.extend_from_slice(&funding_header.encode());
     role_request.extend_from_slice(&family_request);
@@ -1106,7 +1176,7 @@ pub fn build_direct_native_close_v1(
         .lamports
         .checked_add(rent_credit_delta_lamports)
         .ok_or(TerminalRetirementErrorV1::Projection)?;
-    let _ = (entry, root_state);
+    let _ = entry;
     Ok(DirectNativeCloseReportV1 {
         instruction: Instruction {
             program_id: snapshot.core_program.key,
@@ -1117,12 +1187,12 @@ pub fn build_direct_native_close_v1(
         observation,
         caller_authority,
         role_request_digest,
-        selector: DIRECT_NATIVE_CLOSE_SELECTOR_V1,
+        selector: family.selector(),
         expected_market_digest: hash(&expected_market_data).to_bytes(),
         expected_market_data,
         expected_market_owner: snapshot.market.owner,
         expected_market_lamports: snapshot.market.lamports,
-        expected_outstanding_capabilities: 0,
+        expected_outstanding_capabilities: post_market.outstanding_capabilities,
         closed_root: snapshot.root.key,
         root_refund_lamports: snapshot.root.lamports,
         expected_root_owner: system_program::ID,
@@ -1157,6 +1227,7 @@ fn authenticate_close_system(
 
 fn authenticate_close_market(
     snapshot: &DirectNativeCloseSnapshotV1,
+    family: NativeCloseFamilyV1,
 ) -> Result<CoreState, TerminalRetirementErrorV1> {
     let state =
         CoreState::decode(&snapshot.market.data).map_err(TerminalRetirementErrorV1::MarketCore)?;
@@ -1171,7 +1242,10 @@ fn authenticate_close_market(
         || snapshot.market.key.to_bytes() != state.identity.market_id.to_bytes()
         || state.identity.registry_program.to_bytes() != snapshot.registry_program.key.to_bytes()
         || state.phase != Phase::Retiring
-        || state.outstanding_capabilities != 1
+        || match family {
+            NativeCloseFamilyV1::Direct => state.outstanding_capabilities != 1,
+            NativeCloseFamilyV1::Structured => state.outstanding_capabilities == 0,
+        }
         || state.rent_beneficiary.to_bytes() != snapshot.rent_credit.key.to_bytes()
     {
         return Err(TerminalRetirementErrorV1::Market);
@@ -1234,7 +1308,8 @@ fn authenticate_close_root(
     snapshot: &DirectNativeCloseSnapshotV1,
     market: CoreState,
     manifest: CapabilityManifestV1<'_>,
-) -> Result<(CapabilityRootHeaderV1, DirectRootStateV1), TerminalRetirementErrorV1> {
+    family: NativeCloseFamilyV1,
+) -> Result<CapabilityRootHeaderV1, TerminalRetirementErrorV1> {
     let (header_bytes, state_bytes) = snapshot
         .root
         .data
@@ -1242,11 +1317,28 @@ fn authenticate_close_root(
         .ok_or(TerminalRetirementErrorV1::Record)?;
     let header = CapabilityRootHeaderV1::decode(header_bytes)
         .map_err(TerminalRetirementErrorV1::CapabilityProgram)?;
-    let state =
-        DirectRootStateV1::decode(state_bytes).map_err(TerminalRetirementErrorV1::Successor)?;
-    state
-        .require_closable()
-        .map_err(TerminalRetirementErrorV1::Successor)?;
+    match family {
+        NativeCloseFamilyV1::Direct => {
+            let state = DirectRootStateV1::decode(state_bytes)
+                .map_err(TerminalRetirementErrorV1::Successor)?;
+            state
+                .require_closable()
+                .map_err(TerminalRetirementErrorV1::Successor)?;
+            if state.phase() != DirectRootPhaseV1::Retiring || state.open_maker_root_count() != 0 {
+                return Err(TerminalRetirementErrorV1::Record);
+            }
+        }
+        NativeCloseFamilyV1::Structured => {
+            dclutch_trading::structured_root_v2::StructuredCapabilityRootV2::decode(state_bytes)
+                .and_then(|root| root.require_closeable())
+                .map_err(TerminalRetirementErrorV1::StructuredRoot)?;
+            if header.selection().kind().to_bytes()
+                != dclutch_claims::structured_kernel::STRUCTURED_CAPABILITY_KIND_ID_V2
+            {
+                return Err(TerminalRetirementErrorV1::Record);
+            }
+        }
+    }
     let selection = header.selection();
     let entry = manifest
         .entry(selection.entry_index())
@@ -1263,18 +1355,17 @@ fn authenticate_close_root(
         || selection.kind() != entry.kind_id()
         || selection.capability_release() != entry.release_id()
         || selection.config() != entry.config_id()
-        || state.phase() != DirectRootPhaseV1::Retiring
-        || state.open_maker_root_count() != 0
     {
         return Err(TerminalRetirementErrorV1::Record);
     }
-    Ok((header, state))
+    Ok(header)
 }
 
 fn authenticate_close_records(
     snapshot: &DirectNativeCloseSnapshotV1,
     header: CapabilityRootHeaderV1,
     manifest: CapabilityManifestV1<'_>,
+    family: NativeCloseFamilyV1,
 ) -> Result<(), TerminalRetirementErrorV1> {
     let selection = header.selection();
     authenticate_record(
@@ -1291,7 +1382,7 @@ fn authenticate_close_records(
     )
     .map_err(TerminalRetirementErrorV1::ProgramSet)?;
     let selected = set
-        .select_descriptor(&direct_native_close_request_v1())
+        .select_descriptor(&family.request())
         .map_err(TerminalRetirementErrorV1::ProgramSet)?;
     authenticate_record(
         snapshot,
@@ -1339,8 +1430,7 @@ fn authenticate_close_records(
         .map_err(TerminalRetirementErrorV1::EffectV2)?;
     if descriptor.kind() != entry.kind_id()
         || descriptor.config_schema().to_bytes() == [0; 32]
-        || descriptor.request_schema().to_bytes()
-            != dclutch_trading::native_close_bundle_v1::DIRECT_NATIVE_CLOSE_REQUEST_SCHEMA_ID_V1
+        || descriptor.request_schema().to_bytes() != family.schema()
         || descriptor.root_schema() != entry.child_schema_id()
         || descriptor.capacity_profile() != entry.capacity_profile_id()
         || descriptor.derivation_policy() != entry.child_derivation_id()

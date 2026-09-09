@@ -403,28 +403,28 @@ The 23 campaigns contributing binding claims:
 
 | code | refusal | meaning | checked firing | binding claim | provenance |
 | --- | --- | --- | --- | --- | --- |
-| `0x1000` | `RegistryError::Instruction` | Instruction bytes were not the one canonical Registry wire. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:84` |
-| `0x1001` | `RegistryError::AccountFrame` | Account count, order, privilege, or aliasing was invalid. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:86` |
-| `0x1002` | `RegistryError::FinalizedRecord` | A finalized record owner, digest, PDA, rent, or vacancy proof refused. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:88` |
-| `0x1003` | `RegistryError::Deployment` | Loader Program, ProgramData, linkage, slot, ELF, or authority refused. | -- | tier1; tier4-series-occurrence-programtest | `programs/dclutch-registry-sbf/src/lib.rs:90` |
-| `0x1004` | `RegistryError::Release` | Release-set or artifact semantic admission refused. | -- | tier1 | `programs/dclutch-registry-sbf/src/lib.rs:92` |
-| `0x1005` | `RegistryError::ActivationCache` | The activation cache owner, PDA, bytes, or lifecycle refused. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:94` |
-| `0x1006` | `RegistryError::CreateCpi` | System account creation failed or produced the wrong account. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:96` |
-| `0x1007` | `RegistryError::Borrow` | Account data could not be borrowed. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:98` |
-| `0x1008` | `RegistryError::Arithmetic` | Checked width or lamport arithmetic refused. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:100` |
-| `0x1009` | `RegistryError::Sysvar` | Clock-independent Rent or native-program authentication refused. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:102` |
-| `0x100A` | `RegistryError::Batch` | A batched request or receipt failed its canonical fixed-width contract. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:104` |
-| `0x100B` | `RegistryError::Continuation` | Registry-authenticated continuation header, signer, or child refused. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:106` |
-| `0x100C` | `RegistryError::Record` | Immutable-record publication wire, frame, transition, or account refused. | -- | tier1 | `programs/dclutch-registry-sbf/src/lib.rs:108` |
-| `0x100D` | `RegistryError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:116` |
-| `0x100E` | `RegistryError::ReleaseLineageAlreadyDeclared` | This release set already declared a successor, and lineage never forks. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:122` |
-| `0x100F` | `RegistryError::ReleaseLineageRoleIdentityMoved` | A declared hop changed some role's program id. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:128` |
-| `0x1010` | `RegistryError::ReleaseLineageSelfSuccession` | A declaration named one release set as its own successor. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:130` |
-| `0x1011` | `RegistryError::ReleaseLineageAuthorityMissing` | A moved role's consenting upgrade authority did not sign, or cannot. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:138` |
-| `0x1012` | `RegistryError::ReleaseLineageNotForward` | A moved role's successor deployment slot was not strictly later. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:144` |
-| `0x1013` | `RegistryError::ArtifactReleaseDeploymentFrame` | An `ArtifactRelease` was finalized without its deployment in the frame. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:158` |
-| `0x1014` | `RegistryError::ArtifactReleaseNotDeployed` | An `ArtifactRelease` did not describe the deployment at its own address. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:172` |
-| `0x1015` | `RegistryError::ArtifactReleaseElfMismatch` | A deployment is at that address and it is not the release's bytes. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:188` |
+| `0x1000` | `RegistryError::Instruction` | Instruction bytes were not the one canonical Registry wire. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:80` |
+| `0x1001` | `RegistryError::AccountFrame` | Account count, order, privilege, or aliasing was invalid. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:82` |
+| `0x1002` | `RegistryError::FinalizedRecord` | A finalized record owner, digest, PDA, rent, or vacancy proof refused. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:84` |
+| `0x1003` | `RegistryError::Deployment` | Loader Program, ProgramData, linkage, slot, ELF, or authority refused. | -- | tier1; tier4-series-occurrence-programtest | `programs/dclutch-registry-sbf/src/lib.rs:86` |
+| `0x1004` | `RegistryError::Release` | Release-set or artifact semantic admission refused. | -- | tier1 | `programs/dclutch-registry-sbf/src/lib.rs:88` |
+| `0x1005` | `RegistryError::ActivationCache` | The activation cache owner, PDA, bytes, or lifecycle refused. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:90` |
+| `0x1006` | `RegistryError::CreateCpi` | System account creation failed or produced the wrong account. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:92` |
+| `0x1007` | `RegistryError::Borrow` | Account data could not be borrowed. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:94` |
+| `0x1008` | `RegistryError::Arithmetic` | Checked width or lamport arithmetic refused. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:96` |
+| `0x1009` | `RegistryError::Sysvar` | Clock-independent Rent or native-program authentication refused. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:98` |
+| `0x100A` | `RegistryError::Batch` | A batched request or receipt failed its canonical fixed-width contract. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:100` |
+| `0x100B` | `RegistryError::Continuation` | Registry-authenticated continuation header, signer, or child refused. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:102` |
+| `0x100C` | `RegistryError::Record` | Immutable-record publication wire, frame, transition, or account refused. | -- | tier1 | `programs/dclutch-registry-sbf/src/lib.rs:104` |
+| `0x100D` | `RegistryError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:112` |
+| `0x100E` | `RegistryError::ReleaseLineageAlreadyDeclared` | This release set already declared a successor, and lineage never forks. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:118` |
+| `0x100F` | `RegistryError::ReleaseLineageRoleIdentityMoved` | A declared hop changed some role's program id. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:124` |
+| `0x1010` | `RegistryError::ReleaseLineageSelfSuccession` | A declaration named one release set as its own successor. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:126` |
+| `0x1011` | `RegistryError::ReleaseLineageAuthorityMissing` | A moved role's consenting upgrade authority did not sign, or cannot. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:134` |
+| `0x1012` | `RegistryError::ReleaseLineageNotForward` | A moved role's successor deployment slot was not strictly later. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:140` |
+| `0x1013` | `RegistryError::ArtifactReleaseDeploymentFrame` | An `ArtifactRelease` was finalized without its deployment in the frame. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:154` |
+| `0x1014` | `RegistryError::ArtifactReleaseNotDeployed` | An `ArtifactRelease` did not describe the deployment at its own address. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:168` |
+| `0x1015` | `RegistryError::ArtifactReleaseElfMismatch` | A deployment is at that address and it is not the release's bytes. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:184` |
 
 ## rent
 

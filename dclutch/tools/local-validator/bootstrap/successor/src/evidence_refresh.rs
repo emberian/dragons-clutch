@@ -58,7 +58,7 @@ use crate::{
     direct_trade_producer::resolved_record_v1,
     model::{AccountEvidence, MarketRunInput, SuccessorPlan},
     plan::{hex, hex32, pubkey},
-    rpc::{Rpc, WritePolicyV1, account_evidence, parse_json_without_duplicate_keys_v1},
+    rpc::{Rpc, RpcAccount, WritePolicyV1, account_evidence, parse_json_without_duplicate_keys_v1},
 };
 
 pub(crate) const EVIDENCE_REFRESH_SCHEMA_V1: &str = "dclutch-successor-evidence-refresh-v1";
@@ -393,6 +393,32 @@ pub(crate) fn hex_digest_v1(bytes: &[u8]) -> String {
         .collect()
 }
 
+/// Read every remaining declared mutable row through the same live-account
+/// boundary. Classification and emission cannot silently diverge when a lawful
+/// transition changes a controller ledger after founding.
+fn observe_advanceable_rows_v1(
+    founding: &BTreeMap<String, campaign::CampaignAccountEvidenceV1>,
+    accounts: &mut BTreeMap<String, AccountEvidence>,
+    mut read: impl FnMut(Pubkey, &str) -> Result<RpcAccount>,
+) -> Result<Option<Vec<u8>>> {
+    let mut claims_aggregate_data = None;
+    for label in ADVANCEABLE_FOUNDING_LABELS_V1 {
+        if accounts.contains_key(label) {
+            continue;
+        }
+        let Some(founding_row) = founding.get(label) else {
+            continue;
+        };
+        let address = pubkey(&founding_row.address)?;
+        let account = read(address, label)?;
+        if label == "claims_aggregate" {
+            claims_aggregate_data = Some(account.data.clone());
+        }
+        accounts.insert(label.into(), account_evidence(address, &account));
+    }
+    Ok(claims_aggregate_data)
+}
+
 // ------------------------------------------------------------------ emitter
 
 #[derive(Debug)]
@@ -652,18 +678,10 @@ fn run(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<()> {
         "direct_trading_funding_ledger".into(),
         account_evidence(ledger, &ledger_account),
     );
-    let mut claims_aggregate_data = None;
-    for label in ["claims_admission", "claims_aggregate", "founder_position"] {
-        let Some(founding_row) = evidence.accounts.get(label) else {
-            continue;
-        };
-        let address = pubkey(&founding_row.address)?;
-        let account = rpc.required_account(address, label)?;
-        if label == "claims_aggregate" {
-            claims_aggregate_data = Some(account.data.clone());
-        }
-        accounts.insert(label.into(), account_evidence(address, &account));
-    }
+    let claims_aggregate_data =
+        observe_advanceable_rows_v1(&evidence.accounts, &mut accounts, |address, label| {
+            rpc.required_account(address, label)
+        })?;
     // The custody context, read from the chain's own record of it. The Claims
     // aggregate is the authority here: `custody_context` is the scalar Claims
     // itself persisted at admission, and it is what the Hoard vault and every
@@ -1188,6 +1206,61 @@ mod tests {
             ADVANCEABLE_FOUNDING_LABELS_V1.contains(&label),
             "{label} must be allowed to differ from the founding evidence"
         );
+    }
+
+    #[test]
+    fn refresh_emitter_reads_the_resolution_ledger_changed_by_recovery() {
+        let mut founding = founding_map();
+        founding.insert(
+            "resolution_funding_ledger".into(),
+            row(ROOT, &"44".repeat(32)),
+        );
+        let founding: BTreeMap<String, campaign::CampaignAccountEvidenceV1> = founding
+            .into_iter()
+            .map(|(label, row)| {
+                (
+                    label,
+                    serde_json::from_value(serde_json::to_value(row).unwrap()).unwrap(),
+                )
+            })
+            .collect();
+        let mut emitted = BTreeMap::new();
+        let mut reads = Vec::new();
+        observe_advanceable_rows_v1(&founding, &mut emitted, |address, label| {
+            reads.push(label.to_owned());
+            Ok(RpcAccount {
+                owner: address,
+                lamports: 999,
+                executable: false,
+                rent_epoch: 0,
+                data: label.as_bytes().to_vec(),
+            })
+        })
+        .expect("read current mutable rows");
+        assert_eq!(reads.len(), ADVANCEABLE_FOUNDING_LABELS_V1.len());
+        let ledger = emitted
+            .get("resolution_funding_ledger")
+            .expect("emit the live recovery ledger");
+        assert_eq!(ledger.lamports, 999);
+        assert_eq!(
+            ledger.data_sha256,
+            hex_digest_v1(b"resolution_funding_ledger")
+        );
+        assert_ne!(
+            ledger.data_sha256,
+            founding["resolution_funding_ledger"].data_sha256
+        );
+        assert!(
+            IMMUTABLE_FOUNDING_RECORD_LABELS_V1
+                .iter()
+                .all(|label| !emitted.contains_key(*label))
+        );
+
+        let error = observe_advanceable_rows_v1(&founding, &mut BTreeMap::new(), |_, label| {
+            Err(Error::new(format!("missing finalized {label}")))
+        })
+        .expect_err("failed live read cannot reuse founding bytes");
+        assert_eq!(error.to_string(), "missing finalized founding_market");
     }
 
     /// No label may be both immutable and advanceable.

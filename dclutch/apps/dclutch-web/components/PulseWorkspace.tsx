@@ -114,10 +114,11 @@ function aquariumStats(status: AquariumStatusV1 | null): ReadonlyArray<NumberStr
     Object.freeze({ label: 'Synthetic fills observed', value: null, detail: 'not published' }),
     Object.freeze({ label: 'Public joining', value: null, detail: 'not published' }),
   ]);
+  const openMarkets = status.activity.activeMarkets.filter((market) => market.joinOpen).length;
   return Object.freeze([
     Object.freeze({ label: 'Active markets observed', value: String(status.activity.activeMarkets.length), detail: `bounded by ${status.limits.maxActiveMarkets} in this observation` }),
     Object.freeze({ label: 'Synthetic fills observed', value: String(status.activity.counts.fill), detail: 'reported by the aquarium, not an exchange volume claim' }),
-    Object.freeze({ label: 'Public joining', value: 'closed', detail: status.activity.joinNote }),
+    Object.freeze({ label: 'Public joining', value: openMarkets > 0 ? 'open' : 'closed', detail: status.activity.joinNote }),
   ]);
 }
 
@@ -581,11 +582,13 @@ export default function PulseWorkspace({ preloaded, preloadedSeries, preloadedAq
               <div className="market-card-top"><span className="provenance-chip">synthetic observation</span><span className="phase-chip">{market.state}</span></div>
               <h3>{market.address === null ? market.marketId : <Anchor href={marketDetailHrefV1(market.address)}>{market.marketId}</Anchor>}</h3>
               <dl className="market-card-facts">
-                <div><dt>Public joining</dt><dd>closed</dd></div>
+                <div><dt>Public joining</dt><dd>{market.joinOpen ? 'open' : 'closed'}</dd></div>
                 <div><dt>Epochs completed</dt><dd>{market.epochsCompleted}</dd></div>
                 <div><dt>Epochs precommitted</dt><dd>{market.epochsPrecommitted}</dd></div>
                 <div><dt>Observed at</dt><dd>{market.observedAt ?? 'not recorded'}</dd></div>
               </dl>
+              {market.joinOpen && market.address !== null
+                && <div className="direct-actions"><Anchor className="secondary-action" href={`${marketDetailHrefV1(market.address)}#join`}>Join this market →</Anchor></div>}
             </article>)}</div>}
       </>}
     </section>

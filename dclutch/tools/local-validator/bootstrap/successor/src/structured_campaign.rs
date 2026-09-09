@@ -54,7 +54,7 @@ use dclutch_market::{
     realm::REALM_SCHEMA_RELEASE_ID_V1,
 };
 use dclutch_operator::structured_activation_bundle_v1::{
-    STRUCTURED_CAPABILITY_ROOT_TAIL_V1, structured_activation_request_v1,
+    STRUCTURED_CAPABILITY_ROOT_TAIL_V2, structured_activation_request_v1,
 };
 use dclutch_operator::structured_selected_release_v1::{
     STRUCTURED_SELECTED_PUBLICATION_BYTES_V1, STRUCTURED_SELECTED_PUBLICATION_MAGIC_V1,
@@ -314,6 +314,16 @@ pub(crate) trait StructuredTerminalDriverV1 {
         market: Pubkey,
         transactions: &mut Vec<crate::model::TransactionEvidence>,
     ) -> Result<StructuredTerminalAccountsV1>;
+
+    /// Finish the authenticated provider lifecycle while Core is still Terminal.
+    /// Its reclaimed accounts cannot be recovered after moving Core to Retiring.
+    fn finish_source_before_retirement(
+        &mut self,
+        rpc: &mut Rpc,
+        payer: &Keypair,
+        market: Pubkey,
+        transactions: &mut Vec<crate::model::TransactionEvidence>,
+    ) -> Result<serde_json::Value>;
 }
 
 pub(crate) fn run_owned_loopback_v1(arguments: Vec<String>) -> Result<()> {
@@ -365,7 +375,7 @@ pub(crate) fn run_owned_loopback_with_terminal_v1(
                     == "Structured activation finalized Market bytes differ from the sealed founding report" =>
             {
                 // A selector-255 root changes Core's mutable Market bytes.  This
-                // narrow continuation is still bound to the sealed aggregate and
+                // narrow continuation authenticates the canonical live aggregate and
                 // later requires the exact derived active root before any receipt
                 // instruction can be constructed.
                 resume_after_structured_root_observation_v1(&mut rpc, &evidence, &plan, claims)?
@@ -547,6 +557,7 @@ pub(crate) fn run_owned_loopback_with_terminal_v1(
     // generic executor owns the Core/Trading frame and verifies the ledger
     // transition; this family only authenticates its selector-255 artifacts.
     let root_activation = if let Some(published) = published.as_ref() {
+        write_structured_progress_v1(&arguments, "publication-finalized", &transactions)?;
         let payer = payer
             .as_ref()
             .ok_or_else(|| Error::new("Structured campaign omitted payer"))?;
@@ -563,6 +574,9 @@ pub(crate) fn run_owned_loopback_with_terminal_v1(
     } else {
         None
     };
+    if root_activation.is_some() {
+        write_structured_progress_v1(&arguments, "root-activated", &transactions)?;
+    }
     let receipt_activation = if let (Some(published), Some(root_activation), Some(payer)) =
         (published.as_ref(), root_activation.as_ref(), payer.as_ref())
     {
@@ -612,8 +626,9 @@ pub(crate) fn run_owned_loopback_with_terminal_v1(
 
 /// Reacquire the only mutable founding fact after selector-255 activation.
 /// The caller reaches this path only after the strict sealed-Market digest
-/// refusal.  The report-bound Claims aggregate remains byte-identical; the
-/// root verifier below must subsequently prove the exact expected active root.
+/// refusal. Claims balances and revision may have advanced through accepted
+/// actions; canonical PDA and immutable Core joins authenticate that aggregate.
+/// The root verifier below then proves the exact expected active root.
 fn resume_after_structured_root_observation_v1(
     rpc: &mut Rpc,
     evidence: &crate::campaign::CampaignTerminalEvidenceV1,
@@ -643,14 +658,27 @@ fn resume_after_structured_root_observation_v1(
         .ok_or_else(|| Error::new("Structured resume Claims aggregate is absent"))?;
     let state = CoreState::decode(&market_account.data)
         .map_err(|error| Error::new(format!("Structured resume Core Market: {error:?}")))?;
+    let aggregate_view = LiabilityBasisMarketViewV2::decode(&aggregate_account.data)
+        .map_err(|error| Error::new(format!("Structured resumed Claims aggregate: {error:?}")))?;
+    let aggregate_seeds =
+        dclutch_claims::liability_basis_state_v2::LiabilityBasisMarketSeedsV2::new(
+            market.to_bytes(),
+        )
+        .map_err(|error| Error::new(format!("Structured resumed aggregate seeds: {error:?}")))?;
     if market_account.owner != pubkey(&plan.core.program_id)?
         || state.phase != Phase::Open
         || state.identity.market_id.to_bytes() != market.to_bytes()
         || aggregate_account.owner != claims
-        || sha256_hex(&aggregate_account.data) != aggregate_row.data_sha256.to_ascii_lowercase()
+        || aggregate != Pubkey::find_program_address(&aggregate_seeds.as_slices(), &claims).0
+        || aggregate_view.logical_market != market.to_bytes()
+        || aggregate_view.release_set != state.identity.selected_release_set.to_bytes()
+        || aggregate_view.registry_program != state.identity.registry_program.to_bytes()
+        || aggregate_view.realm_id != state.identity.realm_id.to_bytes()
+        || aggregate_view.generation != state.identity.generation
+        || aggregate_view.custody_context != crate::plan::hex32(&evidence.founding_custody_context)?
     {
         return Err(Error::new(
-            "Structured resume mutable Market or sealed Claims aggregate differs",
+            "Structured resume mutable Market or canonical Claims aggregate differs",
         ));
     }
     Ok((slot, market))
@@ -889,10 +917,10 @@ fn activate_structured_root_v1(
             .data
             .get(dclutch_market::capability_program::CAPABILITY_ROOT_HEADER_BYTES_V1..)
             .ok_or_else(|| Error::new("Structured resumed root omitted tail"))?;
-        if existing_root.owner != trading
-            || header != expected_header
-            || tail != STRUCTURED_CAPABILITY_ROOT_TAIL_V1
-        {
+        let structured_root =
+            dclutch_trading::structured_root_v2::StructuredCapabilityRootV2::decode(tail)
+                .map_err(|error| Error::new(format!("Structured resumed root state: {error:?}")))?;
+        if existing_root.owner != trading || header != expected_header {
             return Err(Error::new(
                 "Structured resumed root differs from canonical selector-255 activation",
             ));
@@ -902,6 +930,7 @@ fn activate_structured_root_v1(
             "slot": facts_slot,
             "activation": serde_json::Value::Null,
             "resumed": true,
+            "outstandingResourceGroups": structured_root.outstanding(),
         }));
     }
     let activation_request = structured_activation_request_v1();
@@ -948,7 +977,7 @@ fn activate_structured_root_v1(
         .data
         .get(dclutch_market::capability_program::CAPABILITY_ROOT_HEADER_BYTES_V1..)
         .ok_or_else(|| Error::new("Structured activated root omitted tail"))?;
-    if tail != STRUCTURED_CAPABILITY_ROOT_TAIL_V1 {
+    if tail != STRUCTURED_CAPABILITY_ROOT_TAIL_V2 {
         return Err(Error::new(
             "Structured activated root tail differs from selector-255 artifact",
         ));
@@ -1279,10 +1308,13 @@ fn structured_receipt_profile_projection_v1(
                     "Structured receipt diagnostic rule {coordinate}: {error:?}"
                 ))
             })?;
-        let observation = if matches!(
-            rule.prestate(),
-            AccountPrestateV2::AdapterAuthenticatedVariableData
-        ) {
+        // Mirror the runtime adapter's authenticated shared-prefix boundary.
+        // A profile declaration alone does not authenticate a child-owned body.
+        let observation = if matches!(coordinate, 1 | 4)
+            && matches!(
+                rule.prestate(),
+                AccountPrestateV2::AdapterAuthenticatedVariableData
+            ) {
             AccountObservationV1::new_adapter_authenticated_variable_data(
                 &keys[coordinate],
                 &owners[coordinate],
@@ -1568,10 +1600,13 @@ fn project_saved_structured_receipt_snapshot_v1(
             .map_err(|error| Error::new(format!("Structured saved rule: {error:?}")))?;
         let signer = flags[coordinate] & 1 != 0;
         let writable = flags[coordinate] & 2 != 0;
-        let observation = if matches!(
-            rule.prestate(),
-            AccountPrestateV2::AdapterAuthenticatedVariableData
-        ) {
+        // Mirror the runtime adapter's authenticated shared-prefix boundary.
+        // A profile declaration alone does not authenticate a child-owned body.
+        let observation = if matches!(coordinate, 1 | 4)
+            && matches!(
+                rule.prestate(),
+                AccountPrestateV2::AdapterAuthenticatedVariableData
+            ) {
             AccountObservationV1::new_adapter_authenticated_variable_data(
                 &keys[coordinate],
                 &owners[coordinate],
@@ -2188,6 +2223,7 @@ fn activate_structured_receipt_v1(
                 )));
             }
             transactions.push(seal_sent);
+            write_structured_progress_v1(arguments, "receipt-sealed", transactions)?;
         }
         let sent = rpc.send_v0_on_heap(
             "activate Structured receipt",
@@ -2203,6 +2239,7 @@ fn activate_structured_receipt_v1(
             )));
         }
         transactions.push(sent.clone());
+        write_structured_progress_v1(arguments, "receipt-activated", transactions)?;
         (
             sent.slot,
             tables
@@ -2308,11 +2345,7 @@ fn activate_structured_receipt_v1(
     let resume_checkpoints = checkpoints.clone();
     let mut persist_checkpoint = |checkpoint: &crate::structured_representation_campaign::StructuredRepresentationActionCheckpointV1| -> Result<()> {
         checkpoints.push(checkpoint.clone());
-        let bytes = serde_json::to_vec_pretty(&checkpoints)?;
-        let temporary = representation_journal.with_extension("json.pending");
-        std::fs::write(&temporary, bytes)?;
-        std::fs::rename(temporary, &representation_journal)?;
-        Ok(())
+        write_json(&representation_journal, &serde_json::to_value(&checkpoints)?)
     };
     let representation =
         crate::structured_representation_campaign::run_structured_representation_campaign_v1(
@@ -2364,6 +2397,7 @@ fn activate_structured_receipt_v1(
             hot_outer,
             &mut fixed,
             terminal,
+            driver,
             transactions,
         )?)
     } else {
@@ -3169,7 +3203,6 @@ pub(crate) fn harvest_structured_driver_signatures_v1(
 /// All resources and rent credits are read from finalized accounts; this
 /// continuation never manufactures a terminal Market or a zero token supply.
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_arguments)]
 fn complete_structured_terminal_v1(
     arguments: &ArgumentsV1,
     rpc: &mut Rpc,
@@ -3188,6 +3221,7 @@ fn complete_structured_terminal_v1(
     hot_outer: CheckedRationalLifecycleHotOuterV3,
     fixed: &mut [Pubkey],
     terminal: StructuredTerminalAccountsV1,
+    terminal_driver: &mut dyn StructuredTerminalDriverV1,
     transactions: &mut Vec<crate::model::TransactionEvidence>,
 ) -> Result<serde_json::Value> {
     use crate::structured_representation_campaign::{
@@ -3306,6 +3340,11 @@ fn complete_structured_terminal_v1(
             }),
         )?;
     }
+    // Reclaim and Complete authenticate Core in Terminal phase. Finish that
+    // canonical provider lifecycle before BeginRetiring changes the phase.
+    let source_completion =
+        terminal_driver.finish_source_before_retirement(rpc, payer, market, transactions)?;
+    write_structured_progress_v1(arguments, "provider-complete", transactions)?;
     // The existing semantic owner authenticates the entire aggregate as zero
     // before producing Core's transition. No fixture stage or account write.
     let retiring = crate::terminal_sequence::plan_core_begin_retiring_from_chain_v1(
@@ -3359,7 +3398,19 @@ fn complete_structured_terminal_v1(
     )?;
     retired["actorRentReclamation"] =
         reclaim_structured_actor_resources_v1(rpc, payer, claims, descriptor, transactions)?;
+    retired["rootClose"] = crate::structured_root_close::close_structured_capability_root_v1(
+        rpc,
+        payer,
+        plan,
+        evidence,
+        selected_release,
+        market,
+        root,
+        transactions,
+    )?;
+    retired["sourceCompletion"] = source_completion;
     retired["terminalActions"] = serde_json::to_value(terminal_actions)?;
+    write_structured_progress_v1(arguments, "Structured retirement finalized", transactions)?;
     Ok(retired)
 }
 
@@ -4169,11 +4220,33 @@ fn sha256_hex(bytes: &[u8]) -> String {
         .collect()
 }
 
+fn write_structured_progress_v1(
+    arguments: &ArgumentsV1,
+    stage: &str,
+    transactions: &[crate::model::TransactionEvidence],
+) -> Result<()> {
+    write_json(
+        &arguments.output.with_extension("progress.json"),
+        &json!({
+            "schema": "dclutch-structured-finalized-progress-v1", "stage": stage,
+            "transactions": transactions,
+        }),
+    )
+}
+
 fn write_json(path: &std::path::Path, value: &serde_json::Value) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(path, format!("{}\n", serde_json::to_string_pretty(value)?))?;
+    use std::io::Write as _;
+    let temporary = path.with_extension("json.pending");
+    let mut file = std::fs::File::create(&temporary)?;
+    file.write_all(format!("{}\n", serde_json::to_string_pretty(value)?).as_bytes())?;
+    file.sync_all()?;
+    std::fs::rename(temporary, path)?;
+    if let Some(parent) = path.parent() {
+        std::fs::File::open(parent)?.sync_all()?;
+    }
     Ok(())
 }
 

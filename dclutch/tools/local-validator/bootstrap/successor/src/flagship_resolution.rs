@@ -3682,8 +3682,35 @@ fn producer_selected_input(
     )
     .0;
     let lookup_tables = table_keys(resolver, slots)?;
-    let (registry_artifact, registry_artifact_staging) =
-        plan_record(plan, "registry_artifact_release")?;
+    // The founding plan retains the predecessor Registry pin as lineage
+    // evidence. After the named infrastructure succession, its V2 profile
+    // selects the current record. Share Direct's authenticated selector;
+    // neither a supplied coordinate nor the old plan row is authority here.
+    let (registry_artifact, registry_artifact_staging) = if plan.infrastructure_succession.is_some()
+    {
+        let infrastructure = Pubkey::find_program_address(
+            &[dclutch_registry::release_set::PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2],
+            &core_program,
+        )
+        .0;
+        let selected = crate::direct_market::authenticated_successor_registry_pin_v1(
+            plan,
+            coherent.account(
+                nonzero_pubkey(&plan.registry.programdata_id, "Registry ProgramData")?,
+                "successor Registry ProgramData",
+            )?,
+            coherent.account(infrastructure, "successor infrastructure profile")?,
+        )?;
+        let (raw, staging) = provider_record_pair_v1(
+            registry_program,
+            dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            hex32(&selected.artifact_release_id)?,
+        );
+        (raw.to_string(), staging.to_string())
+    } else {
+        let (raw, staging) = plan_record(plan, "registry_artifact_release")?;
+        (raw.to_owned(), staging.to_owned())
+    };
     let (pyth_release, pyth_release_staging) = plan_record(plan, "pyth_release")?;
     let source_material_staging = campaign_record_staging(
         campaign,
@@ -3987,21 +4014,31 @@ fn run_producer(arguments: Vec<String>, expected_cluster: ExpectedClusterV1) -> 
         &resolution_program,
     )
     .0;
-    let coherent = observe_keys(
-        &mut rpc,
-        BTreeSet::from([
-            market,
-            encoded_vaa,
-            update_account,
-            window,
-            adapter,
-            source_state,
-            claims_aggregate,
-            resolver_position,
-            claims_admission,
-        ]),
-        first.observation.slot,
-    )?;
+    let mut coherent_keys = BTreeSet::from([
+        market,
+        encoded_vaa,
+        update_account,
+        window,
+        adapter,
+        source_state,
+        claims_aggregate,
+        resolver_position,
+        claims_admission,
+    ]);
+    if plan.infrastructure_succession.is_some() {
+        coherent_keys.insert(nonzero_pubkey(
+            &plan.registry.programdata_id,
+            "Registry ProgramData",
+        )?);
+        coherent_keys.insert(
+            Pubkey::find_program_address(
+                &[dclutch_registry::release_set::PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2],
+                &nonzero_pubkey(&plan.core.program_id, "Core program")?,
+            )
+            .0,
+        );
+    }
+    let coherent = observe_keys(&mut rpc, coherent_keys, first.observation.slot)?;
     let source =
         SourceResolutionStateV2::decode(&coherent.account(source_state, "Source state")?.data)
             .map_err(|error| Error::new(format!("Source state: {error:?}")))?;

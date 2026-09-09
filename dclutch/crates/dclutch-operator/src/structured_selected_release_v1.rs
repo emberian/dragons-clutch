@@ -59,13 +59,16 @@ use crate::bearer::{
     build_rational_terminal_selected_bundle_v6, encode_open_capability_lifecycle_policy_v5,
 };
 use crate::structured_activation_bundle_v1::{
-    STRUCTURED_ACTIVATION_SELECTOR_V1, STRUCTURED_CAPABILITY_ROOT_BYTES_V1,
-    STRUCTURED_CAPABILITY_ROOT_SCHEMA_ID_V1, build_structured_activation_bundle_v1,
+    STRUCTURED_ACTIVATION_SELECTOR_V1, STRUCTURED_CAPABILITY_ROOT_BYTES_V2,
+    STRUCTURED_CAPABILITY_ROOT_SCHEMA_ID_V2, build_structured_activation_bundle_v1,
     structured_activation_descriptor_schema_v1,
 };
 use crate::structured_lifecycle_selected_v1::{
     StructuredActivationSelectedClosureV1, StructuredLifecycleSelectedErrorV1,
     structured_activation_selected_closure_v1,
+};
+use crate::structured_root_close_v1::{
+    STRUCTURED_ROOT_CLOSE_SELECTOR_V1, build_structured_root_close_bundle_v1,
 };
 use dclutch_claims::rational_lifecycle::{
     LifecycleActionV2, hot_v6::structured_lifecycle_action_selector_v1,
@@ -314,7 +317,9 @@ pub struct StructuredSelectedReleaseV1 {
     pub activation: StructuredActivationSelectedClosureV1,
     /// The sole V1 descriptor that creates this release's capability root.
     pub root_activation: dclutch_market::capability_activation::ActivationBundleV1,
-    /// Exact ten-entry CapabilityProgramSetV2 bytes.
+    /// The sole V1 descriptor closing a root with no outstanding resource groups.
+    pub root_close: dclutch_trading::native_close_bundle_v1::NativeCapabilityCloseBundleV1,
+    /// Exact eleven-entry CapabilityProgramSetV2 bytes.
     pub program_set: Vec<u8>,
     /// Exact immutable config-record bytes.
     pub config: Vec<u8>,
@@ -390,9 +395,18 @@ pub fn structured_selected_release_v1(
         1,
     )
     .ok_or(StructuredSelectedReleaseErrorV1::Encoding)?;
+    let root_close = build_structured_root_close_bundle_v1(
+        &selected
+            .first()
+            .ok_or(StructuredSelectedReleaseErrorV1::Release)?
+            .descriptor,
+        1,
+    )
+    .ok_or(StructuredSelectedReleaseErrorV1::Encoding)?;
     let program_set = assemble_program_set(
         &activation,
         &root_activation,
+        &root_close,
         selected
             .first()
             .ok_or(StructuredSelectedReleaseErrorV1::Release)?,
@@ -414,6 +428,7 @@ pub fn structured_selected_release_v1(
         terminal,
         activation,
         root_activation,
+        root_close,
         program_set,
         config: selection.to_bytes().to_vec(),
         // Placeholder replaced below from the admission's own report, so no
@@ -456,6 +471,7 @@ impl StructuredSelectedReleaseV1 {
         let expected = assemble_program_set(
             &self.activation,
             &self.root_activation,
+            &self.root_close,
             self.selected
                 .first()
                 .ok_or(StructuredSelectedReleaseErrorV1::Release)?,
@@ -522,6 +538,21 @@ impl StructuredSelectedReleaseV1 {
                 "root-activation-descriptor",
                 structured_activation_descriptor_schema_v1(),
                 self.root_activation.descriptor.as_slice(),
+            ),
+            (
+                "root-close-account-profile",
+                dclutch_vm::account_profile::ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V1,
+                self.root_close.account_profile.as_slice(),
+            ),
+            (
+                "root-close-effect",
+                dclutch_vm::effect::v2::SCHEMA_RELEASE_ID,
+                self.root_close.effect.as_slice(),
+            ),
+            (
+                "root-close-descriptor",
+                structured_activation_descriptor_schema_v1(),
+                self.root_close.descriptor.as_slice(),
             ),
         ] {
             records.push(StructuredPublicationRecordV1 {
@@ -699,6 +730,7 @@ fn publish(
     let expected_set = assemble_program_set(
         &release.activation,
         &release.root_activation,
+        &release.root_close,
         release
             .selected
             .first()
@@ -720,7 +752,7 @@ fn publish(
     if expected_set != release.program_set
         || set.selector_offset() != 10
         || set.selector_width() != SelectorWidthV2::U8
-        || usize::from(set.entry_count()) != STRUCTURED_SELECTED_ACTION_COUNT_V1 + 1
+        || usize::from(set.entry_count()) != STRUCTURED_SELECTED_ACTION_COUNT_V1 + 2
     {
         return Err(StructuredSelectedReleaseErrorV1::Publication);
     }
@@ -773,7 +805,7 @@ fn publish(
         || publication.release_set != input.release_set
         || publication.root_schema != input.root_schema
         || publication.root_state_bytes != input.root_state_bytes
-        || usize::from(publication.action_count) != STRUCTURED_SELECTED_ACTION_COUNT_V1 + 1
+        || usize::from(publication.action_count) != STRUCTURED_SELECTED_ACTION_COUNT_V1 + 2
     {
         return Err(StructuredSelectedReleaseErrorV1::Publication);
     }
@@ -785,8 +817,8 @@ fn validate_input(input: StructuredSelectedReleaseInputV1<'_>) -> Result<()> {
         .into_iter()
         .any(|identity| identity == [0; 32])
         || input.realm == input.release_set
-        || input.root_schema != STRUCTURED_CAPABILITY_ROOT_SCHEMA_ID_V1
-        || input.root_state_bytes != u32::try_from(STRUCTURED_CAPABILITY_ROOT_BYTES_V1).expect("root width")
+        || input.root_schema != STRUCTURED_CAPABILITY_ROOT_SCHEMA_ID_V2
+        || input.root_state_bytes != u32::try_from(STRUCTURED_CAPABILITY_ROOT_BYTES_V2).expect("root width")
         || input.representation_outcome_count == 0
         // The open RequestProfile V1 artifact's 1,312-byte bound makes this the
         // largest executable geometry; a wider release would encode and then
@@ -806,12 +838,17 @@ fn validate_input(input: StructuredSelectedReleaseInputV1<'_>) -> Result<()> {
 fn assemble_program_set(
     activation: &StructuredActivationSelectedClosureV1,
     root_activation: &dclutch_market::capability_activation::ActivationBundleV1,
+    root_close: &dclutch_trading::native_close_bundle_v1::NativeCapabilityCloseBundleV1,
     denominate: &RationalOpenSelectedHotBundleV3,
     reconstitute: &RationalOpenSelectedHotBundleV3,
     issue: &RationalOpenStructuredHotBundleV3,
     unwrap: &RationalOpenStructuredHotBundleV3,
     terminal: &RationalTerminalHotBundleV3,
 ) -> Result<Vec<u8>> {
+    if Some(root_close.clone()) != build_structured_root_close_bundle_v1(&denominate.descriptor, 1)
+    {
+        return Err(StructuredSelectedReleaseErrorV1::ProgramSet);
+    }
     let activate_receipt = structured_lifecycle_action_selector_v1(
         STRUCTURED_CAPABILITY_KIND_ID_V2,
         LifecycleActionV2::ActivateReceipt,
@@ -823,6 +860,10 @@ fn assemble_program_set(
     )
     .ok_or(StructuredSelectedReleaseErrorV1::ProgramSet)?;
     let bundles = [
+        (
+            STRUCTURED_ROOT_CLOSE_SELECTOR_V1,
+            root_close.descriptor.as_slice(),
+        ),
         (
             dclutch_claims::rational_lifecycle::hot_v6::STRUCTURED_RETIRE_COORDINATE_SELECTOR_V1,
             activation.retire_coordinate.descriptor.as_slice(),
@@ -866,13 +907,16 @@ fn assemble_program_set(
     ];
     let mut entries = Vec::with_capacity(bundles.len());
     for (selector, bytes) in bundles {
-        let schema = if selector == STRUCTURED_ACTIVATION_SELECTOR_V1 {
+        let schema = if matches!(
+            selector,
+            STRUCTURED_ACTIVATION_SELECTOR_V1 | STRUCTURED_ROOT_CLOSE_SELECTOR_V1
+        ) {
             let descriptor = dclutch_market::capability_program::CapabilityProgramV1::decode(bytes)
                 .map_err(StructuredSelectedReleaseErrorV1::CapabilityProgram)?;
             if descriptor.kind().to_bytes() != STRUCTURED_CAPABILITY_KIND_ID_V2
                 || descriptor.config_schema().to_bytes() != TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2
-                || descriptor.request_schema().to_bytes()
-                    != crate::structured_activation_bundle_v1::STRUCTURED_ACTIVATION_REQUEST_SCHEMA_ID_V1
+                || (selector == STRUCTURED_ACTIVATION_SELECTOR_V1 && descriptor.request_schema().to_bytes()
+                    != crate::structured_activation_bundle_v1::STRUCTURED_ACTIVATION_REQUEST_SCHEMA_ID_V1)
             { return Err(StructuredSelectedReleaseErrorV1::ProgramSet); }
             structured_activation_descriptor_schema_v1()
         } else {
@@ -1161,8 +1205,8 @@ mod tests {
         StructuredSelectedReleaseInputV1 {
             realm: id(18),
             release_set: id(15),
-            root_schema: STRUCTURED_CAPABILITY_ROOT_SCHEMA_ID_V1,
-            root_state_bytes: u32::try_from(STRUCTURED_CAPABILITY_ROOT_BYTES_V1)
+            root_schema: STRUCTURED_CAPABILITY_ROOT_SCHEMA_ID_V2,
+            root_state_bytes: u32::try_from(STRUCTURED_CAPABILITY_ROOT_BYTES_V2)
                 .expect("root width"),
             representation_outcome_count: K,
             item_state_bytes: ITEM_STATE_BYTES,
@@ -1181,7 +1225,7 @@ mod tests {
         .expect("ten-entry set");
         assert_eq!(set.selector_offset(), 10);
         assert_eq!(set.selector_width(), SelectorWidthV2::U8);
-        assert_eq!(set.entry_count(), 10);
+        assert_eq!(set.entry_count(), 11);
         let descriptors: Vec<[u8; 32]> = (0..u16::try_from(STRUCTURED_SELECTED_ACTION_COUNT_V1)
             .expect("action count"))
             .map(|index| {
@@ -1202,13 +1246,25 @@ mod tests {
                 .to_bytes(),
             hash(&release.activation.activate_receipt.descriptor).to_bytes()
         );
-        assert_eq!(set.entry(6).expect("coordinate entry").selector(), 7);
         assert_eq!(
-            set.entry(9).expect("root activation entry").selector(),
-            STRUCTURED_ACTIVATION_SELECTOR_V1
+            set.entry(9).expect("root close entry").selector(),
+            STRUCTURED_ROOT_CLOSE_SELECTOR_V1
         );
         assert_eq!(
             set.entry(9)
+                .expect("root close entry")
+                .descriptor()
+                .program()
+                .to_bytes(),
+            release.root_close.descriptor_id
+        );
+        assert_eq!(set.entry(6).expect("coordinate entry").selector(), 7);
+        assert_eq!(
+            set.entry(10).expect("root activation entry").selector(),
+            STRUCTURED_ACTIVATION_SELECTOR_V1
+        );
+        assert_eq!(
+            set.entry(10)
                 .expect("root activation entry")
                 .descriptor()
                 .schema()
@@ -1235,11 +1291,11 @@ mod tests {
         assert_eq!(release.publication.release_set, id(15));
         assert_eq!(
             release.publication.root_schema,
-            STRUCTURED_CAPABILITY_ROOT_SCHEMA_ID_V1
+            STRUCTURED_CAPABILITY_ROOT_SCHEMA_ID_V2
         );
         assert_eq!(
             release.publication.root_state_bytes,
-            u32::try_from(STRUCTURED_CAPABILITY_ROOT_BYTES_V1).expect("root width")
+            u32::try_from(STRUCTURED_CAPABILITY_ROOT_BYTES_V2).expect("root width")
         );
         let open = release
             .open_action_program_set()
@@ -1255,7 +1311,7 @@ mod tests {
         let basis = basis();
         let release = structured_selected_release_v1(input(&basis)).expect("release");
         let root =
-            u32::try_from(CAPABILITY_ROOT_HEADER_BYTES_V1 + STRUCTURED_CAPABILITY_ROOT_BYTES_V1)
+            u32::try_from(CAPABILITY_ROOT_HEADER_BYTES_V1 + STRUCTURED_CAPABILITY_ROOT_BYTES_V2)
                 .expect("root width");
         let portfolio = u32::try_from(
             portfolio_record_bytes(usize::try_from(PRODUCT_N).expect("N")).expect("portfolio"),
@@ -1417,7 +1473,7 @@ mod tests {
         let records = release.publication_records().expect("records");
         assert_eq!(
             records.len(),
-            2 + 7 * STRUCTURED_SELECTED_ACTION_COUNT_V1 + 3
+            2 + 7 * STRUCTURED_SELECTED_ACTION_COUNT_V1 + 6
         );
 
         let program_set = records.first().expect("program-set record");
@@ -1592,5 +1648,116 @@ mod tests {
         // representation -- which is exactly why it is the manifest's config_id.
         assert_eq!(first.config, second.config);
         assert_eq!(first.publication.config_id, second.publication.config_id);
+    }
+    #[test]
+    fn selected_root_close_reads_native_tail_and_refuses_every_live_group() {
+        use dclutch_market::capability_program::activation_registers_v2::*;
+        use dclutch_trading::structured_root_v2::*;
+        use dclutch_vm::account_profile::{
+            AccountObservationV1, AccountProfileV1, ProjectionRegistersV2, project_atomic,
+        };
+        use dclutch_vm::v2::{self as vm, RegisterInput, RegisterOutput};
+        let basis = basis();
+        let release = structured_selected_release_v1(input(&basis)).expect("release");
+        let close = &release.root_close;
+        let profile = AccountProfileV1::decode_selected(
+            close.account_profile_id,
+            hash(&close.account_profile).to_bytes(),
+            &close.account_profile,
+        )
+        .expect("profile");
+        let transition = vm::ProgramV2::decode(&close.transition).expect("transition");
+        let mut state = StructuredCapabilityRootV2::default();
+        let mut states = vec![state];
+        // Both descriptors' receipt and coordinate resources are obligations.
+        for activate in [true, true, true, false, false, false] {
+            state = if activate {
+                state.activate()
+            } else {
+                state.retire()
+            }
+            .expect("native state");
+            states.push(state);
+        }
+        for state in states {
+            let mut root_data = vec![0; CAPABILITY_ROOT_HEADER_BYTES_V1];
+            root_data.extend_from_slice(&state.encode());
+            let funding = vec![
+                0;
+                dclutch_market::capability_manifest::funding_ledger_bytes_v2(1)
+                    .expect("ledger width")
+            ];
+            let credit =
+                vec![0; dclutch_market::rent::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2];
+            let root_key = [31; 32];
+            let trading = [32; 32];
+            let ledger_key = [33; 32];
+            let credit_key = [34; 32];
+            let rent = [35; 32];
+            let accounts = [
+                AccountObservationV1::new(&root_key, &trading, 100, &root_data, false, true, false),
+                AccountObservationV1::new(&ledger_key, &trading, 200, &funding, false, true, false),
+                AccountObservationV1::new(&credit_key, &rent, 300, &credit, false, true, false),
+            ];
+            let mut scalars = vec![0; usize::from(profile.scalar_count())];
+            scalars[usize::from(ACTIVATION_ACTION_SCALAR_V2)] =
+                dclutch_market::CoreEffectActionV1::CloseCapability as u64;
+            let mut identities = vec![[0; 32]; usize::from(profile.identity_count())];
+            identities[usize::from(ACTIVATION_ROOT_IDENTITY_V2)] = root_key;
+            identities[usize::from(ACTIVATION_TRADING_PROGRAM_IDENTITY_V2)] = trading;
+            identities[usize::from(ACTIVATION_FIRST_FAMILY_IDENTITY_V2)] = credit_key;
+            let mut scratch_scalars = scalars.clone();
+            let mut scratch_ids = identities.clone();
+            let mut projected_scalars = scalars.clone();
+            let mut projected_ids = identities.clone();
+            project_atomic(
+                profile,
+                &accounts,
+                ProjectionRegistersV2::new(
+                    RegisterInput {
+                        scalars: &scalars,
+                        identities: &identities,
+                    },
+                    RegisterOutput {
+                        scalars: &mut scratch_scalars,
+                        identities: &mut scratch_ids,
+                    },
+                    RegisterOutput {
+                        scalars: &mut projected_scalars,
+                        identities: &mut projected_ids,
+                    },
+                ),
+            )
+            .expect("canonical root-tail projection");
+            let mut output_scalars = vec![77; scalars.len()];
+            let mut output_ids = vec![[77; 32]; identities.len()];
+            let result = vm::execute_atomic(
+                transition,
+                RegisterInput {
+                    scalars: &projected_scalars,
+                    identities: &projected_ids,
+                },
+                RegisterOutput {
+                    scalars: &mut scratch_scalars,
+                    identities: &mut scratch_ids,
+                },
+                RegisterOutput {
+                    scalars: &mut output_scalars,
+                    identities: &mut output_ids,
+                },
+            );
+            assert_eq!(
+                result,
+                if state.outstanding() == 0 {
+                    Ok(())
+                } else {
+                    Err(vm::Error::CheckFailed)
+                }
+            );
+            if state.outstanding() != 0 {
+                assert_eq!(output_scalars, vec![77; scalars.len()]);
+                assert_eq!(output_ids, vec![[77; 32]; identities.len()]);
+            }
+        }
     }
 }

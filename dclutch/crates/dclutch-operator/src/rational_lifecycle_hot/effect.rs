@@ -95,6 +95,7 @@ pub fn encode_rational_lifecycle_effect_v3(
         action,
         coordinate_count,
         RegisterLayout::V3(RationalLifecycleHotRegisterLayoutV3::new(coordinates)),
+        false,
     )
 }
 
@@ -102,6 +103,7 @@ fn encode_rational_lifecycle_effect_with_layout(
     action: LifecycleActionV2,
     coordinate_count: u32,
     registers: RegisterLayout,
+    counter: bool,
 ) -> Result<Vec<u8>> {
     let coordinates = validate_action_geometry(action, coordinate_count)?;
     let template = child_template(action, coordinate_count, coordinates)?;
@@ -128,12 +130,23 @@ fn encode_rational_lifecycle_effect_with_layout(
     for row in 0..coordinates {
         append_row_instructions(&mut instructions, registers, row)?;
     }
+    super::resource_counter::effect(
+        &mut instructions,
+        registers.scalar_count().ok_or(Error::InvalidLength)?,
+        counter,
+    )?;
     let geometry = EffectGeometryV3 {
         fixed_accounts: lifecycle_logical_account_count_v3(action, coordinate_count)?,
         item_account_stride: 0,
-        common_scalars: narrow_u16(registers.scalar_count().ok_or(Error::InvalidLength)?)?,
+        common_scalars: narrow_u16(super::resource_counter::scalar_count(
+            registers.scalar_count().ok_or(Error::InvalidLength)?,
+            counter,
+        )?)?,
         item_scalar_stride: 0,
-        common_identities: narrow_u16(registers.identity_count().ok_or(Error::InvalidLength)?)?,
+        common_identities: narrow_u16(super::resource_counter::identity_count(
+            registers.identity_count().ok_or(Error::InvalidLength)?,
+            counter,
+        )?)?,
         item_identity_stride: 0,
     };
     let bytes = EFFECT_HEADER_BYTES
@@ -190,7 +203,11 @@ pub fn encode_rational_lifecycle_selected_effect_v4(action: LifecycleActionV2) -
 }
 
 /// Wrap one market-neutral V6 lifecycle effect in the sole EffectV4 schema.
-pub fn encode_rational_lifecycle_selected_effect_v6(action: LifecycleActionV2) -> Result<Vec<u8>> {
+
+pub(super) fn encode_counter_lifecycle_selected_effect_v6(
+    action: LifecycleActionV2,
+    counter: bool,
+) -> Result<Vec<u8>> {
     let coordinate_count = match action {
         LifecycleActionV2::ActivateReceipt => 0,
         LifecycleActionV2::ActivateCoordinate | LifecycleActionV2::RetireCoordinate => 1,
@@ -201,6 +218,7 @@ pub fn encode_rational_lifecycle_selected_effect_v6(action: LifecycleActionV2) -
         action,
         coordinate_count,
         RegisterLayout::V6(RationalLifecycleHotRegisterLayoutV6::new(coordinates)),
+        counter,
     )?;
     let family_bytes =
         RationalLifecycleHotLayoutV3::request_bytes(coordinates).ok_or(Error::InvalidLength)?;

@@ -127,6 +127,7 @@ pub struct SeriesShadowSourceManifestV1<'a> {
     root_state_bytes: u32,
     occurrence_count: u32,
     funding_count: u32,
+    fixed_data_lengths: [u32; SERIES_SHADOW_FIXED_ACCOUNT_COUNT_V4],
 }
 
 /// Borrowed exact generated sections ready for a checked source emitter.
@@ -337,6 +338,7 @@ impl<'a> SeriesShadowSourceManifestV1<'a> {
             root_state_bytes,
             occurrence_count,
             funding_count,
+            fixed_data_lengths,
         })
     }
 
@@ -348,6 +350,16 @@ impl<'a> SeriesShadowSourceManifestV1<'a> {
     /// Exact dynamic FundingState span count.
     pub const fn funding_count(self) -> u32 {
         self.funding_count
+    }
+
+    /// Complete fixed-account geometry selected by this executor.
+    pub const fn fixed_data_lengths(&self) -> &[u32; SERIES_SHADOW_FIXED_ACCOUNT_COUNT_V4] {
+        &self.fixed_data_lengths
+    }
+
+    /// Stable executor-capacity identity derived from the complete geometry.
+    pub const fn capacity_profile(self) -> ContentId {
+        self.capacity_profile
     }
 
     /// Exact complete manifest bytes.

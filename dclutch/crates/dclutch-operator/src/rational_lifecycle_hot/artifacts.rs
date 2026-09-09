@@ -41,7 +41,7 @@ use dclutch_claims::rational_lifecycle::{
     },
     hot_v6::{
         RATIONAL_LIFECYCLE_HOT_MAGIC_V6, RATIONAL_LIFECYCLE_HOT_VERSION_V6,
-        RATIONAL_LIFECYCLE_IDENTITY_REQUEST_DESCRIPTOR_V6, RationalLifecycleHotRegisterLayoutV6,
+        RationalLifecycleHotRegisterLayoutV6,
     },
 };
 #[cfg(test)]
@@ -58,7 +58,7 @@ use dclutch_vm::request_profile::{
 };
 use dclutch_vm::v3::{
     HEADER_BYTES as TRANSITION_HEADER_BYTES, INSTRUCTION_BYTES as TRANSITION_INSTRUCTION_BYTES,
-    IdentityRegisterV3, InstructionV3, ProgramGeometryV3, ScalarRegisterV3, encode_program_atomic,
+    InstructionV3, ProgramGeometryV3, ScalarRegisterV3, encode_program_atomic,
 };
 
 use crate::rational_lifecycle_hot::{Error, Result, validate_action_geometry};
@@ -279,11 +279,13 @@ pub fn encode_rational_lifecycle_selected_request_profile_v5(
 
 /// Encode the market-neutral V6 RequestProfile.
 ///
-/// The request-carried descriptor is projected into a distinct identity; the
-/// V6 Transition compares it with AccountProfile's authenticated logical-14
-/// descriptor account before Effect writes the Claims child.
-pub fn encode_rational_lifecycle_selected_request_profile_v6(
+/// The request-carried descriptor body digest reaches the canonical Claims
+/// child field. Claims authenticates that digest against finalized raw/staging
+/// records; the Registry PDA is not a second descriptor identity.
+
+pub(super) fn encode_counter_lifecycle_selected_request_profile_v6(
     action: LifecycleActionV2,
+    counter: bool,
 ) -> Result<Vec<u8>> {
     let coordinate_count = match action {
         LifecycleActionV2::ActivateReceipt => 0,
@@ -306,7 +308,7 @@ pub fn encode_rational_lifecycle_selected_request_profile_v6(
         coordinate_count,
         RATIONAL_LIFECYCLE_HOT_MAGIC_V6,
         RATIONAL_LIFECYCLE_HOT_VERSION_V6,
-        DescriptorProjection::Project(RATIONAL_LIFECYCLE_IDENTITY_REQUEST_DESCRIPTOR_V6),
+        DescriptorProjection::Project(RATIONAL_LIFECYCLE_IDENTITY_DESCRIPTOR_V3),
     )?);
     for row in 0..coordinates {
         append_row_request_instructions_v6(&mut instructions, layout, row)?;
@@ -316,9 +318,15 @@ pub fn encode_rational_lifecycle_selected_request_profile_v6(
     let geometry = RequestGeometryV1::new(
         narrow_u32(request_bytes)?,
         0,
-        narrow_u16(layout.scalar_count().ok_or(Error::InvalidLength)?)?,
+        narrow_u16(super::resource_counter::scalar_count(
+            layout.scalar_count().ok_or(Error::InvalidLength)?,
+            counter,
+        )?)?,
         0,
-        narrow_u16(layout.identity_count().ok_or(Error::InvalidLength)?)?,
+        narrow_u16(super::resource_counter::identity_count(
+            layout.identity_count().ok_or(Error::InvalidLength)?,
+            counter,
+        )?)?,
         0,
     );
     let bytes = REQUEST_HEADER_BYTES
@@ -392,10 +400,12 @@ pub fn encode_rational_lifecycle_transition_v3(
     Ok(output)
 }
 
-/// Encode V6 transition semantics, including descriptor-account equality.
-pub fn encode_rational_lifecycle_transition_v6(
+/// Encode V6 coordinate semantics and optional native root obligations.
+
+pub(super) fn encode_counter_lifecycle_transition_v6(
     action: LifecycleActionV2,
     coordinate_count: u32,
+    counter: bool,
 ) -> Result<Vec<u8>> {
     let coordinates = validate_action_geometry(action, coordinate_count)?;
     let layout = RationalLifecycleHotRegisterLayoutV6::new(coordinates);
@@ -405,12 +415,6 @@ pub fn encode_rational_lifecycle_transition_v6(
             .and_then(|count| count.checked_add(2))
             .ok_or(Error::InvalidLength)?,
     );
-    instructions.push(InstructionV3::identity_eq(
-        IdentityRegisterV3::common(narrow_u16(RATIONAL_LIFECYCLE_IDENTITY_DESCRIPTOR_V3)?),
-        IdentityRegisterV3::common(narrow_u16(
-            RATIONAL_LIFECYCLE_IDENTITY_REQUEST_DESCRIPTOR_V6,
-        )?),
-    ));
     instructions.push(InstructionV3::nonzero(transition_scalar(
         RATIONAL_LIFECYCLE_SCALAR_OUTCOME_COUNT_V3,
     )?));
@@ -429,10 +433,22 @@ pub fn encode_rational_lifecycle_transition_v6(
                 .ok_or(Error::InvalidLength)?,
         )?));
     }
+    super::resource_counter::transition(
+        &mut instructions,
+        action,
+        layout.scalar_count().ok_or(Error::InvalidLength)?,
+        counter,
+    )?;
     let geometry = ProgramGeometryV3 {
-        common_scalars: narrow_u16(layout.scalar_count().ok_or(Error::InvalidLength)?)?,
+        common_scalars: narrow_u16(super::resource_counter::scalar_count(
+            layout.scalar_count().ok_or(Error::InvalidLength)?,
+            counter,
+        )?)?,
         item_scalar_stride: 0,
-        common_identities: narrow_u16(layout.identity_count().ok_or(Error::InvalidLength)?)?,
+        common_identities: narrow_u16(super::resource_counter::identity_count(
+            layout.identity_count().ok_or(Error::InvalidLength)?,
+            counter,
+        )?)?,
         item_identity_stride: 0,
     };
     let bytes = TRANSITION_HEADER_BYTES

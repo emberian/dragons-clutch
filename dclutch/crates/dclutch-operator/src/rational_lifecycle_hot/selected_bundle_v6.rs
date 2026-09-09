@@ -36,12 +36,12 @@ use solana_program::hash::hash;
 use crate::rational_lifecycle_hot::{
     Error, RationalLifecycleSelectedAccountProfileInputV5, Result,
     artifacts::{
-        encode_rational_lifecycle_selected_request_profile_v6,
-        encode_rational_lifecycle_transition_v6,
+        encode_counter_lifecycle_selected_request_profile_v6,
+        encode_counter_lifecycle_transition_v6,
     },
-    effect::encode_rational_lifecycle_selected_effect_v6,
+    effect::encode_counter_lifecycle_selected_effect_v6,
     lifecycle_claims_account_count_v3, lifecycle_logical_account_count_v3,
-    selected_profile_v5::encode_rational_lifecycle_selected_account_profile_v6,
+    selected_profile_v5::encode_selected_account_profile_with_counter_v6,
 };
 
 /// Exact interpreted strategy width reused by V6.
@@ -86,7 +86,7 @@ pub struct RationalLifecycleSelectedBundleV6 {
     pub account_profile: Vec<u8>,
     /// V6 market-neutral RequestProfile.
     pub request_profile: Vec<u8>,
-    /// V6 descriptor-equality TransitionVM.
+    /// V6 coordinate and optional native root-obligation TransitionVM.
     pub transition: Vec<u8>,
     /// Exact LifecycleV5 policy.
     pub lifecycle_policy: Vec<u8>,
@@ -103,17 +103,23 @@ pub fn build_rational_lifecycle_selected_bundle_v6(
     input: RationalLifecycleSelectedBundleInputV6<'_>,
 ) -> Result<RationalLifecycleSelectedBundleV6> {
     let coordinate_count = coordinate_count(input.action)?;
+    let counter = super::resource_counter::enabled(input.root_schema, input.root_state_bytes)?;
     let selection = input.token_behavior_selection;
     let release_set = selection.release_set();
     let token_program = selection.token_program();
     if release_set == [0; 32] || token_program == [0; 32] {
         return Err(Error::ContentIdentity);
     }
-    let account_profile =
-        encode_rational_lifecycle_selected_account_profile_v6(input.action, input.account_profile)?;
-    let request_profile = encode_rational_lifecycle_selected_request_profile_v6(input.action)?;
-    let transition = encode_rational_lifecycle_transition_v6(input.action, coordinate_count)?;
-    let effect = encode_rational_lifecycle_selected_effect_v6(input.action)?;
+    let account_profile = encode_selected_account_profile_with_counter_v6(
+        input.action,
+        input.account_profile,
+        counter,
+    )?;
+    let request_profile =
+        encode_counter_lifecycle_selected_request_profile_v6(input.action, counter)?;
+    let transition =
+        encode_counter_lifecycle_transition_v6(input.action, coordinate_count, counter)?;
+    let effect = encode_counter_lifecycle_selected_effect_v6(input.action, counter)?;
     assemble_selected_bundle_v6(
         input,
         account_profile,
@@ -208,6 +214,10 @@ pub fn validate_rational_lifecycle_selected_bundle_v6(
     let coordinate_count = coordinate_count(bundle.action)?;
     let coordinates = usize::try_from(coordinate_count).map_err(|_| Error::InvalidLength)?;
     let descriptor = CapabilityProgramV4::decode(&bundle.descriptor).map_err(Error::Descriptor)?;
+    let counter = super::resource_counter::enabled(
+        descriptor.root_schema().to_bytes(),
+        descriptor.root_state_bytes(),
+    )?;
     let selection = TokenBehaviorSelectionV2::decode(&bundle.token_behavior_selection)
         .map_err(Error::TokenBehavior)?;
     let account =
@@ -234,10 +244,16 @@ pub fn validate_rational_lifecycle_selected_bundle_v6(
         .validate_account_profile(account)
         .map_err(Error::LifecycleArtifact)?;
     let registers = RationalLifecycleHotRegisterLayoutV6::new(coordinates);
-    let scalars = u16::try_from(registers.scalar_count().ok_or(Error::InvalidLength)?)
-        .map_err(|_| Error::InvalidLength)?;
-    let identities = u16::try_from(registers.identity_count().ok_or(Error::InvalidLength)?)
-        .map_err(|_| Error::InvalidLength)?;
+    let scalars = u16::try_from(super::resource_counter::scalar_count(
+        registers.scalar_count().ok_or(Error::InvalidLength)?,
+        counter,
+    )?)
+    .map_err(|_| Error::InvalidLength)?;
+    let identities = u16::try_from(super::resource_counter::identity_count(
+        registers.identity_count().ok_or(Error::InvalidLength)?,
+        counter,
+    )?)
+    .map_err(|_| Error::InvalidLength)?;
     let logical = lifecycle_logical_account_count_v3(bundle.action, coordinate_count)?;
     let family_bytes =
         RationalLifecycleHotLayoutV3::request_bytes(coordinates).ok_or(Error::InvalidLength)?;
@@ -247,10 +263,10 @@ pub fn validate_rational_lifecycle_selected_bundle_v6(
         || account.dynamic_fixed_span_count() != 0
         || account.fixed_account_count() != logical
         || bundle.request_profile
-            != encode_rational_lifecycle_selected_request_profile_v6(bundle.action)?
+            != encode_counter_lifecycle_selected_request_profile_v6(bundle.action, counter)?
         || bundle.transition
-            != encode_rational_lifecycle_transition_v6(bundle.action, coordinate_count)?
-        || bundle.effect != encode_rational_lifecycle_selected_effect_v6(bundle.action)?
+            != encode_counter_lifecycle_transition_v6(bundle.action, coordinate_count, counter)?
+        || bundle.effect != encode_counter_lifecycle_selected_effect_v6(bundle.action, counter)?
         || descriptor.request_schema().to_bytes() != RATIONAL_LIFECYCLE_HOT_SCHEMA_RELEASE_ID_V6
         || descriptor.account_profile()
             != artifact(
@@ -375,9 +391,7 @@ mod tests {
         HEADER_BYTES as LIFECYCLE_HEADER_BYTES, encode::encode_lifecycle_policy_v5_atomic,
     };
     use dclutch_vm::request_profile::{ProjectionRegistersV1, project_atomic};
-    use dclutch_vm::v3::{
-        Error as TransitionError, RegisterInput, RegisterOutput, execute_fold_atomic,
-    };
+    use dclutch_vm::v3::{RegisterInput, RegisterOutput, execute_fold_atomic};
 
     fn id(value: u8) -> [u8; 32] {
         [value; 32]
@@ -493,7 +507,7 @@ mod tests {
     fn project_request(
         bundle: &RationalLifecycleSelectedBundleV6,
         family: &[u8],
-        authenticated_descriptor: [u8; 32],
+        prior_register_value: [u8; 32],
     ) -> (Vec<u64>, Vec<[u8; 32]>) {
         let profile = RequestProfileV1::decode(&bundle.request_profile).expect("request profile");
         let scalars = profile.scalar_count(0).expect("scalars");
@@ -502,7 +516,7 @@ mod tests {
         let mut input_identities = vec![[0_u8; 32]; identities];
         *input_identities
             .get_mut(RATIONAL_LIFECYCLE_IDENTITY_DESCRIPTOR_V3)
-            .expect("descriptor identity coordinate") = authenticated_descriptor;
+            .expect("descriptor identity coordinate") = prior_register_value;
         let mut scratch_scalars = vec![0_u64; scalars];
         let mut scratch_identities = vec![[0_u8; 32]; identities];
         let mut output_scalars = vec![0_u64; scalars];
@@ -525,7 +539,7 @@ mod tests {
     }
 
     #[test]
-    fn v6_artifacts_are_market_neutral_and_descriptor_equality_is_runtime_checked() {
+    fn v6_artifacts_are_market_neutral_and_native_claims_owns_descriptor_digest_join() {
         let basis = basis();
         let first_bytes = descriptor_bytes(id(21));
         let second_bytes = descriptor_bytes(id(22));
@@ -604,34 +618,23 @@ mod tests {
         )
         .expect("matching descriptor accepted");
 
-        let (hostile_scalars, hostile_identities) =
+        // A stale prior register or raw-record key cannot replace the request's
+        // content digest. The actual native Claims owner performs the join.
+        let (_, overwritten) =
             project_request(&first_bundle, &family_bytes, second.descriptor_id());
-        let mut hostile_scratch_scalars = hostile_scalars.clone();
-        let mut hostile_scratch_identities = hostile_identities.clone();
-        let mut hostile_output_scalars = vec![0x5a5a_u64; hostile_scalars.len()];
-        let mut hostile_output_identities = vec![[0x5a; 32]; hostile_identities.len()];
-        let before_scalars = hostile_output_scalars.clone();
-        let before_identities = hostile_output_identities.clone();
         assert_eq!(
-            execute_fold_atomic(
-                transition,
-                0,
-                RegisterInput {
-                    scalars: &hostile_scalars,
-                    identities: &hostile_identities,
-                },
-                RegisterOutput {
-                    scalars: &mut hostile_scratch_scalars,
-                    identities: &mut hostile_scratch_identities,
-                },
-                RegisterOutput {
-                    scalars: &mut hostile_output_scalars,
-                    identities: &mut hostile_output_identities,
-                },
-            ),
-            Err(TransitionError::CheckFailed)
+            overwritten[RATIONAL_LIFECYCLE_IDENTITY_DESCRIPTOR_V3],
+            first.descriptor_id()
         );
-        assert_eq!(hostile_output_scalars, before_scalars);
-        assert_eq!(hostile_output_identities, before_identities);
+        dclutch_claims::rational_lifecycle::prepare(child, first)
+            .expect("native Claims accepted descriptor join");
+        let mut wrong_header = child.header();
+        wrong_header.descriptor_id = second.descriptor_id();
+        let wrong_child =
+            LifecycleRequestV2::new(wrong_header, &[]).expect("canonical hostile child");
+        assert_eq!(
+            dclutch_claims::rational_lifecycle::prepare(wrong_child, first),
+            Err(dclutch_claims::rational_lifecycle::Error::DescriptorMismatch)
+        );
     }
 }

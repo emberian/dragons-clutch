@@ -18,15 +18,12 @@ use dclutch_registry::{
     release_set::{CallerAuthoritySeedsV1, CapabilityExecutionSelectionV1, ExecutionRoleV1},
 };
 use sha2::{Digest as _, Sha256};
-use solana_sdk::{pubkey::Pubkey, signature::Keypair};
-use solana_sdk_ids::{bpf_loader_upgradeable, native_loader, system_program, sysvar};
-use std::{
-    collections::BTreeMap,
-    fs::{self, OpenOptions},
-    io::Write as _,
-    path::{Path, PathBuf},
-    process::Command,
+use solana_sdk::{
+    pubkey::Pubkey,
+    signature::{Keypair, Signer as _},
 };
+use solana_sdk_ids::{bpf_loader_upgradeable, native_loader, system_program, sysvar};
+use std::{collections::BTreeMap, fs, path::PathBuf};
 
 use crate::{
     Error, Result,
@@ -52,9 +49,9 @@ type SeriesPrepareFixedDataLengthsV1 = [u32;
         as usize];
 
 /// The one composite entrance for a local Series Found -> first Prepare run.
-/// Its selected accelerator build is always the checked-candidate script; an
-/// arbitrary executable or textual certificate identity is deliberately not
-/// an argument of this command.
+/// Its accelerator capacity is an already-built, hostile-decoded source
+/// manifest; an arbitrary executable or textual certificate identity is
+/// deliberately not an argument of this command.
 pub(crate) const SERIES_FOUND_PREPARE_COMMAND_V1: &str =
     "local-private-validator-series-found-prepare-v1";
 
@@ -65,15 +62,7 @@ struct SeriesFoundPrepareArgumentsV1 {
     payer_keypair: PathBuf,
     direct_fee_basis_points: u16,
     direct_fee_recipient: Pubkey,
-    compiler_manifest: PathBuf,
-    toolchain_manifest: PathBuf,
-    translation_validation: PathBuf,
-    shadow_stage_dir: PathBuf,
-    checked_candidate_work: PathBuf,
-    node: PathBuf,
-    node_archive: PathBuf,
-    predecessor_profile: Option<PathBuf>,
-    genesis_cohort: bool,
+    shadow_source_manifest: PathBuf,
     output: PathBuf,
     execute: bool,
 }
@@ -118,8 +107,6 @@ fn parse_series_found_prepare_arguments_v1(
     arguments: Vec<String>,
 ) -> Result<SeriesFoundPrepareArgumentsV1> {
     let mut values = BTreeMap::new();
-    let mut predecessor_profile = None;
-    let mut genesis_cohort = false;
     let mut execute = false;
     let mut index = 0;
     while index < arguments.len() {
@@ -130,24 +117,6 @@ fn parse_series_found_prepare_arguments_v1(
                 }
                 execute = true;
                 index += 1;
-            }
-            "--genesis-cohort" => {
-                if genesis_cohort {
-                    return Err(Error::new("Series Found/Prepare repeats --genesis-cohort"));
-                }
-                genesis_cohort = true;
-                index += 1;
-            }
-            "--predecessor-profile" => {
-                let value = arguments.get(index + 1).ok_or_else(|| {
-                    Error::new("Series Found/Prepare --predecessor-profile needs a value")
-                })?;
-                if predecessor_profile.replace(PathBuf::from(value)).is_some() {
-                    return Err(Error::new(
-                        "Series Found/Prepare repeats --predecessor-profile",
-                    ));
-                }
-                index += 2;
             }
             flag => {
                 let value = arguments.get(index + 1).ok_or_else(|| {
@@ -160,13 +129,7 @@ fn parse_series_found_prepare_arguments_v1(
                         | "--payer-keypair"
                         | "--direct-fee-basis-points"
                         | "--direct-fee-recipient"
-                        | "--series-compiler-manifest"
-                        | "--series-toolchain-manifest"
-                        | "--series-translation-validation"
-                        | "--series-shadow-stage-dir"
-                        | "--checked-candidate-work"
-                        | "--node"
-                        | "--node-archive"
+                        | "--series-shadow-source-manifest"
                         | "--output"
                 ) || values.insert(flag.to_owned(), value.to_owned()).is_some()
                 {
@@ -177,11 +140,6 @@ fn parse_series_found_prepare_arguments_v1(
                 index += 2;
             }
         }
-    }
-    if genesis_cohort == predecessor_profile.is_some() {
-        return Err(Error::new(
-            "Series Found/Prepare requires exactly one of --genesis-cohort or --predecessor-profile",
-        ));
     }
     let required = |flag: &str| {
         values
@@ -208,147 +166,749 @@ fn parse_series_found_prepare_arguments_v1(
             .parse()
             .map_err(|_| Error::new("--direct-fee-basis-points must be a decimal u16"))?,
         direct_fee_recipient,
-        compiler_manifest: canonical_regular_v1(
-            PathBuf::from(required("--series-compiler-manifest")?),
-            "--series-compiler-manifest",
+        shadow_source_manifest: canonical_regular_v1(
+            PathBuf::from(required("--series-shadow-source-manifest")?),
+            "--series-shadow-source-manifest",
         )?,
-        toolchain_manifest: canonical_regular_v1(
-            PathBuf::from(required("--series-toolchain-manifest")?),
-            "--series-toolchain-manifest",
-        )?,
-        translation_validation: canonical_regular_v1(
-            PathBuf::from(required("--series-translation-validation")?),
-            "--series-translation-validation",
-        )?,
-        shadow_stage_dir: absolute_new_v1(
-            PathBuf::from(required("--series-shadow-stage-dir")?),
-            "--series-shadow-stage-dir",
-        )?,
-        checked_candidate_work: absolute_new_v1(
-            PathBuf::from(required("--checked-candidate-work")?),
-            "--checked-candidate-work",
-        )?,
-        node: canonical_regular_v1(PathBuf::from(required("--node")?), "--node")?,
-        node_archive: canonical_regular_v1(
-            PathBuf::from(required("--node-archive")?),
-            "--node-archive",
-        )?,
-        predecessor_profile: predecessor_profile
-            .map(|path| canonical_regular_v1(path, "--predecessor-profile"))
-            .transpose()?,
-        genesis_cohort,
         output: absolute_new_v1(PathBuf::from(required("--output")?), "--output")?,
         execute,
     })
 }
 
-struct StagedSeriesShadowSourcesV1 {
-    directory: PathBuf,
-    source_manifest: PathBuf,
-    generated_include: PathBuf,
-    certificate: PathBuf,
-    compiler_manifest: PathBuf,
-    toolchain_manifest: PathBuf,
-}
-
-/// The normalization pass may replace only the compiler-context root.  The
-/// source-selected Certificate and its generated include are immutable
-/// publication inputs, so rebuilding with the final activated root must leave
-/// all generator bytes and every digest handoff exactly unchanged.
-fn require_series_shadow_preselection_invariance_v1(
-    provisional: &dclutch_series_shadow_bundle_generator::BuiltSeriesShadowSourceV1,
-    finalized: &dclutch_series_shadow_bundle_generator::BuiltSeriesShadowSourceV1,
-) -> Result<()> {
-    if provisional != finalized {
+/// Run the supported local Series entrance through one actual first Prepare.
+///
+/// The selected Shadow source manifest is decoded before Clock is observed:
+/// it owns executor capacity, while the later finalized Template owns the
+/// schedule and config bytes. The command never accepts account lists,
+/// request banks, or an executable path from its caller.
+pub(crate) fn run_series_found_prepare_v1(arguments: Vec<String>) -> Result<()> {
+    let arguments = parse_series_found_prepare_arguments_v1(arguments)?;
+    if !arguments.execute {
         return Err(Error::new(
-            "Series final parent root changed preselection Certificate, manifest, include, or build inputs",
+            "Series Found/Prepare refuses a dry run: Found, activation, and Prepare are one execution",
         ));
     }
-    let certificate: [u8; 32] = Sha256::digest(finalized.certificate).into();
-    if certificate != finalized.build_inputs.certificate.to_bytes() {
+    let source_manifest_bytes = fs::read(&arguments.shadow_source_manifest)?;
+    let source_manifest =
+        dclutch_series_shadow_bundle_generator::SeriesShadowSourceManifestV1::decode(
+            &source_manifest_bytes,
+        )
+        .map_err(|error| Error::new(format!("Series Shadow source manifest: {error:?}")))?;
+    if source_manifest.occurrence_count() != 2 {
         return Err(Error::new(
-            "Series final preselection Certificate bytes differ from its content identity",
+            "Series Found/Prepare requires a two-occurrence executor capacity",
+        ));
+    }
+
+    let plan: SuccessorPlan = serde_json::from_slice(&fs::read(&arguments.plan)?)?;
+    crate::local_mutable::authenticate_checked_local_mutable_plan_v1(&plan)?;
+    let payer = Keypair::new_from_array(crate::campaign::read_keypair_file(
+        &arguments.payer_keypair,
+        "Series Found/Prepare payer",
+    )?);
+    let registry = pubkey(&plan.registry.program_id)?;
+    let selected_release = ContentId::new(hex32(&plan.release_set_id)?)
+        .map_err(|_| Error::new("Series selected release identity"))?;
+    let direct = crate::direct_market::DirectMarketCompilerOwnedV1::load_local(
+        &arguments.plan,
+        &arguments.rpc_url,
+        registry,
+        Some(arguments.direct_fee_basis_points),
+        Some(arguments.direct_fee_recipient),
+    )?;
+    let direct_compiler = direct.compiler();
+    let activation_deadline_slot = direct_compiler.activation_deadline_slot;
+    let child_market = crate::market::demo_market_input(registry, direct_compiler)?;
+    let parent_base = crate::market::demo_market_input_base(
+        registry,
+        crate::direct_market::authenticated_resolution_release_v1(&plan)?,
+    )?;
+    let selected_manifest_entry_index = preselection_series_manifest_entry_index_v1(&decode_hex(
+        &parent_base.capability_manifest_hex,
+    )?)?;
+    let funding_ledger_slot_count =
+        selected_series_funding_ledger_slot_count_v1(selected_manifest_entry_index)?;
+    if source_manifest.funding_count() != u32::from(funding_ledger_slot_count) {
+        return Err(Error::new(
+            "Series Shadow executor funding geometry differs from the selected ledger",
+        ));
+    }
+
+    let mut rpc = Rpc::connect(&arguments.rpc_url)?;
+    let mut transactions = Vec::new();
+    let child_forge = crate::seed::KeyForge::random();
+    let child_collateral = crate::market::create_real_collateral_for_market_v1(
+        &mut rpc,
+        &payer,
+        &child_forge,
+        &child_market,
+        &mut transactions,
+    )?;
+    let m0 = crate::market::publish_future_market_immutable_records_v1(
+        &mut rpc,
+        &plan,
+        &child_market,
+        child_collateral.mint,
+        &payer,
+        &mut transactions,
+    )?;
+    let (founder, scenario) = prepare_local_series_founder_from_market_v1(
+        &mut rpc,
+        &plan,
+        &child_market,
+        child_collateral.mint,
+        payer.pubkey(),
+        payer.pubkey(),
+        child_collateral.wallet,
+    )?;
+    let founder_records =
+        publish_series_founder_records_v1(&mut rpc, registry, &payer, &founder, &mut transactions)?;
+    let m0_records = series_prepare_records_from_m0_publication_v1(&m0);
+    let m0_accounts =
+        observe_series_prepare_m0_accounts_v1(&mut rpc, &m0, &m0_records, scenario.finalized_slot)?;
+    let m0_frame = series_prepare_m0_frame_from_publication_v1(&m0, &m0_records, &m0_accounts);
+    let hydration =
+        series_prepare_hydration_records_v1(&m0, &m0_records, &founder, &founder_records)?;
+    let certificate_program = source_manifest.generated_bundle().certificate_program;
+
+    let prediction = crate::series_found_prepare_input::predict_series_parent_root_v1(
+        &plan,
+        &founder,
+        selected_release,
+        selected_manifest_entry_index,
+    )?;
+    let provisional = compile_series_prepare_pass_v1(
+        &mut rpc,
+        &plan,
+        &m0,
+        &founder,
+        &founder_records,
+        &payer,
+        child_collateral.mint,
+        child_collateral.wallet,
+        prediction,
+        funding_ledger_slot_count,
+        selected_release,
+        activation_deadline_slot,
+        certificate_program,
+        m0_frame,
+        hydration,
+        scenario.finalized_slot,
+    )?;
+    require_series_shadow_capacity_v1(source_manifest, &provisional.geometry)?;
+
+    let parent_market =
+        build_series_parent_market_v1(&plan, registry, provisional.selected.clone())?;
+    let parent_forge = crate::seed::KeyForge::random();
+    let parent_collateral = crate::market::create_real_collateral_for_market_v1(
+        &mut rpc,
+        &payer,
+        &parent_forge,
+        &parent_market,
+        &mut transactions,
+    )?;
+    let parent_collateral_mint = parent_collateral.mint;
+    let parent_root = derive_series_parent_root_v1(&plan, &parent_market, parent_collateral_mint)?;
+    let normalized = crate::series_found_prepare_input::SeriesPredictedParentRootV1 {
+        root: parent_root.root,
+        data_len:
+            dclutch_trading_sbf::series::lifecycle_policy_v5::SERIES_CONSUME_ROOT_ACCOUNT_BYTES_V5,
+    };
+    let normalized_compiled = compile_series_prepare_pass_v1(
+        &mut rpc,
+        &plan,
+        &m0,
+        &founder,
+        &founder_records,
+        &payer,
+        child_collateral.mint,
+        child_collateral.wallet,
+        normalized,
+        funding_ledger_slot_count,
+        selected_release,
+        activation_deadline_slot,
+        certificate_program,
+        m0_frame,
+        hydration,
+        scenario.finalized_slot,
+    )?;
+    crate::series_found_prepare_campaign::require_series_selection_invariance_v1(
+        &provisional,
+        &normalized_compiled,
+    )?;
+    require_series_shadow_capacity_v1(source_manifest, &normalized_compiled.geometry)?;
+
+    let founding = crate::market::execute_found_market_with_existing_collateral_v1(
+        &mut rpc,
+        &plan,
+        &parent_market,
+        &payer,
+        &parent_forge,
+        &mut transactions,
+        parent_collateral,
+    )?;
+    let activated = activate_series_parent_root_v1(
+        &mut rpc,
+        &payer,
+        &plan,
+        &parent_market,
+        &founding,
+        parent_collateral_mint,
+        &mut transactions,
+    )?;
+    if activated != parent_root {
+        return Err(Error::new(
+            "Series activated root differed from its Found prediction",
+        ));
+    }
+    let root_account = rpc.required_account(parent_root.root, "activated Series root")?;
+    let root_header = root_account
+        .data
+        .get(..dclutch_market::capability_program::CAPABILITY_ROOT_HEADER_BYTES_V1)
+        .ok_or_else(|| Error::new("activated Series root omitted its canonical header"))?
+        .to_vec();
+    let finalized_fact = crate::series_found_prepare_input::SeriesParentRootFactV1::Finalized {
+        root: parent_root.root,
+        observed_data_len: root_account.data.len(),
+        observed_lamports: root_account.lamports,
+    };
+    let final_input = build_series_found_prepare_input_v1(
+        &mut rpc,
+        &plan,
+        &m0,
+        &founder,
+        &founder_records,
+        &payer,
+        child_collateral.mint,
+        child_collateral.wallet,
+        finalized_fact,
+        funding_ledger_slot_count,
+        selected_release,
+        activation_deadline_slot,
+        selected_manifest_entry_index,
+    )?;
+    let final_minimum_slot = rpc.finalized_slot()?;
+    let final_compiled = compile_series_prepare_from_hydrated_geometry_v1(
+        &mut rpc,
+        final_input,
+        certificate_program,
+        m0_frame,
+        hydration,
+        SeriesPrepareParentRootStateV1::Finalized,
+        finalized_fact,
+        crate::series_consume_geometry::SeriesConsumePrestateV1::PreparedPrediction,
+        final_minimum_slot,
+    )?;
+    crate::series_found_prepare_campaign::require_series_selection_invariance_v1(
+        &normalized_compiled,
+        &final_compiled,
+    )?;
+    crate::series_geometry::require_series_prepare_geometry_invariance_v1(
+        &normalized_compiled.geometry.prepare_fixed_data_lengths,
+        &final_compiled.geometry.prepare_fixed_data_lengths,
+    )?;
+    require_series_shadow_capacity_v1(source_manifest, &final_compiled.geometry)?;
+
+    let logical = series_prepare_logical_addresses_v1(
+        &plan,
+        parent_root,
+        m0_frame,
+        hydration,
+        &final_compiled,
+    )?;
+    let fixed = series_prepare_hot_fixed_addresses_v1(
+        &plan,
+        &parent_market,
+        parent_root,
+        &m0,
+        &founder_records,
+        &final_compiled,
+    )?;
+    materialize_series_prepare_seal_v1(
+        &mut rpc,
+        &payer,
+        &plan,
+        &fixed,
+        &final_compiled,
+        &mut transactions,
+    )?;
+    let template = dclutch_trading::series::TemplateV3::decode(founder.admitted.template())
+        .map_err(|_| Error::new("Series runtime Template refused decode"))?;
+    let release = series_current_release_v1(
+        &final_compiled,
+        founder.admitted.template(),
+        certificate_program,
+        template.occurrence_count(),
+        funding_ledger_slot_count,
+    )?;
+    let selected = crate::series_terminal_campaign::acquire_series_prepare_from_addresses_v1(
+        &mut rpc,
+        crate::series_terminal_campaign::SeriesPrepareAddressFrameV1 {
+            fixed: &fixed,
+            logical: &logical,
+            occurrence_record: founder_records.occurrences[0].raw,
+            occurrence_staging: founder_records.occurrences[0].staging,
+            ticket_record: founder_records.tickets[0].raw,
+            ticket_staging: founder_records.tickets[0].staging,
+            siblings: &founder.admitted.siblings()[0],
+            payer: payer.pubkey(),
+            release,
+        },
+    )?;
+    let (routing_observation, tables) = crate::market::publish_routing_table(
+        &mut rpc,
+        &payer,
+        "SERIES-FIRST-PREPARE",
+        std::slice::from_ref(&selected.instruction),
+        &mut transactions,
+    )?;
+    let sent = rpc.send_v0_on_heap(
+        "execute first selected Series Prepare",
+        std::slice::from_ref(&selected.instruction),
+        &payer,
+        routing_observation,
+        &tables,
+        dclutch_market::capability_program::hot_v3::DIRECT_HOT_HEAP_FRAME_BYTES_V1,
+    )?;
+    if let Some(error) = &sent.error {
+        return Err(Error::new(format!(
+            "first selected Series Prepare refused: {error}"
+        )));
+    }
+    transactions.push(sent);
+    let poststates = authenticate_series_prepare_poststates_v1(
+        &mut rpc,
+        parent_root,
+        &founder,
+        &final_compiled,
+        logical[5],
+        child_collateral.wallet,
+        &root_header,
+    )?;
+    let output = serde_json::json!({
+        "schema": "dclutch-series-found-prepare-execution-v1",
+        "evidenceLevel": "local-validator",
+        "parentMarket": parent_root.market.to_string(),
+        "root": parent_root.root.to_string(),
+        "childMarket": Pubkey::new_from_array(final_compiled.predicted_core.identity.market_id.to_bytes()).to_string(),
+        "shadowCapacity": source_manifest.capacity_profile().as_bytes().iter().map(|byte| format!("{byte:02x}")).collect::<String>(),
+        "poststates": poststates,
+        "transactions": transactions,
+    });
+    fs::write(
+        &arguments.output,
+        format!("{}\n", serde_json::to_string_pretty(&output)?),
+    )?;
+    println!("{}", serde_json::to_string_pretty(&output)?);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_series_found_prepare_input_v1<'a>(
+    rpc: &mut Rpc,
+    plan: &'a SuccessorPlan,
+    m0: &'a FutureMarketImmutablePublicationV1,
+    founder: &'a crate::series_founder::PreparedSeriesFounderV1,
+    founder_records: &'a PublishedSeriesFounderRecordsV1,
+    payer: &Keypair,
+    collateral_mint: Pubkey,
+    collateral_wallet: Pubkey,
+    parent_root: crate::series_found_prepare_input::SeriesParentRootFactV1,
+    funding_ledger_slot_count: u16,
+    selected_release: ContentId,
+    activation_deadline_slot: u64,
+    selected_manifest_entry_index: u16,
+) -> Result<crate::series_found_prepare_campaign::SeriesFoundPrepareSelectionInputV1<'a>> {
+    crate::series_found_prepare_input::build_series_found_prepare_selection_input_v1(
+        rpc,
+        crate::series_found_prepare_input::SeriesFoundPrepareInputFactsV1 {
+            plan,
+            m0,
+            founder,
+            founder_records,
+            payer: payer.pubkey(),
+            founder_key: payer.pubkey(),
+            refund_destination: collateral_wallet,
+            founder_source: collateral_wallet,
+            collateral_mint,
+            parent_root,
+            funding_ledger_slot_count,
+            selected_release,
+            activation_deadline_slot,
+            selected_manifest_entry_index,
+        },
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compile_series_prepare_pass_v1(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    m0: &FutureMarketImmutablePublicationV1,
+    founder: &crate::series_founder::PreparedSeriesFounderV1,
+    founder_records: &PublishedSeriesFounderRecordsV1,
+    payer: &Keypair,
+    collateral_mint: Pubkey,
+    collateral_wallet: Pubkey,
+    prediction: crate::series_found_prepare_input::SeriesPredictedParentRootV1,
+    funding_ledger_slot_count: u16,
+    selected_release: ContentId,
+    activation_deadline_slot: u64,
+    certificate_program: ContentId,
+    m0_frame: SeriesPrepareM0FrameV1<'_>,
+    hydration: SeriesPrepareHydrationRecordsV1<'_>,
+    minimum_slot: u64,
+) -> Result<crate::series_found_prepare_campaign::CompiledSeriesFoundPrepareSelectionV1> {
+    let root = crate::series_found_prepare_input::SeriesParentRootFactV1::Predicted(prediction);
+    let input = build_series_found_prepare_input_v1(
+        rpc,
+        plan,
+        m0,
+        founder,
+        founder_records,
+        payer,
+        collateral_mint,
+        collateral_wallet,
+        root,
+        funding_ledger_slot_count,
+        selected_release,
+        activation_deadline_slot,
+        preselection_series_manifest_entry_index_v1(&decode_hex(
+            &crate::market::demo_market_input_base(
+                pubkey(&plan.registry.program_id)?,
+                crate::direct_market::authenticated_resolution_release_v1(plan)?,
+            )?
+            .capability_manifest_hex,
+        )?)?,
+    )?;
+    compile_series_prepare_from_hydrated_geometry_v1(
+        rpc,
+        input,
+        certificate_program,
+        m0_frame,
+        hydration,
+        SeriesPrepareParentRootStateV1::PreActivationPredicted,
+        root,
+        crate::series_consume_geometry::SeriesConsumePrestateV1::PreparedPrediction,
+        minimum_slot,
+    )
+}
+
+fn series_prepare_hydration_records_v1<'a>(
+    m0: &'a FutureMarketImmutablePublicationV1,
+    m0_records: &'a [SeriesPrepareFinalizedRecordV1<'a>],
+    founder: &'a crate::series_founder::PreparedSeriesFounderV1,
+    published: &'a PublishedSeriesFounderRecordsV1,
+) -> Result<SeriesPrepareHydrationRecordsV1<'a>> {
+    use dclutch_product::admission::PORTFOLIO_SCHEMA_ID_V2;
+    use dclutch_trading::series::{
+        SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3, SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
+        SERIES_TICKET_SCHEMA_RELEASE_ID_V3,
+    };
+    let portfolio_body = m0_body_from_publication_v1(m0, m0.portfolio.raw)?;
+    Ok(SeriesPrepareHydrationRecordsV1 {
+        template: series_prepare_founder_record_v1(
+            published.template,
+            SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
+            founder.admitted.template(),
+            "Template",
+        )?,
+        occurrence: series_prepare_founder_record_v1(
+            published.occurrences[0],
+            SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3,
+            &founder.admitted.occurrences()[0],
+            "occurrence",
+        )?,
+        ticket: series_prepare_founder_record_v1(
+            published.tickets[0],
+            SERIES_TICKET_SCHEMA_RELEASE_ID_V3,
+            &founder.admitted.tickets()[0],
+            "Ticket",
+        )?,
+        portfolio: series_prepare_record_from_m0_publication_v1(
+            m0_records,
+            PORTFOLIO_SCHEMA_ID_V2,
+            &portfolio_body,
+            "Portfolio",
+        )?,
+    })
+}
+
+fn observe_series_prepare_m0_accounts_v1(
+    rpc: &mut Rpc,
+    publication: &FutureMarketImmutablePublicationV1,
+    records: &[SeriesPrepareFinalizedRecordV1<'_>],
+    minimum_slot: u64,
+) -> Result<Vec<SeriesPrepareFinalizedAccountV1>> {
+    let mut addresses = Vec::new();
+    for address in publication.project_found {
+        let is_record = records
+            .iter()
+            .any(|record| address == record.raw || address == record.staging);
+        if address != publication.project_found[1]
+            && !publication.series_prepare_vacancies.contains(&address)
+            && !is_record
+            && !addresses.contains(&address)
+        {
+            addresses.push(address);
+        }
+    }
+    let (_, accounts) = rpc.finalized_accounts(&addresses, minimum_slot)?;
+    addresses
+        .into_iter()
+        .zip(accounts)
+        .map(|(address, account)| {
+            let account = account.ok_or_else(|| {
+                Error::new(format!(
+                    "Series M0 publisher-owned account {address} vanished before compilation"
+                ))
+            })?;
+            Ok(SeriesPrepareFinalizedAccountV1 {
+                address,
+                expected_owner: account.owner,
+            })
+        })
+        .collect()
+}
+
+fn require_series_shadow_capacity_v1(
+    manifest: dclutch_series_shadow_bundle_generator::SeriesShadowSourceManifestV1<'_>,
+    geometry: &crate::series_source::SeriesObservedGeometryV1,
+) -> Result<()> {
+    let capacity = dclutch_trading_sbf::series::release_v5::series_consume_capacity_profile_v1(
+        &geometry.consume_fixed_data_lengths,
+        geometry.consume_funding_count,
+        2,
+    )
+    .map_err(|error| Error::new(format!("Series executor capacity: {error:?}")))?;
+    if manifest.fixed_data_lengths() != &geometry.consume_fixed_data_lengths
+        || manifest.funding_count() != geometry.consume_funding_count
+        || manifest.capacity_profile() != capacity
+    {
+        return Err(Error::new(
+            "Series selected compiler geometry differs from the prebuilt executor capacity",
         ));
     }
     Ok(())
 }
 
-fn write_new_bytes_atomically_v1(path: &Path, bytes: &[u8], label: &str) -> Result<()> {
-    if path.exists() {
-        return Err(Error::new(format!(
-            "Series Found/Prepare refuses to replace existing {label} {}",
-            path.display()
-        )));
-    }
-    let temporary = path.with_extension(format!("new-{}", std::process::id()));
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temporary)
-        .map_err(|error| Error::new(format!("create staged {label}: {error}")))?;
-    file.write_all(bytes)
-        .and_then(|()| file.sync_all())
-        .map_err(|error| Error::new(format!("write staged {label}: {error}")))?;
-    fs::rename(&temporary, path)
-        .map_err(|error| Error::new(format!("publish staged {label}: {error}")))
+fn series_prepare_logical_addresses_v1(
+    plan: &SuccessorPlan,
+    parent_root: SeriesParentRootV1,
+    m0: SeriesPrepareM0FrameV1<'_>,
+    records: SeriesPrepareHydrationRecordsV1<'_>,
+    compiled: &crate::series_found_prepare_campaign::CompiledSeriesFoundPrepareSelectionV1,
+) -> Result<Vec<Pubkey>> {
+    let input = SeriesPrepareHydratorInputV1 {
+        registry: pubkey(&plan.registry.program_id)?,
+        core: pubkey(&plan.core.program_id)?,
+        trading: pubkey(&plan.trading.program_id)?,
+        custody: pubkey(&plan.custody.program_id)?,
+        rent_program: pubkey(&plan.rent_credit.program_id)?,
+        parent_root: parent_root.root,
+        parent_root_state: SeriesPrepareParentRootStateV1::Finalized,
+        m0,
+        template: records.template,
+        occurrence: records.occurrence,
+        ticket: records.ticket,
+        portfolio: records.portfolio,
+        children: &compiled.prepare_children,
+    };
+    let layout = hydrate_series_prepare_role_layout_v1(&input)?;
+    Ok(crate::series_geometry::prepare_sources_v1(&layout)
+        .iter()
+        .map(SeriesPrepareRoleSourceV1::address)
+        .collect())
 }
 
-/// Persist the exact source witnesses once, after the typed generator and its
-/// evidence owner accepted them. The checked candidate archives these files,
-/// re-emits the include from the archived source manifest, then uses only the
-/// staged include for its accelerator links.
-fn stage_series_shadow_sources_v1(
-    stage: &Path,
-    evidence: &crate::series_checked_evidence::CheckedSeriesShadowEvidenceV1,
-    built: &dclutch_series_shadow_bundle_generator::BuiltSeriesShadowSourceV1,
-) -> Result<StagedSeriesShadowSourcesV1> {
-    if stage.exists() || fs::symlink_metadata(stage).is_ok() {
-        return Err(Error::new(format!(
-            "Series Shadow stage directory already exists {}",
-            stage.display()
-        )));
-    }
-    fs::create_dir(stage)?;
-    let directory = fs::canonicalize(stage)?;
-    let source_manifest = directory.join("series_shadow_source_manifest.bin");
-    let generated_include = directory.join("series_shadow_generated.rs");
-    let certificate = directory.join("series_shadow_certificate.bin");
-    let compiler_manifest = directory.join("compiler_source_manifest.bin");
-    let toolchain_manifest = directory.join("toolchain_manifest.bin");
-    write_new_bytes_atomically_v1(&source_manifest, &built.manifest, "Shadow source manifest")?;
-    write_new_bytes_atomically_v1(
-        &generated_include,
-        &built.generated_include,
-        "Shadow generated include",
-    )?;
-    write_new_bytes_atomically_v1(&certificate, &built.certificate, "Shadow Certificate")?;
-    write_new_bytes_atomically_v1(
-        &compiler_manifest,
-        &evidence.compiler_manifest,
-        "Shadow compiler manifest",
-    )?;
-    write_new_bytes_atomically_v1(
-        &toolchain_manifest,
-        &evidence.toolchain,
-        "Shadow toolchain manifest",
-    )?;
-    crate::series_checked_evidence::authenticate_series_shadow_generated_v1(evidence, built)?;
-    Ok(StagedSeriesShadowSourcesV1 {
-        directory,
-        source_manifest,
-        generated_include,
-        certificate,
-        compiler_manifest,
-        toolchain_manifest,
+fn series_current_release_v1<'a>(
+    compiled: &'a crate::series_found_prepare_campaign::CompiledSeriesFoundPrepareSelectionV1,
+    template_bytes: &[u8],
+    certificate_program: ContentId,
+    occurrence_count: u32,
+    funding_count: u16,
+) -> Result<dclutch_trading_sbf::series::release_v5::SeriesCurrentReleaseInputV5<'a>> {
+    use dclutch_trading_sbf::series::{
+        expire_funding_artifacts_v5::SeriesExpireAccountProfileInputV5,
+        prepare_funding_artifacts_v5::SeriesPrepareAccountProfileInputV5,
+        release_v5::SeriesCurrentReleaseInputV5,
+    };
+    Ok(SeriesCurrentReleaseInputV5 {
+        template: dclutch_trading::series::template_content_id(template_bytes)
+            .map_err(|_| Error::new("Series current release Template identity"))?,
+        template_occurrence_count: occurrence_count,
+        consume_shadow_certificate_program: certificate_program,
+        prepare_profile: SeriesPrepareAccountProfileInputV5 {
+            fixed_data_lengths: &compiled.geometry.prepare_fixed_data_lengths,
+        },
+        prepare_requests: compiled.prepare_children.prepare_requests(),
+        prepare_ticket_rent_lamports: compiled.geometry.prepare_ticket_rent_lamports,
+        consume_observed_data_lengths: &compiled.geometry.consume_fixed_data_lengths,
+        consume_requests: compiled.prepare_children.consume_requests(),
+        consume_funding_count: u32::from(funding_count),
+        expire_profile: SeriesExpireAccountProfileInputV5 {
+            fixed_data_lengths: &compiled.geometry.expire_fixed_data_lengths,
+        },
+        expire_requests: compiled.prepare_children.expire_requests(),
     })
 }
 
-fn workspace_root_v1() -> Result<PathBuf> {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(4)
-        .map(Path::to_path_buf)
-        .ok_or_else(|| Error::new("Series Found/Prepare could not locate workspace root"))
+fn materialize_series_prepare_seal_v1(
+    rpc: &mut Rpc,
+    payer: &Keypair,
+    plan: &SuccessorPlan,
+    fixed: &[Pubkey; dclutch_market::capability_program::hot_v3::HOT_FIXED_ACCOUNT_COUNT_V3],
+    compiled: &crate::series_found_prepare_campaign::CompiledSeriesFoundPrepareSelectionV1,
+    transactions: &mut Vec<crate::model::TransactionEvidence>,
+) -> Result<()> {
+    use dclutch_market::capability_program::hot_v3::HOT_CAPABILITY_SEAL_ACCOUNT_V3;
+    use dclutch_operator::capability_seal_v1::{
+        CapabilitySealInstructionInputV1, capability_seal_instruction_v1,
+    };
+    use dclutch_trading::series::request::SeriesActionV3;
+
+    let seal = fixed[HOT_CAPABILITY_SEAL_ACCOUNT_V3];
+    if rpc.account(seal)?.is_some() {
+        return Ok(());
+    }
+    let descriptor = compiled
+        .selected
+        .records
+        .get(6)
+        .ok_or_else(|| Error::new("Series Prepare selected records omitted descriptor"))?;
+    let descriptor_body = decode_hex(&descriptor.body_hex)?;
+    let instruction = capability_seal_instruction_v1(CapabilitySealInstructionInputV1 {
+        trading_program: pubkey(&plan.trading.program_id)?,
+        registry_program: pubkey(&plan.registry.program_id)?,
+        trading_semantic_release: hex32(&plan.trading.semantic_release_id)?,
+        descriptor_digest: Sha256::digest(&descriptor_body).into(),
+        action: u32::from(SeriesActionV3::Prepare as u8),
+        fixed_frame: fixed,
+        payer: payer.pubkey(),
+    })
+    .map_err(|error| Error::new(format!("Series Prepare seal builder: {error:?}")))?
+    .instruction;
+    let (observation, tables) = crate::market::publish_routing_table(
+        rpc,
+        payer,
+        "SERIES-PREPARE-SEAL",
+        std::slice::from_ref(&instruction),
+        transactions,
+    )?;
+    let sent = rpc.send_v0_on_heap(
+        "materialize Series Prepare capability seal",
+        std::slice::from_ref(&instruction),
+        payer,
+        observation,
+        &tables,
+        dclutch_market::capability_program::hot_v3::DIRECT_HOT_HEAP_FRAME_BYTES_V1,
+    )?;
+    if let Some(error) = &sent.error {
+        return Err(Error::new(format!(
+            "Series Prepare capability seal refused: {error}"
+        )));
+    }
+    transactions.push(sent);
+    let live = rpc.required_account(seal, "Series Prepare capability seal")?;
+    if live.owner != pubkey(&plan.trading.program_id)? || live.executable || live.data.is_empty() {
+        return Err(Error::new(
+            "Series Prepare capability seal poststate differed",
+        ));
+    }
+    Ok(())
+}
+
+fn authenticate_series_prepare_poststates_v1(
+    rpc: &mut Rpc,
+    parent: SeriesParentRootV1,
+    founder: &crate::series_founder::PreparedSeriesFounderV1,
+    compiled: &crate::series_found_prepare_campaign::CompiledSeriesFoundPrepareSelectionV1,
+    ticket_state: Pubkey,
+    founder_source: Pubkey,
+    expected_root_header: &[u8],
+) -> Result<serde_json::Value> {
+    use dclutch_custody::token_svm::TokenAccount;
+    use dclutch_market::capability_program::CAPABILITY_ROOT_HEADER_BYTES_V1;
+    use dclutch_trading::series::{
+        admit_ticket,
+        replay::{SeriesStateV3, TicketStateV3},
+    };
+
+    let template = dclutch_trading::series::TemplateV3::decode(founder.admitted.template())
+        .map_err(|_| Error::new("Series Prepare poststate Template refused decode"))?;
+    let expected_root = SeriesStateV3::new(template.close_rent())
+        .prepare_ticket(0)
+        .map_err(|_| Error::new("Series Prepare expected root successor refused"))?
+        .encode(template.occurrence_count())
+        .map_err(|_| Error::new("Series Prepare expected root encoding refused"))?;
+    let root = rpc.required_account(parent.root, "prepared Series root")?;
+    if root.data.len() != CAPABILITY_ROOT_HEADER_BYTES_V1 + expected_root.len()
+        || root.data[..CAPABILITY_ROOT_HEADER_BYTES_V1] != *expected_root_header
+        || root.data[CAPABILITY_ROOT_HEADER_BYTES_V1..] != expected_root
+    {
+        return Err(Error::new("Series Prepare root replay poststate differed"));
+    }
+    let ticket = admit_ticket(&founder.admitted.tickets()[0])
+        .map_err(|_| Error::new("Series Prepare expected Ticket refused"))?;
+    let expected_ticket = TicketStateV3::prepared(ticket.content_id()).encode();
+    let ticket_account = rpc.required_account(ticket_state, "prepared Series Ticket state")?;
+    if ticket_account.data != expected_ticket {
+        return Err(Error::new("Series Prepare Ticket poststate differed"));
+    }
+    let projected_address = compiled.physical.realized_hoard_replay;
+    let projected = rpc.required_account(projected_address, "prepared projected Custody state")?;
+    let expected_projected = compiled
+        .prepared_projected_state
+        .encode()
+        .map_err(|_| Error::new("Series Prepare projected poststate encoding refused"))?;
+    if projected.data != expected_projected {
+        return Err(Error::new(
+            "Series Prepare projected Custody poststate differed",
+        ));
+    }
+    let replay_address = compiled.physical.normal_replay;
+    let replay = rpc.required_account(replay_address, "prepared normal Custody replay")?;
+    let expected_replay = compiled
+        .prepared_source_replay
+        .to_bytes()
+        .map_err(|_| Error::new("Series Prepare replay poststate encoding refused"))?;
+    if replay.data != expected_replay {
+        return Err(Error::new(
+            "Series Prepare Custody replay poststate differed",
+        ));
+    }
+    let source = rpc.required_account(founder_source, "Series founder source poststate")?;
+    let vault = rpc.required_account(
+        Pubkey::new_from_array(compiled.physical.prepare.escrow_vault),
+        "Series escrow vault poststate",
+    )?;
+    let source = TokenAccount::parse(&source.data)
+        .map_err(|_| Error::new("Series founder source poststate refused token decode"))?;
+    let vault = TokenAccount::parse(&vault.data)
+        .map_err(|_| Error::new("Series escrow vault poststate refused token decode"))?;
+    let principal = founder.facts.occurrences[0].hoard_principal;
+    let total_principal = principal
+        .checked_add(founder.facts.occurrences[1].hoard_principal)
+        .ok_or_else(|| Error::new("Series founder principal sum overflow"))?;
+    if vault.amount != principal
+        || source
+            .amount
+            .checked_add(vault.amount)
+            .filter(|amount| *amount == total_principal)
+            .is_none()
+    {
+        return Err(Error::new(
+            "Series Prepare escrow vault did not receive first-occurrence principal",
+        ));
+    }
+    Ok(serde_json::json!({
+        "rootRevision": 1,
+        "ticketPrepared": true,
+        "projectedCustody": projected_address.to_string(),
+        "normalCustodyReplay": replay_address.to_string(),
+        "founderSourceAtoms": source.amount,
+        "escrowVaultAtoms": vault.amount,
+    }))
 }
 
 /// The selected Trading ledger carries exactly its manifest-selected row.
@@ -369,118 +929,6 @@ fn preselection_series_manifest_entry_index_v1(parent_base_manifest: &[u8]) -> R
     let kind: [u8; 32] =
         Sha256::digest(dclutch_trading::series::SERIES_SUCCESSOR_KIND_PREIMAGE_V3).into();
     crate::selected_capability::preselection_manifest_entry_index_v1(parent_base_manifest, kind)
-}
-
-/// Run exactly the checked-candidate producer that authenticates and selects
-/// the staged Series include. It is intentionally hbox/swarm-build only; the
-/// candidate itself checks `SWARM_BUILD_INNER` before a heavy Linux link.
-fn build_selected_series_accelerator_v1(
-    arguments: &SeriesFoundPrepareArgumentsV1,
-    plan: &SuccessorPlan,
-    staged: &StagedSeriesShadowSourcesV1,
-) -> Result<(PathBuf, PathBuf)> {
-    if !arguments.execute {
-        return Err(Error::new(
-            "Series Found/Prepare refuses a dry run: selected build and validator poststates are one execution",
-        ));
-    }
-    if std::env::var_os("SWARM_BUILD_INNER").as_deref() != Some(std::ffi::OsStr::new("1")) {
-        return Err(Error::new(
-            "Series Found/Prepare selected accelerator build must run on hbox through swarm-build",
-        ));
-    }
-    let checked = plan
-        .checked_local_mutable_set
-        .as_ref()
-        .ok_or_else(|| Error::new("Series Found/Prepare requires a checked-local mutable plan"))?;
-    let root = workspace_root_v1()?;
-    let revision = Command::new("git")
-        .current_dir(&root)
-        .args(["rev-parse", "HEAD"])
-        .output()
-        .map_err(|error| Error::new(format!("Series Found/Prepare git revision: {error}")))?;
-    if !revision.status.success()
-        || std::str::from_utf8(&revision.stdout).ok().map(str::trim)
-            != Some(checked.source_revision.as_str())
-    {
-        return Err(Error::new(
-            "Series Found/Prepare HEAD differs from the baseline checked source revision",
-        ));
-    }
-    let script = root.join("tools/release/checked-release-candidate.sh");
-    let mut command = Command::new(&script);
-    command.current_dir(&root).args([
-        "--repo",
-        root.to_str()
-            .ok_or_else(|| Error::new("workspace path was not UTF-8"))?,
-        "--commit",
-        &checked.source_revision,
-        "--work",
-        arguments
-            .checked_candidate_work
-            .to_str()
-            .ok_or_else(|| Error::new("checked work path was not UTF-8"))?,
-        "--builder",
-        "hbox",
-        "--node",
-        arguments
-            .node
-            .to_str()
-            .ok_or_else(|| Error::new("node path was not UTF-8"))?,
-        "--node-archive",
-        arguments
-            .node_archive
-            .to_str()
-            .ok_or_else(|| Error::new("node archive path was not UTF-8"))?,
-        "--series-shadow-generated-include",
-        staged
-            .generated_include
-            .to_str()
-            .ok_or_else(|| Error::new("generated include path was not UTF-8"))?,
-        "--series-shadow-source-manifest",
-        staged
-            .source_manifest
-            .to_str()
-            .ok_or_else(|| Error::new("source manifest path was not UTF-8"))?,
-        "--series-shadow-compiler-source",
-        staged
-            .compiler_manifest
-            .to_str()
-            .ok_or_else(|| Error::new("compiler manifest path was not UTF-8"))?,
-        "--series-shadow-toolchain-manifest",
-        staged
-            .toolchain_manifest
-            .to_str()
-            .ok_or_else(|| Error::new("toolchain manifest path was not UTF-8"))?,
-    ]);
-    if arguments.genesis_cohort {
-        command.arg("--genesis-cohort");
-    } else {
-        command.args([
-            "--predecessor-profile",
-            arguments
-                .predecessor_profile
-                .as_ref()
-                .and_then(|path| path.to_str())
-                .ok_or_else(|| Error::new("predecessor profile path was not UTF-8"))?,
-        ]);
-    }
-    let status = command
-        .status()
-        .map_err(|error| Error::new(format!("run selected Series checked candidate: {error}")))?;
-    if !status.success() {
-        return Err(Error::new(format!(
-            "selected Series checked candidate exited {status}"
-        )));
-    }
-    let manifest = arguments
-        .checked_candidate_work
-        .join("evidence/accelerator/checked.bin");
-    let elf = arguments.checked_candidate_work.join("elf/accelerator.so");
-    Ok((
-        canonical_regular_v1(manifest, "selected accelerator checked manifest")?,
-        canonical_regular_v1(elf, "selected accelerator ELF")?,
-    ))
 }
 
 /// Finalized Registry coordinates for the immutable two-leaf Series founder
@@ -1073,6 +1521,161 @@ pub(crate) fn activate_series_parent_root_v1(
     transactions.extend(outcome.routing_transactions);
     transactions.push(outcome.activation);
     Ok(expected)
+}
+
+fn series_prepare_hot_fixed_addresses_v1(
+    plan: &SuccessorPlan,
+    parent: &MarketRunInput,
+    parent_root: SeriesParentRootV1,
+    m0: &FutureMarketImmutablePublicationV1,
+    founder_records: &PublishedSeriesFounderRecordsV1,
+    compiled: &crate::series_found_prepare_campaign::CompiledSeriesFoundPrepareSelectionV1,
+) -> Result<[Pubkey; dclutch_market::capability_program::hot_v3::HOT_FIXED_ACCOUNT_COUNT_V3]> {
+    use dclutch_market::capability_program::{
+        hot_v3::*, v4::SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V4,
+    };
+    use dclutch_trading::series::request::SeriesActionV3;
+    use dclutch_vm::capability_seal::CapabilitySealKeyV1;
+
+    let registry = pubkey(&plan.registry.program_id)?;
+    let trading = pubkey(&plan.trading.program_id)?;
+    let selected = &compiled.selected;
+    let selected_record = |index: usize, label: &str| {
+        let record = selected
+            .records
+            .get(index)
+            .ok_or_else(|| Error::new(format!("Series Prepare omitted {label}")))?;
+        pair_v1(
+            registry,
+            hex32(&record.schema_hex)?,
+            &decode_hex(&record.body_hex)?,
+        )
+    };
+    let manifest = pair_v1(
+        registry,
+        CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        &decode_hex(&parent.capability_manifest_hex)?,
+    )?;
+    let program_set = selected_record(38, "ProgramSet record")?;
+    let account_profile = selected_record(0, "Prepare AccountProfile record")?;
+    let request_profile = selected_record(1, "Prepare RequestProfile record")?;
+    let lifecycle = selected_record(2, "Prepare lifecycle record")?;
+    let strategy = selected_record(3, "Prepare strategy record")?;
+    let transition = selected_record(4, "Prepare Transition record")?;
+    let effect = selected_record(5, "Prepare Effect record")?;
+    let descriptor = selected_record(6, "Prepare descriptor record")?;
+    let product = pair_v1(
+        registry,
+        m0.product.schema,
+        &m0_body_from_publication_v1(m0, m0.product.raw)?,
+    )?;
+    let result_domain = pair_v1(
+        registry,
+        m0.domain.schema,
+        &m0_body_from_publication_v1(m0, m0.domain.raw)?,
+    )?;
+    let portfolio = pair_v1(
+        registry,
+        m0.portfolio.schema,
+        &m0_body_from_publication_v1(m0, m0.portfolio.raw)?,
+    )?;
+    let basis = m0
+        .series_prepare_records
+        .iter()
+        .find(|record| {
+            record.published.schema
+                == dclutch_product::payoff::registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3
+        })
+        .ok_or_else(|| Error::new("Series Prepare M0 publication omitted linked Basis"))?;
+    let linked_basis = pair_v1(registry, basis.published.schema, &basis.body)?;
+    let config = pair_v1(
+        registry,
+        dclutch_trading::series::SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
+        &m0_body_from_founder_v1(founder_records.template, compiled)?,
+    )?;
+
+    let mut fixed = [Pubkey::default(); HOT_FIXED_ACCOUNT_COUNT_V3];
+    let set_record = |fixed: &mut [Pubkey; HOT_FIXED_ACCOUNT_COUNT_V3],
+                      raw: usize,
+                      pair: SelectedActivationRecordPairV1| {
+        fixed[raw] = pair.raw;
+        fixed[raw + 1] = pair.staging;
+    };
+    fixed[HOT_MARKET_ACCOUNT_V3] = parent_root.market;
+    fixed[HOT_ROOT_ACCOUNT_V3] = parent_root.root;
+    set_record(&mut fixed, HOT_MANIFEST_RAW_ACCOUNT_V3, manifest);
+    set_record(&mut fixed, HOT_PROGRAM_SET_RAW_ACCOUNT_V3, program_set);
+    set_record(&mut fixed, HOT_DESCRIPTOR_RAW_ACCOUNT_V3, descriptor);
+    set_record(&mut fixed, HOT_CONFIG_RAW_ACCOUNT_V3, config);
+    set_record(
+        &mut fixed,
+        HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,
+        account_profile,
+    );
+    set_record(
+        &mut fixed,
+        HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3,
+        request_profile,
+    );
+    set_record(&mut fixed, HOT_TRANSITION_RAW_ACCOUNT_V3, transition);
+    set_record(&mut fixed, HOT_EFFECT_RAW_ACCOUNT_V3, effect);
+    set_record(&mut fixed, HOT_LIFECYCLE_RAW_ACCOUNT_V3, lifecycle);
+    set_record(&mut fixed, HOT_STRATEGY_RAW_ACCOUNT_V3, strategy);
+    fixed[HOT_ACTIVATION_CACHE_ACCOUNT_V3] = pubkey(&plan.activation)?;
+    fixed[HOT_CORE_PROGRAM_ACCOUNT_V3] = pubkey(&plan.core.program_id)?;
+    fixed[HOT_CORE_PROGRAMDATA_ACCOUNT_V3] = pubkey(&plan.core.programdata_id)?;
+    fixed[HOT_TRADING_PROGRAM_ACCOUNT_V3] = trading;
+    fixed[HOT_TRADING_PROGRAMDATA_ACCOUNT_V3] = pubkey(&plan.trading.programdata_id)?;
+    fixed[HOT_REGISTRY_PROGRAM_ACCOUNT_V3] = registry;
+    fixed[HOT_RENT_SYSVAR_ACCOUNT_V3] = sysvar::rent::ID;
+    fixed[HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3] = sysvar::instructions::ID;
+    set_record(&mut fixed, HOT_PRODUCT_RAW_ACCOUNT_V3, product);
+    set_record(&mut fixed, HOT_RESULT_DOMAIN_RAW_ACCOUNT_V3, result_domain);
+    set_record(&mut fixed, HOT_PORTFOLIO_RAW_ACCOUNT_V3, portfolio);
+    set_record(&mut fixed, HOT_LINKED_BASIS_RAW_ACCOUNT_V3, linked_basis);
+    let semantic_release = hex32(&plan.trading.semantic_release_id)?;
+    let seal_key = CapabilitySealKeyV1::new(
+        CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V4,
+        descriptor.content,
+        u32::from(SeriesActionV3::Prepare as u8),
+        semantic_release,
+        registry.to_bytes(),
+    )
+    .map_err(|error| Error::new(format!("Series Prepare capability seal key: {error:?}")))?;
+    fixed[HOT_CAPABILITY_SEAL_ACCOUNT_V3] =
+        Pubkey::find_program_address(&seal_key.seeds().as_slices(), &trading).0;
+    if fixed.iter().any(|key| *key == Pubkey::default()) {
+        return Err(Error::new(
+            "Series Prepare fixed frame omitted a coordinate",
+        ));
+    }
+    Ok(fixed)
+}
+
+fn m0_body_from_publication_v1(
+    publication: &FutureMarketImmutablePublicationV1,
+    raw: Pubkey,
+) -> Result<Vec<u8>> {
+    publication
+        .series_prepare_records
+        .iter()
+        .find(|record| record.published.raw == raw)
+        .map(|record| record.body.clone())
+        .ok_or_else(|| Error::new("Series Prepare publication omitted finalized record body"))
+}
+
+fn m0_body_from_founder_v1(
+    published: crate::runtime::PublishedRecord,
+    compiled: &crate::series_found_prepare_campaign::CompiledSeriesFoundPrepareSelectionV1,
+) -> Result<Vec<u8>> {
+    let bytes = decode_hex(&compiled.selected.config_hex)?;
+    let digest: [u8; 32] = Sha256::digest(&bytes).into();
+    if published.digest != digest {
+        return Err(Error::new(
+            "Series Prepare selected Template differed from founder publication",
+        ));
+    }
+    Ok(bytes)
 }
 
 fn evidence_key_v1(
@@ -2628,7 +3231,6 @@ mod prepare_hydrator_tests {
     #[test]
     fn found_prepare_command_rejects_unknown_flag_before_paths() {
         let error = parse_series_found_prepare_arguments_v1(vec![
-            "--genesis-cohort".to_owned(),
             "--certificate-id".to_owned(),
             "00".to_owned(),
         ])

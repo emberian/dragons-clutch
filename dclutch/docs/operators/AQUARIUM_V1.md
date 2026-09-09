@@ -105,7 +105,8 @@ public status feed.
     "prior_manifest": "/private/job/cohort-17.json",
     "general_accelerator": {"program_id": "<pubkey>", "deployment_slot": 0, "elf_sha256": "<64 lowercase hex>", "semantic_release_id": "<64 lowercase hex>"},
     "release_gate": {"path": "/private/release/RELEASE_GATE.json", "sha256": "<64 lowercase hex>"},
-    "release_pack": {"path": "/private/release/SUCCESSOR_CAMPAIGN_PACK.json", "sha256": "<64 lowercase hex>"}
+    "release_pack": {"path": "/private/release/SUCCESSOR_CAMPAIGN_PACK.json", "sha256": "<64 lowercase hex>"},
+    "public_market_bindings": {"path": "/private/release/public-market-bindings-v1.json", "sha256": "<64 lowercase hex>"}
   },
   "synthetic_actors": ["<explicit actor pubkey>"],
   "markets": [{
@@ -203,10 +204,11 @@ python3 tools/load-simulator/aquarium.py publish-status \
 ```
 
 The publisher rereads the checked cohort config, requires the exact cohort,
-limits, active inventory, synthetic-actor declaration and closed join state in
-the source status, rejects a private work path, then atomically writes the
-static file. It is a snapshot for the cut, not a promise that Pages itself
-will live-update. This command does not start a worker or make an RPC call.
+limits, active inventory, synthetic-actor declaration and each market's
+configured join state in the source status, rejects a private work path, then
+atomically writes the static file. It is a snapshot for the cut, not a promise
+that Pages itself will live-update. This command does not start a worker or
+make an RPC call.
 
 ## Public status
 
@@ -216,17 +218,24 @@ deadline, bounded counts and spend, aggregate activity outcomes, and a unique
 list of at most `limits.max_active_markets` market ids and addresses. It never
 carries a local path, RPC credential, signature transcript, or keypair path.
 
-`activity.synthetic_actors` is always `true` in v1. `join_open` is always
-`false` while the checked release material has no canonical, published
-first-admission linked-basis binding for that market. The browser must describe
-this feed as observed, untrusted real-chain activity by configured synthetic
-actors. It must not call it an official market source or claim that an ordinary
-visitor can join.
+`activity.synthetic_actors` is always `true` in v1. `join_open` may be `true`
+only when the aquarium config names and hashes the canonical
+`public-market-bindings-v1.json`, that artifact names the same cohort number and
+exact manifest digest, and it contains the inventory market. The artifact is
+emitted by `tools/cohort/public-market-bindings.py` from the cohort manifest and
+checked founding reports. A binding for an address outside the manifest is a
+refusal. The browser independently requires the same cohort identity and its
+bundled binding for that market before it renders the existing market page's
+`#join` entrance. The market page then reads current chain state and runs the
+native/WASM admission checks before asking the visitor's wallet to sign.
 
-A public join implementation can accept a visitor's wallet signature, build the
-admission route without the supervisor learning their key, report the finalized
-evidence, and allocate a fresh pinned Direct ticket pair. The current launch
-gate is its canonical published first-admission linked-basis binding in checked
-market/release material, plus its matching chain read. Until that evidence is
-accepted by the aquarium schema, a visible active market is watchable devnet
-activity rather than an open public entrance.
+The feed remains an observed, untrusted report of real-chain activity by
+configured synthetic actors. `join_open` means that the checked entrance can be
+linked; it does not authenticate current market phase or promise transaction
+acceptance.
+
+Do not set `join_open` during cohort preparation. Set it only after a fresh
+cohort has been deployed from its recorded commit, its market has a checked
+founding report, the binding artifact has been regenerated from those exact
+files, and a browser wallet admission has finalized against that market. Keep
+the flag false if any of those observations is missing.

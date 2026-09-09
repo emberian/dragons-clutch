@@ -323,7 +323,7 @@ pub(crate) fn require_series_prepare_geometry_invariance_v1(
 }
 
 impl SeriesPrepareRoleSourceV1<'_> {
-    fn address(&self) -> Pubkey {
+    pub(crate) fn address(&self) -> Pubkey {
         match self {
             Self::Finalized { address, .. } | Self::PredictedVacancy { address, .. } => *address,
         }

@@ -856,11 +856,11 @@ pub(crate) fn settle_fee(
     rpc: &mut Rpc,
     context: &SpineContextV1<'_>,
     spine: &mut SpineV1,
+    public_manifest: &Path,
     debtor: Pubkey,
     fee_payer_keypair: &Path,
 ) -> Result<()> {
     let stage = "trading: the accrued Direct fee is settled permissionlessly";
-    let public_manifest = context.work.join("fill").join("direct-trade-public.json");
     if !public_manifest.exists() {
         spine.stages.push(StageReportV1 {
             stage: stage.into(),
@@ -1180,6 +1180,194 @@ pub(crate) fn redeem(
     Ok(())
 }
 
+/// Close one emptied seller or buyer Position through the shipped wallet
+/// exterior, using the finalized Direct history as its source authority.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn close_direct_position(
+    rpc: &mut Rpc,
+    context: &SpineContextV1<'_>,
+    spine: &mut SpineV1,
+    holder: &str,
+    owner_role: &str,
+    owner: Pubkey,
+    direct_finalized: &Path,
+    fee_payer: Pubkey,
+    fee_payer_keypair: &Path,
+) -> Result<()> {
+    close_position(
+        rpc,
+        context,
+        spine,
+        holder,
+        "direct-terminal",
+        owner,
+        context.key(owner_role)?,
+        vec![
+            "--direct-evidence".to_owned(),
+            direct_finalized.display().to_string(),
+            "--plan".to_owned(),
+            context.plan.display().to_string(),
+            "--market-input".to_owned(),
+            context.market_input.display().to_string(),
+            "--campaign-evidence".to_owned(),
+            context.campaign_report.display().to_string(),
+            "--position-owner".to_owned(),
+            owner.to_string(),
+        ],
+        fee_payer,
+        fee_payer_keypair,
+    )
+}
+
+/// Close one empty admission-only Position through the same shipped exterior.
+/// The admission report remains the authority for its owner and coordinate;
+/// no Direct manifest is allowed to speak for a party that never traded.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn close_participant_position(
+    rpc: &mut Rpc,
+    context: &SpineContextV1<'_>,
+    spine: &mut SpineV1,
+    holder: &str,
+    owner: Pubkey,
+    owner_keypair: &Path,
+    participant_evidence: &Path,
+    fee_payer: Pubkey,
+    fee_payer_keypair: &Path,
+) -> Result<()> {
+    close_position(
+        rpc,
+        context,
+        spine,
+        holder,
+        "participant",
+        owner,
+        owner_keypair.to_path_buf(),
+        vec![
+            "--participant-evidence".to_owned(),
+            participant_evidence.display().to_string(),
+        ],
+        fee_payer,
+        fee_payer_keypair,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn close_position(
+    rpc: &mut Rpc,
+    context: &SpineContextV1<'_>,
+    spine: &mut SpineV1,
+    holder: &str,
+    expected_source: &str,
+    owner: Pubkey,
+    owner_keypair: PathBuf,
+    mut source_arguments: Vec<String>,
+    fee_payer: Pubkey,
+    fee_payer_keypair: &Path,
+) -> Result<()> {
+    let stage =
+        format!("redemption: {holder}'s empty protocol Position and admission record are closed");
+    let evidence = context.work.join(format!("position-close-{holder}.json"));
+    if !evidence.exists() {
+        let mut arguments = vec!["--rpc-url".to_owned(), context.rpc_url.to_owned()];
+        arguments.append(&mut source_arguments);
+        arguments.extend([
+            "--fee-payer".to_owned(),
+            fee_payer.to_string(),
+            "--position-owner-keypair".to_owned(),
+            owner_keypair.display().to_string(),
+            "--fee-payer-keypair".to_owned(),
+            fee_payer_keypair.display().to_string(),
+            "--evidence".to_owned(),
+            evidence.display().to_string(),
+            "--execute".to_owned(),
+        ]);
+        if let Err(error) = crate::user_position_close::run(arguments) {
+            spine.refused(
+                &stage,
+                &error.to_string(),
+                format!(
+                    "`local-private-validator-user-position-close-v1 --execute` refused for \
+                     {holder}: {error}. The shipped exterior authenticates either finalized \
+                     Direct terminal history or the admission-only participant history before \
+                     it opens the owner's key."
+                ),
+            );
+            return Ok(());
+        }
+    }
+
+    let document = read_json(&evidence)?;
+    let owner_text = owner.to_string();
+    let market_text = context.market.to_string();
+    let exact = document.get("schema").and_then(Value::as_str)
+        == Some("dclutch-user-position-close-evidence-v1")
+        && document.get("cluster").and_then(Value::as_str) == Some("owned-loopback")
+        && document.get("phase").and_then(Value::as_str) == Some("finalized")
+        && document.get("authorizedMutation").and_then(Value::as_bool) == Some(true)
+        && document.pointer("/plan/sourceKind").and_then(Value::as_str) == Some(expected_source)
+        && document.pointer("/plan/market").and_then(Value::as_str) == Some(market_text.as_str())
+        && document.pointer("/plan/owner").and_then(Value::as_str) == Some(owner_text.as_str())
+        && document
+            .pointer("/finalized/positionClosed")
+            .and_then(Value::as_bool)
+            == Some(true)
+        && document
+            .pointer("/finalized/admissionClosed")
+            .and_then(Value::as_bool)
+            == Some(true);
+    let position = document
+        .pointer("/plan/position")
+        .and_then(Value::as_str)
+        .and_then(|value| value.parse::<Pubkey>().ok());
+    let admission = document
+        .pointer("/plan/admission")
+        .and_then(Value::as_str)
+        .and_then(|value| value.parse::<Pubkey>().ok());
+    let (Some(position), Some(admission)) = (position, admission) else {
+        spine.refused(
+            &stage,
+            "the Position-close report omitted canonical Position/admission addresses",
+            "A completed close must name both accounts whose finalized absence it proves.".into(),
+        );
+        return Ok(());
+    };
+    let (landed, compute) = harvest_document(
+        rpc,
+        &format!("journey redemption: Position close ({holder})"),
+        &document,
+        &mut spine.transactions,
+    );
+    if !exact
+        || landed != 1
+        || rpc.account(position)?.is_some()
+        || rpc.account(admission)?.is_some()
+    {
+        spine.refused(
+            &stage,
+            "the Position-close report did not bind one finalized close and two absent accounts",
+            "A saved report is resumed only after its signature re-reads from finalized history, \
+             its source/Market/owner fields match this holder, and both closed accounts are \
+             absent on the same validator."
+                .into(),
+        );
+        return Ok(());
+    }
+    spine.executed(
+        &stage,
+        landed,
+        compute,
+        format!(
+            "`local-private-validator-user-position-close-v1 --execute` closed {holder}'s empty \
+             Position and admission atomically. The finalized receipt credits their complete \
+             live lamport balances to the Market RentCredit; the owner signs read-only."
+        ),
+    );
+    spine
+        .reports
+        .insert(format!("position-close-{holder}"), document);
+    Ok(())
+}
+
 // ---------------------------------------------------------------- retirement
 
 /// Close the fund, begin retiring, and drive the four checkpointed packets to
@@ -1205,6 +1393,8 @@ pub(crate) fn retire(
     rpc: &mut Rpc,
     context: &SpineContextV1<'_>,
     spine: &mut SpineV1,
+    direct_public: &Path,
+    direct_finalized: &Path,
     source_receipt: Pubkey,
     fee_payer: Pubkey,
     fee_payer_keypair: &Path,
@@ -1332,7 +1522,15 @@ pub(crate) fn retire(
         // 101,252 CU).
         if upkeep_ready {
             for side in ["seller", "buyer"] {
-                close_direct_maker_replay(rpc, context, spine, side, fee_payer_keypair);
+                close_direct_maker_replay(
+                    rpc,
+                    context,
+                    spine,
+                    direct_public,
+                    direct_finalized,
+                    side,
+                    fee_payer_keypair,
+                );
             }
             outcome = resume_until(
                 |_| {
@@ -1916,6 +2114,8 @@ fn close_direct_maker_replay(
     rpc: &mut Rpc,
     context: &SpineContextV1<'_>,
     spine: &mut SpineV1,
+    public: &Path,
+    finalized: &Path,
     side: &str,
     fee_payer_keypair: &Path,
 ) {
@@ -1923,9 +2123,6 @@ fn close_direct_maker_replay(
         "retirement: the {side}'s Direct maker replay is closed so the capability close can reach \
          its zero-count gate"
     ) as &str;
-    let fill = context.work.join("fill");
-    let public = fill.join("direct-trade-public.json");
-    let finalized = fill.join("direct-trade-finalized.json");
     if !public.exists() || !finalized.exists() {
         spine.stages.push(StageReportV1 {
             stage: stage.into(),

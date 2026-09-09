@@ -14816,10 +14816,12 @@ fn author_pyth_recovery_ladder_v1(
 /// Author the leading member slots of an explicit Ensemble source.
 ///
 /// The policy is canonical authority, not a caller-selected retry list: member
-/// `m` occupies attempt `m - 1`, its deadline is the source window deadline
-/// plus `m - 1`, and the material declares no post-member recovery rungs.
-/// The alternatives differ only in a tighter Pyth confidence bound, so they
-/// remain independent SourceSpecs while preserving the source graph.
+/// `m` occupies attempt `m - 1`, and each post-member recovery rung follows in
+/// order. Attempt `i` has the source window deadline plus `i`; this preserves
+/// the required strict order while the leading member deadlines remain the
+/// exact one-second spelling `RecoveryPolicyV2` authenticates. The alternatives
+/// differ only in a tighter Pyth confidence bound, so they remain independent
+/// SourceSpecs while preserving the source graph.
 fn author_pyth_ensemble_members_v1(
     ensemble: &EnsembleMarketInputV1,
     local_label: &[u8; 32],
@@ -14829,11 +14831,6 @@ fn author_pyth_ensemble_members_v1(
     window_deadline_unix_seconds: i64,
     primary_max_confidence_bps: u16,
 ) -> Result<AuthoredRecoveryLadderV1> {
-    if ensemble.rungs != 0 {
-        return Err(Error::new(
-            "the Ensemble validator producer currently authors member-only material; post-member recovery rungs need their own canonical compiler",
-        ));
-    }
     let spec = EnsembleSpecV1::new(ensemble.members, ensemble.quorum)
         .map_err(|error| Error::new(format!("ensemble dimensions: {error:?}")))?;
     spec.validate_foundable()
@@ -14844,8 +14841,18 @@ fn author_pyth_ensemble_members_v1(
         ));
     }
     let mut attempts = [None; 4];
-    let mut records = Vec::with_capacity(usize::from(spec.first_rung_index()));
-    let mut entries = Vec::with_capacity(usize::from(spec.first_rung_index()).saturating_add(1));
+    let attempt_count = spec
+        .first_rung_index()
+        .checked_add(ensemble.rungs)
+        .ok_or_else(|| Error::new("Ensemble attempt count overflow"))?;
+    if usize::from(attempt_count) > attempts.len() {
+        return Err(Error::new(format!(
+            "Ensemble members plus recovery rungs exceed the policy capacity of {} attempts",
+            attempts.len()
+        )));
+    }
+    let mut records = Vec::with_capacity(usize::from(attempt_count));
+    let mut entries = Vec::with_capacity(usize::from(attempt_count).saturating_add(1));
     let mut member = 1_u8;
     while member < spec.members() {
         let slot = member - 1;
@@ -14913,15 +14920,89 @@ fn author_pyth_ensemble_members_v1(
             .checked_add(1)
             .ok_or_else(|| Error::new("ensemble member overflow"))?;
     }
-    let count = spec.first_rung_index();
-    let policy = RecoveryPolicyV2::new(primary.capacity_profile_id(), attempts, count)
+    let mut rung = 0_u8;
+    while rung < ensemble.rungs {
+        let slot = spec
+            .first_rung_index()
+            .checked_add(rung)
+            .ok_or_else(|| Error::new("Ensemble recovery slot overflow"))?;
+        let source_ordinal = spec
+            .members()
+            .checked_add(rung)
+            .ok_or_else(|| Error::new("Ensemble recovery source ordinal overflow"))?;
+        let confidence = primary_max_confidence_bps
+            .checked_sub(u16::from(source_ordinal))
+            .ok_or_else(|| {
+                Error::new(
+                    "the primary Pyth confidence ceiling leaves no distinct recovery-rung configuration",
+                )
+            })?;
+        let adapter = PythAdapterConfigV1::new(feed_id, exponent, confidence).map_err(|error| {
+            Error::new(format!("ensemble recovery rung {rung} adapter: {error:?}"))
+        })?;
+        let adapter_bytes = adapter.to_bytes();
+        let source = SourceSpecV1::new(
+            primary.domain_id(),
+            primary.unit_id(),
+            primary.provider_release_id(),
+            primary.access_profile(),
+            SourceContentId::new(record_identity(&adapter_bytes)).map_err(|error| {
+                Error::new(format!(
+                    "ensemble recovery rung {rung} adapter identity: {error:?}"
+                ))
+            })?,
+            primary.capacity_profile_id(),
+        );
+        let source_bytes = source.to_bytes();
+        let allocation = demo_id(
+            "funding-allocation/ensemble-recovery-rung",
+            &[local_label, &[rung]],
+        );
+        attempts[usize::from(slot)] = Some(
+            RecoveryAttemptV2::new(
+                SourceContentId::new(record_identity(&source_bytes)).map_err(|error| {
+                    Error::new(format!(
+                        "ensemble recovery rung {rung} source identity: {error:?}"
+                    ))
+                })?,
+                primary.provider_release_id(),
+                window_deadline_unix_seconds
+                    .checked_add(i64::from(slot))
+                    .ok_or_else(|| Error::new("Ensemble recovery deadline overflow"))?,
+                SourceContentId::new(allocation).map_err(|error| {
+                    Error::new(format!(
+                        "ensemble recovery rung {rung} allocation identity: {error:?}"
+                    ))
+                })?,
+            )
+            .map_err(|error| {
+                Error::new(format!(
+                    "ensemble recovery rung {rung} policy attempt: {error:?}"
+                ))
+            })?,
+        );
+        records.push(crate::model::RecoverySourceRecordsV1 {
+            source_spec_hex: hex(&source_bytes),
+            pyth_adapter_config_hex: hex(&adapter_bytes),
+        });
+        let mut kind = [0_u8; 32];
+        kind[31] = source_ordinal;
+        entries.push((kind, allocation));
+        rung = rung
+            .checked_add(1)
+            .ok_or_else(|| Error::new("Ensemble recovery rung overflow"))?;
+    }
+    let policy = RecoveryPolicyV2::new(primary.capacity_profile_id(), attempts, attempt_count)
         .map_err(|error| Error::new(format!("ensemble recovery policy: {error:?}")))?;
     policy
         .validate_ensemble_membership(spec, ensemble.rungs, window_deadline_unix_seconds)
         .map_err(|error| Error::new(format!("ensemble membership policy: {error:?}")))?;
     let policy_bytes = policy.to_bytes();
     let mut exhaustion_kind = [0_u8; 32];
-    exhaustion_kind[31] = spec.members();
+    exhaustion_kind[31] = spec
+        .members()
+        .checked_add(ensemble.rungs)
+        .ok_or_else(|| Error::new("Ensemble exhaustion kind overflow"))?;
     entries.push((exhaustion_kind, record_identity(&policy_bytes)));
     Ok(AuthoredRecoveryLadderV1 {
         policy_hex: hex(&policy_bytes),
@@ -16549,6 +16630,114 @@ pub(crate) mod tests {
         even_quorum.ensemble.as_mut().expect("ensemble").quorum = 2;
         let refusal = validate_market_input(&even_quorum).expect_err("even quorum refuses");
         assert!(format!("{refusal}").contains("quorum"), "got {refusal}");
+    }
+
+    /// Post-member recovery is one continuation of the Ensemble policy, not a
+    /// second ladder. The compiler must keep the member prefix canonical,
+    /// append every bought rung, and quote enough Source reserve for the
+    /// longer failure branch before founding can mint liabilities.
+    #[test]
+    fn ensemble_recovery_rungs_follow_members_and_precommit_failure_capital() {
+        let registry = Pubkey::new_from_array([0x42; 32]);
+        let direct = crate::direct_market::DirectMarketCompilerOwnedV1::for_test(
+            registry,
+            crate::direct_market::DirectDeploymentWidthsV1::new(1_141_117, 971_053, 934_037)
+                .expect("deployment widths"),
+        );
+        let shape = LocalMarketShapeV1 {
+            ensemble: Some(EnsembleMarketInputV1 {
+                members: 3,
+                quorum: 1,
+                rungs: 2,
+            }),
+            ..LocalMarketShapeV1::default()
+        };
+        let input = demo_market_input_shaped(registry, direct.compiler(), &shape)
+            .expect("three-member Ensemble with two recovery rungs");
+        validate_market_input(&input).expect("canonical Ensemble recovery input validates");
+
+        let policy_bytes = decode_hex(&input.recovery_policy_hex).expect("policy");
+        let policy = RecoveryPolicyV2::decode(&policy_bytes).expect("policy");
+        assert_eq!(policy.attempt_count(), 4, "two members precede two rungs");
+        assert_eq!(input.recovery_source_records.len(), 4);
+        let window =
+            WindowSpecV1::decode(&decode_hex(&input.window_spec_hex).expect("window bytes"))
+                .expect("window");
+        let primary_deadline = window
+            .end_unix_seconds()
+            .checked_add(i64::from(window.max_age_seconds()))
+            .expect("bounded primary deadline");
+        for attempt_index in 0_u8..4 {
+            assert_eq!(
+                policy
+                    .attempt(attempt_index)
+                    .expect("canonical attempt")
+                    .deadline_unix_seconds(),
+                primary_deadline + i64::from(attempt_index),
+                "members and recovery rungs form one strict canonical order"
+            );
+            let source_bytes = decode_hex(
+                &input.recovery_source_records[usize::from(attempt_index)].source_spec_hex,
+            )
+            .expect("attempt source bytes");
+            assert_eq!(
+                record_identity(&source_bytes),
+                policy
+                    .attempt(attempt_index)
+                    .expect("canonical attempt")
+                    .source_spec_id()
+                    .to_bytes(),
+                "every funded attempt names the SourceSpec the producer publishes"
+            );
+        }
+
+        let compiled = compile_market_bodies(registry, &input, Pubkey::new_unique())
+            .expect("Ensemble recovery market bodies");
+        let material = SourceMaterialV3::decode(&compiled.source).expect("material");
+        assert_eq!(material.ensemble().members(), 3);
+        assert_eq!(material.ensemble_rungs(), 2);
+        policy
+            .validate_ensemble_membership(
+                material.ensemble(),
+                material.ensemble_rungs(),
+                primary_deadline,
+            )
+            .expect("policy owns both the member prefix and recovery suffix");
+        let capital = EnsembleTerminalCapitalPlanV1::for_material(material, 4, 10, 10, 11)
+            .expect("bounded terminal capital");
+        assert_eq!(capital.member_seat_count(), 3);
+        assert_eq!(capital.maximum_failure_certificate_count(), 4);
+        assert_eq!(capital.member_seat_rent_lamports(), 30);
+        assert_eq!(capital.source_creation_reserve_lamports(), 40);
+
+        let manifest_bytes = decode_hex(&input.capability_manifest_hex).expect("manifest bytes");
+        let manifest = CapabilityManifestV1::decode(&manifest_bytes).expect("manifest");
+        assert_eq!(
+            manifest.entry_count(),
+            7,
+            "Direct plus four attempts, exhaustion, and failure are all funded"
+        );
+        let material_id = record_identity(&compiled.source);
+        let material_entry = (0..manifest.entry_count())
+            .map(|index| manifest.entry(index).expect("manifest entry"))
+            .find(|entry| entry.config_id().to_bytes() == material_id)
+            .expect("Source-material funding row");
+        let amounts = material_entry.funding_quote().amounts();
+        let rent = solana_program::rent::Rent::default();
+        let exact = EnsembleTerminalCapitalPlanV1::for_material(
+            material,
+            policy.attempt_count(),
+            rent.minimum_balance(RESOLUTION_CERTIFICATE_BYTES_V2),
+            rent.minimum_balance(RESOLUTION_CERTIFICATE_BYTES_V2),
+            rent.minimum_balance(ENSEMBLE_FOLD_RECEIPT_V1_BYTES),
+        )
+        .expect("exact chain-rent capital");
+        assert_eq!(amounts.rent().amount(), exact.member_seat_rent_lamports());
+        assert_eq!(
+            amounts.creation().amount(),
+            exact.source_creation_reserve_lamports(),
+            "the immutable quote carries the maximum exclusive failure path"
+        );
     }
 
     /// Each way of authoring a ladder wrong refuses, and each refusal says which.

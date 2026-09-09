@@ -54,8 +54,9 @@ use dclutch_source::resolution::{
     RESOLUTION_CERTIFICATE_BYTES_V2, ResolutionCertificateKindV2, ResolutionCertificateV2,
 };
 use dclutch_source::{
-    SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
-    SourceResolutionPhaseV1, SourceResolutionStateV2, WINDOW_SPEC_SCHEMA_ID_V1, WindowSpecV1,
+    SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_RESOLUTION_STATE_BYTES_V2,
+    SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2, SourceMaterialV3, SourceResolutionPhaseV1,
+    SourceResolutionStateV2, WINDOW_SPEC_SCHEMA_ID_V1, WindowSpecV1,
 };
 
 use crate::campaign::{
@@ -102,7 +103,7 @@ pub(crate) fn devnet_usage() -> &'static str {
 
 pub(crate) fn usage() -> &'static str {
     "dclutch-local-successor-bootstrap local-private-validator-commit-deadline-failure-v1 --rpc-url http://127.0.0.1:PORT --plan ABSOLUTE_JSON --evidence ABSOLUTE_JSON --market PUBKEY --terminal-sequence U64 --worker PUBKEY --output ABSOLUTE_JSON [--wait --max-wait-seconds I64] [--execute --worker-keypair ABSOLUTE_JSON]\n\
-     \nOne funded deadline walk: the market's window closed unobserved and a stranger commits the Product's own failure selector, paid the bounty the market disclosed at founding. Which arm -- a no-ladder market spending its primary deadline, or a walked ladder standing Exhausted -- is read off the Source's own phase, and the selector off the finalized result domain, so nothing economic is passed in: the driver assembles the 22-account frame the relay contract declares, derives the ResolutionFailure seat, and refuses by name while the primary deadline has not passed or while a funded rung still stands. --wait sleeps to the deadline through one bounded wait against the chain's own clock and refuses a target further away than --max-wait-seconds; it never warps. Preflight opens no key. Execute pre-funds the seat if it is short, sends one transaction, and reads the Source and the certificate back to prove the failure selector was committed."
+     \nOne funded deadline walk: the market's window closed unobserved and a stranger commits the Product's own failure selector, paid the bounty the market disclosed at founding. Which arm -- a no-ladder market spending its primary deadline, or a walked ladder standing Exhausted -- is read off the Source's own phase, and the selector off the finalized result domain, so nothing economic is passed in: the driver assembles the 22-account frame the relay contract declares, derives the ResolutionFailure seat, and refuses by name while the primary deadline has not passed or while a funded rung still stands. --wait sleeps to the deadline through one bounded wait against the chain's own clock and refuses a target further away than --max-wait-seconds; it never warps. Preflight opens no key. Execute preserves the single-source same-transaction prepay; an Ensemble spends only its pre-liability Source reserve. The driver then reads the Source and certificate back to prove the failure selector was committed."
 }
 
 /// Parsed command line.
@@ -138,6 +139,8 @@ struct PlanV1 {
     decision: DeadlineFailureDecisionV1,
     observed_unix_seconds: i64,
     seat_shortfall_lamports: u64,
+    source_reserve_funding: bool,
+    source_reserve_available_lamports: u64,
     frame_accounts: usize,
 }
 
@@ -217,11 +220,12 @@ pub(crate) fn run_v1(
         )));
     }
 
-    // The seat is allocated by the program from lamports it already holds, so a
-    // short seat is pre-funded in the SAME transaction rather than in a second
-    // one nobody would remember to send. Exactly the shortfall.
+    // Single-source markets retain their existing same-transaction prepay.
+    // An Ensemble has already capitalized this physical output on its Source
+    // before Core accepted liabilities, so a late worker transfer would hide
+    // an underfunded founding and is deliberately absent.
     let mut instructions = Vec::with_capacity(2);
-    if plan.seat_shortfall_lamports != 0 {
+    if !plan.source_reserve_funding && plan.seat_shortfall_lamports != 0 {
         instructions.push(transfer(
             &worker.pubkey(),
             &plan.certificate,
@@ -415,6 +419,14 @@ fn plan(rpc: &mut Rpc, arguments: &ArgumentsV1, expected: ExpectedClusterV1) -> 
     let source_account = rpc.required_account(source_state, "Source resolution state")?;
     let source = SourceResolutionStateV2::decode(&source_account.data)
         .map_err(|error| Error::new(format!("Source resolution state: {error:?}")))?;
+    let material_account = rpc.required_account(material.raw, "SourceMaterialV3 record")?;
+    let source_material = SourceMaterialV3::decode(&material_account.data)
+        .map_err(|error| Error::new(format!("SourceMaterialV3 record: {error:?}")))?;
+    if source.material_id().to_bytes() != material.digest {
+        return Err(Error::new(
+            "Source state does not name the finalized SourceMaterialV3 record",
+        ));
+    }
 
     let window_account = rpc.required_account(window.raw, "WindowSpecV1 record")?;
     let window_spec = WindowSpecV1::decode(&window_account.data)
@@ -480,6 +492,15 @@ fn plan(rpc: &mut Rpc, arguments: &ArgumentsV1, expected: ExpectedClusterV1) -> 
         .account(built.certificate)?
         .map_or(0, |seat| seat.lamports);
     let seat_shortfall_lamports = required.saturating_sub(held);
+    let source_reserve_funding = !source_material.ensemble().is_single();
+    let source_reserve_available_lamports = source_account
+        .lamports
+        .saturating_sub(rent.minimum_balance(SOURCE_RESOLUTION_STATE_BYTES_V2));
+    if source_reserve_funding && source_reserve_available_lamports < seat_shortfall_lamports {
+        return Err(Error::new(format!(
+            "Ensemble Source reserve holds {source_reserve_available_lamports} lamports above its rent floor but the canonical failure certificate needs {seat_shortfall_lamports}; founding did not prepay this liability"
+        )));
+    }
 
     Ok(PlanV1 {
         frame_accounts: built.frame_accounts,
@@ -496,6 +517,8 @@ fn plan(rpc: &mut Rpc, arguments: &ArgumentsV1, expected: ExpectedClusterV1) -> 
         decision,
         observed_unix_seconds: observed,
         seat_shortfall_lamports,
+        source_reserve_funding,
+        source_reserve_available_lamports,
     })
 }
 
@@ -529,6 +552,18 @@ fn report(plan: &PlanV1) {
     println!("terminal sequence    {}", plan.terminal_sequence);
     println!("certificate seat     {}", plan.certificate);
     println!("seat shortfall       {}", plan.seat_shortfall_lamports);
+    println!(
+        "certificate funding  {}",
+        if plan.source_reserve_funding {
+            "pre-liability Source reserve"
+        } else {
+            "same-transaction worker prepay"
+        }
+    );
+    println!(
+        "Source reserve       {} lamports above rent floor",
+        plan.source_reserve_available_lamports
+    );
     println!("funding ledger       {}", plan.funding_ledger);
     println!("frame accounts       {}", plan.frame_accounts);
 }
@@ -564,6 +599,12 @@ fn write_evidence(
         "terminalSequence": plan.terminal_sequence,
         "certificate": plan.certificate.to_string(),
         "certificateSeatShortfallLamports": plan.seat_shortfall_lamports,
+        "certificateFunding": if plan.source_reserve_funding {
+            "pre-liability-source-reserve"
+        } else {
+            "same-transaction-worker-prepay"
+        },
+        "sourceReserveAvailableLamports": plan.source_reserve_available_lamports,
         "fundingLedger": plan.funding_ledger.to_string(),
         "frameAccounts": plan.frame_accounts,
         "workPaid": work_paid,

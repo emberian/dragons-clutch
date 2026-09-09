@@ -23,7 +23,7 @@ use dclutch_core_contract::ContentId;
 use dclutch_market::capability_program::v4::{ArtifactReferenceV4, CapabilityProgramV4};
 use dclutch_vm::account_profile::v2::{
     self as ap, AccountPrestateV2, AccountProfileV2, TrustedBuiltinIdentityV2,
-    TrustedEnvironmentV2, TrustedIdentityEnvironmentV2,
+    TrustedEnvironmentV2,
     encode::{
         AccountAliasInputV2, AccountCoordinateV2, AccountOperationInputV2,
         AccountRuleWithPrestateInputV2, DynamicFixedSpanInputV2, RegisterGeometryV2,
@@ -89,19 +89,24 @@ pub fn build_dynamic_retirement_bundle_v1(
         return Err(Error::ActionGeometry);
     }
     max_accounts(maximum_support)?;
-    let profile = account_profile(input.account_profile.logical_data_lengths, maximum_support)?;
+    let counter = super::resource_counter::enabled(input.root_schema, input.root_state_bytes)?;
+    let profile = account_profile(
+        input.account_profile.logical_data_lengths,
+        maximum_support,
+        counter,
+    )?;
     super::selected_bundle_v6::assemble_selected_bundle_v6(
         input,
         profile,
-        request_profile(maximum_support)?,
-        transition()?,
-        effect(maximum_support)?,
+        request_profile(maximum_support, counter)?,
+        transition(counter)?,
+        effect(maximum_support, counter)?,
         hash(b"dclutch/schema/rational-lifecycle-dynamic-retirement-v1").to_bytes(),
         REQUEST_PROFILE_V3_SCHEMA_RELEASE_ID,
     )
 }
 
-fn account_profile(lengths: &[u32], maximum_support: u32) -> Result<Vec<u8>> {
+fn account_profile(lengths: &[u32], maximum_support: u32, counter: bool) -> Result<Vec<u8>> {
     if lengths.len() != FIXED {
         return Err(Error::AccountObservation);
     }
@@ -109,6 +114,9 @@ fn account_profile(lengths: &[u32], maximum_support: u32) -> Result<Vec<u8>> {
     for index in 0..FIXED {
         let mut rule =
             super::account_profile::rule(LifecycleActionV2::RetireReceipt, index, lengths)?;
+        if index == 0 {
+            super::resource_counter::root_rule(&mut rule, counter)?;
+        }
         rule.alias = AccountAliasInputV2::SelfCoordinate;
         let opaque = matches!(index, 6 | 7 | 8 | 9 | 10 | 13 | 17 | 18 | 20 | 23 | 24);
         let prestate = match index {
@@ -118,8 +126,9 @@ fn account_profile(lengths: &[u32], maximum_support: u32) -> Result<Vec<u8>> {
                 AccountPrestateV2::AdapterAuthenticatedVariableData
             }
             14 => {
-                rule.data_length = u32n(dclutch_claims::rational_kernel::DESCRIPTOR_HEADER_BYTES)?;
-                AccountPrestateV2::AdapterAuthenticatedVariableData
+                // Claims owns descriptor content authentication and support.
+                rule.data_length = 0;
+                AccountPrestateV2::AuthenticatedOpaqueReadonlyData
             }
             _ if opaque => {
                 rule.data_length = 0;
@@ -147,11 +156,17 @@ fn account_profile(lengths: &[u32], maximum_support: u32) -> Result<Vec<u8>> {
         maximum: max_accounts(maximum_support)?,
         step: u32n(LIFECYCLE_VACANCY_ACCOUNT_COUNT_V2)?,
     }];
-    let operations = [AccountOperationInputV2::ProjectTailCountU32 {
+    let mut operations = vec![AccountOperationInputV2::ProjectTailCountU32 {
         account: AccountCoordinateV2::fixed(4),
         destination: ScalarCoordinateV2::common(PRODUCT_SCALAR),
         data_offset: u32n(dclutch_product::payoff::runtime_v3::BASIS_WIDTH_OFFSET_V3)?,
     }];
+    super::resource_counter::project(
+        &mut operations,
+        usize::from(SCALARS),
+        usize::from(IDENTITIES),
+        counter,
+    )?;
     let size = ap::DYNAMIC_FIXED_SPAN_HEADER_BYTES
         + ap::DYNAMIC_FIXED_SPAN_ENTRY_BYTES
         + (rules.len() + span_rules.len()) * ap::RULE_BYTES
@@ -160,16 +175,22 @@ fn account_profile(lengths: &[u32], maximum_support: u32) -> Result<Vec<u8>> {
     let mut output = vec![0; size];
     encode_account_profile_with_dynamic_fixed_span_v2_atomic(
         TrustedEnvironmentV2::None,
-        TrustedIdentityEnvironmentV2::None,
+        super::resource_counter::trusted_identity(usize::from(IDENTITIES), counter)?,
         TrustedBuiltinIdentityV2::None,
         &spans,
         &rules,
         &span_rules,
         &operations,
         RegisterGeometryV2 {
-            common_scalars: SCALARS,
+            common_scalars: u16n(super::resource_counter::scalar_count(
+                usize::from(SCALARS),
+                counter,
+            )?)?,
             item_scalar_stride: 0,
-            common_identities: IDENTITIES,
+            common_identities: u16n(super::resource_counter::identity_count(
+                usize::from(IDENTITIES),
+                counter,
+            )?)?,
             item_identity_stride: 0,
         },
         &mut scratch,
@@ -179,7 +200,7 @@ fn account_profile(lengths: &[u32], maximum_support: u32) -> Result<Vec<u8>> {
     Ok(output)
 }
 
-fn request_profile(_maximum_support: u32) -> Result<Vec<u8>> {
+fn request_profile(_maximum_support: u32, counter: bool) -> Result<Vec<u8>> {
     let ops = [
         R::require_u64(C::fixed(0), u64::from_le_bytes(DYNAMIC_RETIREMENT_MAGIC_V1)),
         R::require_u16(C::fixed(8), 1),
@@ -200,9 +221,15 @@ fn request_profile(_maximum_support: u32) -> Result<Vec<u8>> {
         RequestGeometryV1::new(
             u32n(DYNAMIC_RETIREMENT_PREFIX_BYTES_V1)?,
             0,
-            SCALARS,
+            u16n(super::resource_counter::scalar_count(
+                usize::from(SCALARS),
+                counter,
+            )?)?,
             0,
-            IDENTITIES,
+            u16n(super::resource_counter::identity_count(
+                usize::from(IDENTITIES),
+                counter,
+            )?)?,
             0,
         ),
         &ops,
@@ -230,21 +257,33 @@ fn request_profile(_maximum_support: u32) -> Result<Vec<u8>> {
     Ok(output)
 }
 
-fn transition() -> Result<Vec<u8>> {
+fn transition(counter: bool) -> Result<Vec<u8>> {
     // Preserve both request-derived transport scalars. Claims checks their
     // meaning from the authenticated complete child; no economic fact is minted.
-    let ops = [
+    let mut ops = vec![
         InstructionV3::nonzero(ScalarRegisterV3::common(SPAN_SCALAR)),
         InstructionV3::nonzero(ScalarRegisterV3::common(BYTES_SCALAR)),
     ];
+    super::resource_counter::transition(
+        &mut ops,
+        LifecycleActionV2::RetireReceipt,
+        usize::from(SCALARS),
+        counter,
+    )?;
     let size = vm::HEADER_BYTES + ops.len() * vm::INSTRUCTION_BYTES;
     let mut scratch = vec![0; size];
     let mut output = vec![0; size];
     encode_program_atomic(
         ProgramGeometryV3 {
-            common_scalars: SCALARS,
+            common_scalars: u16n(super::resource_counter::scalar_count(
+                usize::from(SCALARS),
+                counter,
+            )?)?,
             item_scalar_stride: 0,
-            common_identities: IDENTITIES,
+            common_identities: u16n(super::resource_counter::identity_count(
+                usize::from(IDENTITIES),
+                counter,
+            )?)?,
             item_identity_stride: 0,
         },
         &ops,
@@ -257,7 +296,7 @@ fn transition() -> Result<Vec<u8>> {
     Ok(output)
 }
 
-fn effect(maximum_support: u32) -> Result<Vec<u8>> {
+fn effect(maximum_support: u32, counter: bool) -> Result<Vec<u8>> {
     let routes = [RouteInputV3 {
         role: FixedRole::Claims,
         kind: RouteKindV3::Once,
@@ -271,20 +310,28 @@ fn effect(maximum_support: u32) -> Result<Vec<u8>> {
         fixed_request: &[],
         item_request: &[],
     }];
-    let size = e3::HEADER_BYTES + e3::ROUTE_BYTES;
+    let mut ops = Vec::new();
+    super::resource_counter::effect(&mut ops, usize::from(SCALARS), counter)?;
+    let size = e3::HEADER_BYTES + e3::ROUTE_BYTES + ops.len() * e3::OPERATION_BYTES;
     let mut scratch = vec![0; size];
     let mut base = vec![0; size];
     encode_effect_program_v3_atomic(
         EffectGeometryV3 {
             fixed_accounts: u16n(FIXED)?,
             item_account_stride: 0,
-            common_scalars: SCALARS,
+            common_scalars: u16n(super::resource_counter::scalar_count(
+                usize::from(SCALARS),
+                counter,
+            )?)?,
             item_scalar_stride: 0,
-            common_identities: IDENTITIES,
+            common_identities: u16n(super::resource_counter::identity_count(
+                usize::from(IDENTITIES),
+                counter,
+            )?)?,
             item_identity_stride: 0,
         },
         &routes,
-        &[],
+        &ops,
         &[],
         &mut scratch,
         &mut base,
@@ -328,6 +375,10 @@ pub(super) fn validate_dynamic_retirement_bundle_v1(
     bundle: &RationalLifecycleSelectedBundleV6,
 ) -> Result<()> {
     let descriptor = CapabilityProgramV4::decode(&bundle.descriptor).map_err(Error::Descriptor)?;
+    let counter = super::resource_counter::enabled(
+        descriptor.root_schema().to_bytes(),
+        descriptor.root_state_bytes(),
+    )?;
     let account =
         AccountProfileV2::decode(&bundle.account_profile).map_err(Error::AccountProfile)?;
     if bundle.action != LifecycleActionV2::RetireReceipt
@@ -348,10 +399,10 @@ pub(super) fn validate_dynamic_retirement_bundle_v1(
                 .map_err(Error::AccountProfile)
         })
         .collect::<Result<Vec<_>>>()?;
-    if bundle.account_profile != account_profile(&lengths, maximum_support)?
-        || bundle.request_profile != request_profile(maximum_support)?
-        || bundle.transition != transition()?
-        || bundle.effect != effect(maximum_support)?
+    if bundle.account_profile != account_profile(&lengths, maximum_support, counter)?
+        || bundle.request_profile != request_profile(maximum_support, counter)?
+        || bundle.transition != transition(counter)?
+        || bundle.effect != effect(maximum_support, counter)?
     {
         return Err(Error::ArtifactGeometry);
     }

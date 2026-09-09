@@ -1,9 +1,9 @@
 //! Market-neutral Hot V6 lifecycle family request.
 //!
 //! V6 keeps the Claims-owned V2 child layout but mints a distinct family
-//! identity. Its artifact geometry reserves separate identities for the
-//! authenticated descriptor account and the request-carried descriptor field;
-//! the transition must require them equal before any child effect executes.
+//! identity. The descriptor field is a body digest passed to the existing
+//! native Claims finalized-record admission; Registry account keys never
+//! substitute for content identities in the artifact register bank.
 
 use super::*;
 
@@ -144,61 +144,10 @@ pub const RATIONAL_LIFECYCLE_HOT_SCHEMA_RELEASE_ID_V6: [u8; 32] = [
     0xd2, 0x8e, 0x97, 0x9d, 0x5f, 0xf5, 0xbd, 0xb8, 0xa5, 0xbe, 0x18, 0x39, 0x76, 0xa3, 0x8f, 0x4b,
 ];
 
-/// Common identity containing the descriptor ID carried by the family request.
-pub const RATIONAL_LIFECYCLE_IDENTITY_REQUEST_DESCRIPTOR_V6: usize = 10;
-/// V6 common identity width: ten V3 identities plus request descriptor evidence.
-pub const RATIONAL_LIFECYCLE_HOT_COMMON_IDENTITIES_V6: usize = 11;
-
-/// V6 flat register geometry with a separate request-descriptor identity.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RationalLifecycleHotRegisterLayoutV6 {
-    coordinate_count: usize,
-}
-
-impl RationalLifecycleHotRegisterLayoutV6 {
-    /// Construct exact V6 geometry.
-    pub const fn new(coordinate_count: usize) -> Self {
-        Self { coordinate_count }
-    }
-
-    /// Exact common plus flattened coordinate identity width.
-    pub const fn identity_count(self) -> Option<usize> {
-        match self
-            .coordinate_count
-            .checked_mul(hot_v3::RATIONAL_LIFECYCLE_HOT_ITEM_IDENTITIES_V3)
-        {
-            Some(items) => RATIONAL_LIFECYCLE_HOT_COMMON_IDENTITIES_V6.checked_add(items),
-            None => None,
-        }
-    }
-
-    /// Exact common plus flattened coordinate scalar width.
-    pub const fn scalar_count(self) -> Option<usize> {
-        hot_v3::RationalLifecycleHotRegisterLayoutV3::new(self.coordinate_count).scalar_count()
-    }
-
-    /// V6 identity coordinate for one row field.
-    pub const fn coordinate_identity(self, row: usize, field: usize) -> Option<usize> {
-        if row >= self.coordinate_count
-            || field >= hot_v3::RATIONAL_LIFECYCLE_HOT_ITEM_IDENTITIES_V3
-        {
-            return None;
-        }
-        match row.checked_mul(hot_v3::RATIONAL_LIFECYCLE_HOT_ITEM_IDENTITIES_V3) {
-            Some(start) => match RATIONAL_LIFECYCLE_HOT_COMMON_IDENTITIES_V6.checked_add(start) {
-                Some(base) => base.checked_add(field),
-                None => None,
-            },
-            None => None,
-        }
-    }
-
-    /// V6 scalar coordinate for one row field.
-    pub const fn coordinate_scalar(self, row: usize, field: usize) -> Option<usize> {
-        hot_v3::RationalLifecycleHotRegisterLayoutV3::new(self.coordinate_count)
-            .coordinate_scalar(row, field)
-    }
-}
+/// V6 transports the canonical Claims register geometry. The request carries
+/// the descriptor body digest; Claims authenticates its finalized raw record,
+/// staging cursor and body. A raw Registry PDA is not that digest.
+pub type RationalLifecycleHotRegisterLayoutV6 = hot_v3::RationalLifecycleHotRegisterLayoutV3;
 
 /// Borrowed canonical V6 family request.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

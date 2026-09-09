@@ -166,10 +166,57 @@ pub fn build_direct_native_close_bundle_v1(
 ) -> Result<DirectNativeCloseBundleV1, DirectNativeCloseBundleErrorV1> {
     validate_direct_inline_ordinary_hot_bundle_v4(input.ordinary, input.capacity_profile)
         .map_err(|_| DirectNativeCloseBundleErrorV1::Ordinary)?;
-    let ordinary = CapabilityProgramV4::decode(&input.ordinary.descriptor)
+    let output = build_native_capability_close_bundle_v1(
+        &input.ordinary.descriptor,
+        DIRECT_NATIVE_CLOSE_REQUEST_SCHEMA_ID_V1,
+        direct_contract()?,
+    )?;
+    validate_direct_native_close_bundle_v1(&output, input)?;
+    Ok(output)
+}
+
+/// Fixed immutable root predicate for the generic native capability closer.
+/// These are compiler-selected artifact facts, never invocation-provided proof.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NativeCapabilityCloseContractV1 {
+    /// Exact mutable tail width inherited by the descriptor.
+    pub tail_bytes: usize,
+    /// Expected magic word at tail offset zero.
+    pub magic_word: u64,
+    /// Expected version/state/reserved word at tail offset eight.
+    pub header_word: u64,
+    /// Offset of the u64 obligation count which must be zero.
+    pub obligation_count_offset: usize,
+    /// Exact selected funding-ledger cardinality closed by the native adapter.
+    pub funding_ledger_slot_count: u16,
+}
+
+/// Shared native-close artifact representation.
+pub type NativeCapabilityCloseBundleV1 = DirectNativeCloseBundleV1;
+
+/// Compile a precommitted zero-obligation predicate for the existing generic
+/// Core/Trading closer. Physical closure remains exclusively in that adapter.
+pub fn build_native_capability_close_bundle_v1(
+    action_descriptor: &[u8],
+    request_schema: [u8; 32],
+    contract: NativeCapabilityCloseContractV1,
+) -> Result<NativeCapabilityCloseBundleV1, DirectNativeCloseBundleErrorV1> {
+    let ordinary = CapabilityProgramV4::decode(action_descriptor)
         .map_err(|_| DirectNativeCloseBundleErrorV1::Ordinary)?;
-    let account_profile = build_account_profile()?;
-    let transition = build_transition()?;
+    if usize::try_from(ordinary.root_state_bytes()).ok() != Some(contract.tail_bytes)
+        || contract.tail_bytes < 16
+        || contract.obligation_count_offset < 16
+        || contract
+            .obligation_count_offset
+            .checked_add(8)
+            .filter(|end| *end <= contract.tail_bytes)
+            .is_none()
+        || contract.funding_ledger_slot_count == 0
+    {
+        return Err(DirectNativeCloseBundleErrorV1::Geometry);
+    }
+    let account_profile = build_account_profile(contract)?;
+    let transition = build_transition(contract)?;
     let effect = build_effect()?;
     let account_profile_id = digest(&account_profile);
     let effect_id = digest(&effect);
@@ -181,7 +228,7 @@ pub fn build_direct_native_close_bundle_v1(
         CapabilityProgramInputV1 {
             kind: ordinary.kind(),
             config_schema: ordinary.config_schema(),
-            request_schema: content(DIRECT_NATIVE_CLOSE_REQUEST_SCHEMA_ID_V1)?,
+            request_schema: content(request_schema)?,
             root_schema: ordinary.root_schema(),
             account_profile: content(account_profile_id)?,
             derivation_policy: ordinary.derivation_policy(),
@@ -203,7 +250,6 @@ pub fn build_direct_native_close_bundle_v1(
         account_profile_id,
         effect_id,
     };
-    validate_direct_native_close_bundle_v1(&output, input)?;
     Ok(output)
 }
 
@@ -222,7 +268,7 @@ pub fn validate_direct_native_close_bundle_v1(
     {
         return Err(DirectNativeCloseBundleErrorV1::Descriptor);
     }
-    let expected_profile = build_account_profile()?;
+    let expected_profile = build_account_profile(direct_contract()?)?;
     if bundle.account_profile != expected_profile {
         return Err(DirectNativeCloseBundleErrorV1::AccountProfile);
     }
@@ -238,7 +284,7 @@ pub fn validate_direct_native_close_bundle_v1(
     {
         return Err(DirectNativeCloseBundleErrorV1::AccountProfile);
     }
-    let expected_transition = build_transition()?;
+    let expected_transition = build_transition(direct_contract()?)?;
     if bundle.transition != expected_transition {
         return Err(DirectNativeCloseBundleErrorV1::Transition);
     }
@@ -296,9 +342,11 @@ pub const fn direct_native_close_descriptor_schema_v1() -> [u8; 32] {
     CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1
 }
 
-fn build_account_profile() -> Result<Vec<u8>, DirectNativeCloseBundleErrorV1> {
+fn build_account_profile(
+    contract: NativeCapabilityCloseContractV1,
+) -> Result<Vec<u8>, DirectNativeCloseBundleErrorV1> {
     let root_bytes = CAPABILITY_ROOT_HEADER_BYTES_V1
-        .checked_add(crate::successor::DIRECT_ROOT_STATE_BYTES_V1)
+        .checked_add(contract.tail_bytes)
         .ok_or(DirectNativeCloseBundleErrorV1::Geometry)?;
     let rules = [
         AccountRuleInputV1 {
@@ -313,7 +361,8 @@ fn build_account_profile() -> Result<Vec<u8>, DirectNativeCloseBundleErrorV1> {
             effect_permissions: AccountEffectPermissionsV1::new(true, false, true),
             alias: AccountAliasInputV1::SelfRepresentative,
             data_length: u32::try_from(
-                funding_ledger_bytes_v2(1).map_err(|_| DirectNativeCloseBundleErrorV1::Geometry)?,
+                funding_ledger_bytes_v2(contract.funding_ledger_slot_count)
+                    .map_err(|_| DirectNativeCloseBundleErrorV1::Geometry)?,
             )
             .map_err(|_| DirectNativeCloseBundleErrorV1::Geometry)?,
         },
@@ -340,17 +389,17 @@ fn build_account_profile() -> Result<Vec<u8>, DirectNativeCloseBundleErrorV1> {
         },
         AccountOperationInputV1::ProjectDataU64 {
             account: ROOT_ACCOUNT,
-            data_offset: root_offset(DirectRootStateLayoutV1::MAGIC)?,
+            data_offset: root_offset(0)?,
             destination: ROOT_MAGIC_SCALAR,
         },
         AccountOperationInputV1::ProjectDataU64 {
             account: ROOT_ACCOUNT,
-            data_offset: root_offset(DirectRootStateLayoutV1::VERSION)?,
+            data_offset: root_offset(8)?,
             destination: ROOT_HEADER_WORD_SCALAR,
         },
         AccountOperationInputV1::ProjectDataU64 {
             account: ROOT_ACCOUNT,
-            data_offset: root_offset(DirectRootStateLayoutV1::OPEN_MAKER_ROOT_COUNT)?,
+            data_offset: root_offset(contract.obligation_count_offset)?,
             destination: ROOT_OPEN_MAKER_COUNT_SCALAR,
         },
         AccountOperationInputV1::ProjectLamports {
@@ -380,22 +429,30 @@ fn build_account_profile() -> Result<Vec<u8>, DirectNativeCloseBundleErrorV1> {
     Ok(output)
 }
 
-fn build_transition() -> Result<Vec<u8>, DirectNativeCloseBundleErrorV1> {
+fn direct_contract() -> Result<NativeCapabilityCloseContractV1, DirectNativeCloseBundleErrorV1> {
     let retiring = DirectRootStateV1::new()
         .begin_retiring()
         .map_err(|_| DirectNativeCloseBundleErrorV1::Transition)?
         .encode();
-    let expected_header = read_u64(&retiring, DirectRootStateLayoutV1::VERSION)?;
+    Ok(NativeCapabilityCloseContractV1 {
+        tail_bytes: crate::successor::DIRECT_ROOT_STATE_BYTES_V1,
+        magic_word: DirectRootStateLayoutV1::MAGIC_WORD,
+        header_word: read_u64(&retiring, DirectRootStateLayoutV1::VERSION)?,
+        obligation_count_offset: DirectRootStateLayoutV1::OPEN_MAKER_ROOT_COUNT,
+        funding_ledger_slot_count: 1,
+    })
+}
+
+fn build_transition(
+    contract: NativeCapabilityCloseContractV1,
+) -> Result<Vec<u8>, DirectNativeCloseBundleErrorV1> {
     let instructions = [
         TransitionInstructionV2::load_const(
             EXPECTED_CLOSE_ACTION_SCALAR,
             CoreEffectActionV1::CloseCapability as u64,
         ),
-        TransitionInstructionV2::load_const(
-            EXPECTED_ROOT_MAGIC_SCALAR,
-            DirectRootStateLayoutV1::MAGIC_WORD,
-        ),
-        TransitionInstructionV2::load_const(EXPECTED_ROOT_HEADER_WORD_SCALAR, expected_header),
+        TransitionInstructionV2::load_const(EXPECTED_ROOT_MAGIC_SCALAR, contract.magic_word),
+        TransitionInstructionV2::load_const(EXPECTED_ROOT_HEADER_WORD_SCALAR, contract.header_word),
         TransitionInstructionV2::load_const(EXPECTED_ZERO_SCALAR, 0),
         TransitionInstructionV2::scalar_eq(
             ACTIVATION_ACTION_SCALAR_V2,
