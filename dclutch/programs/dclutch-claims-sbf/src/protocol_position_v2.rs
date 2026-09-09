@@ -747,16 +747,35 @@ fn authenticate_frame_spec(
         let coordinate = u16::try_from(index).map_err(|_| ProtocolPositionSbfErrorV2::Accounts)?;
         let expected = spec
             .account(coordinate)
-            .map_err(|_| ProtocolPositionSbfErrorV2::Accounts)?
-            .privileges();
-        if observed.is_signer != expected.signer()
-            || observed.is_writable != expected.writable()
-            || observed.executable != expected.executable()
-        {
+            .map_err(|_| ProtocolPositionSbfErrorV2::Accounts)?;
+        if !protocol_position_frame_privileges_match(observed, expected) {
             return Err(ProtocolPositionSbfErrorV2::Accounts.into());
         }
     }
     Ok(())
+}
+
+fn protocol_position_frame_privileges_match(
+    observed: &AccountInfo<'_>,
+    expected: dclutch_claims::frame_spec_v1::ClaimsFrameAccountV1,
+) -> bool {
+    use dclutch_claims::frame_spec_v1::ClaimsFrameRoleV1;
+    let privileges = expected.privileges();
+    // SVM privilege union applies across the enclosing transaction. General
+    // PlaceOrder also mutates the Claims Market through its affine child and
+    // the canonical RentCredit through its rent-funded lifecycle. Admission
+    // reads both; their key, owner, PDA, release and generation are still
+    // authenticated before effects. Only these semantic roles permit writable
+    // elevation. Signer and executable privileges remain exact everywhere.
+    let writable_matches = observed.is_writable == privileges.writable()
+        || (matches!(
+            expected.role(),
+            ClaimsFrameRoleV1::ClaimsMarket | ClaimsFrameRoleV1::RentCredit
+        ) && !privileges.writable()
+            && observed.is_writable);
+    observed.is_signer == privileges.signer()
+        && writable_matches
+        && observed.executable == privileges.executable()
 }
 
 fn authenticate_parent_close_frame_spec(accounts: &[AccountInfo<'_>]) -> Result<(), ProgramError> {
@@ -1504,12 +1523,80 @@ mod tests {
         (program_id, accounts, request, parent)
     }
 
+    fn frame_fixture(action: ProtocolPositionActionV2) -> Vec<AccountInfo<'static>> {
+        let spec = ClaimsFrameSpecV1::protocol_position(action);
+        let count = usize::from(spec.account_count().expect("frame count"));
+        let mut accounts = Vec::with_capacity(count);
+        for index in 0..count {
+            let privileges = spec
+                .account(u16::try_from(index).expect("coordinate"))
+                .expect("frame account")
+                .privileges();
+            accounts.push(test_account(
+                Pubkey::new_from_array([u8::try_from(index).expect("small index") + 1; 32]),
+                Pubkey::new_from_array([99; 32]),
+                privileges.signer(),
+                privileges.writable(),
+                privileges.executable(),
+                Vec::new(),
+            ));
+        }
+        accounts
+    }
+
     #[test]
     fn account_frames_are_action_specific_and_minimal() {
         assert_eq!(PROTOCOL_POSITION_ADMIT_ACCOUNT_COUNT_V2, 26);
         assert_eq!(PROTOCOL_POSITION_CLOSE_ACCOUNT_COUNT_V2, 15);
         assert!(PROTOCOL_POSITION_CLOSE_ACCOUNT_COUNT_V2 <= 64);
         assert_ne!(PROTOCOL_POSITION_REQUEST_MAGIC_V2, *b"DCLPPR01");
+    }
+
+    #[test]
+    fn protocol_position_accepts_only_market_and_rent_credit_writable_union() {
+        for action in [
+            ProtocolPositionActionV2::Admit,
+            ProtocolPositionActionV2::Close,
+        ] {
+            let mut accounts = frame_fixture(action);
+            accounts[MARKET].is_writable = true;
+            let credit = if action == ProtocolPositionActionV2::Admit {
+                ADMIT_RENT_CREDIT
+            } else {
+                CLOSE_RENT_CREDIT
+            };
+            accounts[credit].is_writable = true;
+            authenticate_frame_spec(ClaimsFrameSpecV1::protocol_position(action), &accounts)
+                .expect("authenticated Market and RentCredit may inherit outer writable privilege");
+
+            accounts[MARKET].is_signer = true;
+            assert_eq!(
+                authenticate_frame_spec(ClaimsFrameSpecV1::protocol_position(action), &accounts,),
+                Err(ProtocolPositionSbfErrorV2::Accounts.into())
+            );
+            accounts[MARKET].is_signer = false;
+
+            for hostile in 0..accounts.len() {
+                if hostile == MARKET || hostile == credit {
+                    continue;
+                }
+                accounts[hostile].is_writable = !accounts[hostile].is_writable;
+                assert_eq!(
+                    authenticate_frame_spec(
+                        ClaimsFrameSpecV1::protocol_position(action),
+                        &accounts
+                    ),
+                    Err(ProtocolPositionSbfErrorV2::Accounts.into()),
+                    "only Market/RentCredit allow writable union; hostile coordinate {hostile}"
+                );
+                accounts[hostile].is_writable = !accounts[hostile].is_writable;
+            }
+            accounts[credit].is_signer = true;
+            assert_eq!(
+                authenticate_frame_spec(ClaimsFrameSpecV1::protocol_position(action), &accounts),
+                Err(ProtocolPositionSbfErrorV2::Accounts.into())
+            );
+        }
     }
 
     #[test]

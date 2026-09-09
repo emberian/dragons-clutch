@@ -74,6 +74,14 @@ const INSTRUCTION_RENDERERS: ReadonlyArray<InstructionRenderer> = Object.freeze(
     summary: 'Executes a taker’s proposed claim exchange after checking the Dealer’s prices, inventory, and capital.',
   },
   {
+    routeId: 'trading/scoring_dealer_v1::redeem::process_dealer_redeem_v1',
+    summary: 'Redeems the Dealer fund’s terminal claims into its Trading-principal vault and advances the fund revision.',
+  },
+  {
+    routeId: 'trading/scoring_dealer_v1::close::process_dealer_close_v1',
+    summary: 'Closes a drained terminal Dealer fund and its owned records after Claims and Custody close their children.',
+  },
+  {
     routeId: 'trading/scoring_dealer_v1::withdraw::process_dealer_withdraw_v1',
     summary: 'Returns releasable Dealer collateral to its sponsor while preserving the required capital floor.',
   },
@@ -173,12 +181,8 @@ const INSTRUCTION_RENDERERS: ReadonlyArray<InstructionRenderer> = Object.freeze(
     summary: 'Moves a Terminal Market into retirement, the phase in which its claims are reclaimed.',
   },
   {
-    routeId: 'core/retire_v1::process#Retire',
-    summary: 'Advances a retiring Market one coordinate toward Retired, reclaiming what that coordinate held.',
-  },
-  {
     routeId: 'core/retire_v1::process_checkpoint_prepare#Retire',
-    summary: 'Prepares the retirement checkpoint a Retire step will commit against.',
+    summary: 'Advances a retiring Market one coordinate and prepares the checkpoint that step will commit against.',
   },
   {
     routeId: 'core/resolution::process#Retire',

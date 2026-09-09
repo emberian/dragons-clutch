@@ -2591,6 +2591,18 @@ fn emit_effect_permission(
     Ok(())
 }
 
+/// Compare two already-borrowed account bodies without re-reading identical
+/// runtime storage through `memcmp`.
+///
+/// A logical alias built by the runtime adapter borrows the representative's
+/// exact slice, so pointer and width identity proves byte equality. External
+/// callers may still present distinct equal slices; the value comparison keeps
+/// that public behavior unchanged.
+#[inline(always)]
+fn observed_account_data_equal(left: &[u8], right: &[u8]) -> bool {
+    (left.len() == right.len() && left.as_ptr() == right.as_ptr()) || left == right
+}
+
 fn validate_accounts(
     profile: AccountProfileV2<'_>,
     tail_count: u32,
@@ -2681,15 +2693,15 @@ fn validate_accounts(
             .get(representative)
             .copied()
             .ok_or(Error::InvalidCoordinate)?;
-        let canonical_rule = if representative == coordinate {
-            rule
-        } else {
-            expanded_rule(profile, representative)?
-        };
+        // `representative_rule` was decoded above for the privilege and
+        // permission checks. It names this exact representative and the
+        // profile is immutable throughout the walk, so decoding it again here
+        // cannot establish another fact.
+        let canonical_rule = representative_rule;
         if account.key() != canonical.key()
             || account.owner() != canonical.owner()
             || account.lamports() != canonical.lamports()
-            || account.data() != canonical.data()
+            || !observed_account_data_equal(account.data(), canonical.data())
             || account.privileges() != canonical.privileges()
             || (variable_alias
                 && (canonical_rule.prestate != AccountPrestateV2::AdapterAuthenticatedVariableData
@@ -2814,15 +2826,12 @@ fn validate_accounts_with_dynamic_spans(
             .get(representative)
             .copied()
             .ok_or(Error::InvalidCoordinate)?;
-        let canonical_rule = if representative == coordinate {
-            rule
-        } else {
-            expanded_rule_with_dynamic_spans(profile, tail_count, span_counts, representative)?
-        };
+        // The immutable representative rule was already decoded above.
+        let canonical_rule = representative_rule;
         if account.key() != canonical.key()
             || account.owner() != canonical.owner()
             || account.lamports() != canonical.lamports()
-            || account.data() != canonical.data()
+            || !observed_account_data_equal(account.data(), canonical.data())
             || account.privileges() != canonical.privileges()
             || (variable_alias
                 && (canonical_rule.prestate != AccountPrestateV2::AdapterAuthenticatedVariableData
@@ -5019,6 +5028,17 @@ mod tests {
             assert_eq!(output_scalars, before_scalars);
             assert_eq!(output_identities, before_identities);
         }
+    }
+
+    #[test]
+    fn alias_body_identity_shortcut_preserves_distinct_slice_value_checks() {
+        let shared = [0x41_u8, 0x42, 0x43, 0x44];
+        let equal_copy = [0x41_u8, 0x42, 0x43, 0x44];
+        let hostile_copy = [0x41_u8, 0x42, 0x43, 0x45];
+        assert!(observed_account_data_equal(&shared, &shared));
+        assert!(observed_account_data_equal(&shared, &equal_copy));
+        assert!(!observed_account_data_equal(&shared, &hostile_copy));
+        assert!(!observed_account_data_equal(&shared, &shared[..3]));
     }
 
     #[test]

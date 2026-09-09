@@ -11,7 +11,7 @@
 //! `solana-test-validator` over the prepared account directory directly, with
 //! NO first-party `--upgradeable-program` (which would replace the prepared
 //! tag-0 authority with Agave's default), exactly as run.py:1292 documents.
-//! The separately pinned external Token program uses explicit authority `none`.
+//! The separately pinned external Token program uses explicit immutable Loader fixtures.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -112,6 +112,33 @@ fn authenticate_token_2022_bytes_v1(bytes: &[u8], expected: &str) -> Result<()> 
         ));
     }
     Ok(())
+}
+
+/// Agave 4.0.2's `--upgradeable-program ... none` encodes Some(default)
+/// rather than Loader's None. Author the canonical immutable external pair
+/// directly; it stays outside the authenticated first-party account directory.
+fn token_2022_genesis_accounts_v1(elf: &[u8]) -> Result<[(Pubkey, Vec<u8>, bool); 2]> {
+    use solana_loader_v3_interface::state::UpgradeableLoaderState;
+    let program = pubkey(TOKEN_2022_PROGRAM)?;
+    let (programdata, _) = Pubkey::find_program_address(
+        &[program.as_ref()],
+        &solana_sdk_ids::bpf_loader_upgradeable::id(),
+    );
+    let program_bytes = bincode::serialize(&UpgradeableLoaderState::Program {
+        programdata_address: programdata,
+    })
+    .map_err(|error| Error::new(format!("encode external Token program: {error}")))?;
+    let mut programdata_bytes = bincode::serialize(&UpgradeableLoaderState::ProgramData {
+        slot: 0,
+        upgrade_authority_address: None,
+    })
+    .map_err(|error| Error::new(format!("encode external Token ProgramData: {error}")))?;
+    programdata_bytes.resize(UpgradeableLoaderState::size_of_programdata_metadata(), 0);
+    programdata_bytes.extend_from_slice(elf);
+    Ok([
+        (program, program_bytes, true),
+        (programdata, programdata_bytes, false),
+    ])
 }
 
 /// Everything the checked-mutable bring-up needs from the caller.
@@ -430,11 +457,28 @@ pub(crate) fn bring_up(request: &SubstrateRequestV1<'_>) -> Result<CheckedSubstr
     let port = request.rpc_port;
     let mut command = Command::new("solana-test-validator");
     if let Some((path, _)) = token_fixture.as_ref() {
-        command
-            .arg("--upgradeable-program")
-            .arg(TOKEN_2022_PROGRAM)
-            .arg(path)
-            .arg("none");
+        use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+        let external_accounts = request.work.join("external-token-accounts");
+        std::fs::create_dir(&external_accounts)?;
+        for (address, data, executable) in token_2022_genesis_accounts_v1(&std::fs::read(path)?)? {
+            let account_path = external_accounts.join(format!("{address}.json"));
+            let account = serde_json::json!({
+                "pubkey": address.to_string(),
+                "account": {
+                    "lamports": solana_sdk::rent::Rent::default().minimum_balance(data.len()),
+                    "data": [BASE64.encode(&data), "base64"],
+                    "owner": solana_sdk_ids::bpf_loader_upgradeable::id().to_string(),
+                    "executable": executable,
+                    "rentEpoch": 0,
+                    "space": data.len(),
+                },
+            });
+            std::fs::write(&account_path, serde_json::to_vec_pretty(&account)?)?;
+            command
+                .arg("--account")
+                .arg(address.to_string())
+                .arg(account_path);
+        }
     }
     let child = command
         .arg("--config")
@@ -818,6 +862,47 @@ pub(crate) fn report_pubkey(value: &str, label: &str) -> Result<Pubkey> {
 #[cfg(test)]
 mod tests {
     use super::{DEFAULT_TICKS_PER_SLOT_V1, parse_ticks_per_slot_v1};
+
+    #[test]
+    fn external_token_genesis_uses_loader_none_and_preserves_exact_elf() {
+        use solana_loader_v3_interface::state::UpgradeableLoaderState;
+        let elf = b"external runtime bytes";
+        let [
+            (program, program_bytes, executable),
+            (programdata, data, data_executable),
+        ] = super::token_2022_genesis_accounts_v1(elf).expect("canonical genesis");
+        assert_eq!(program.to_string(), super::TOKEN_2022_PROGRAM);
+        assert!(executable);
+        assert!(!data_executable);
+        assert_eq!(
+            bincode::deserialize::<UpgradeableLoaderState>(&program_bytes).expect("program"),
+            UpgradeableLoaderState::Program {
+                programdata_address: programdata
+            },
+        );
+        assert_eq!(
+            bincode::deserialize::<UpgradeableLoaderState>(&data).expect("programdata"),
+            UpgradeableLoaderState::ProgramData {
+                slot: 0,
+                upgrade_authority_address: None
+            },
+        );
+        assert_eq!(
+            &data[UpgradeableLoaderState::size_of_programdata_metadata()..],
+            elf
+        );
+        // The measured native CLI header was Some(default), despite spelling
+        // the authority `none`; it is not canonical Loader immutability.
+        let native_cli_header = bincode::serialize(&UpgradeableLoaderState::ProgramData {
+            slot: 0,
+            upgrade_authority_address: Some(solana_sdk::pubkey::Pubkey::default()),
+        })
+        .expect("observed CLI header");
+        assert_ne!(
+            &data[..native_cli_header.len()],
+            native_cli_header.as_slice()
+        );
+    }
 
     #[test]
     fn validator_tick_profile_defaults_and_accepts_a_positive_override() {
