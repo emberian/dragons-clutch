@@ -11,7 +11,7 @@
 //!
 //! A devnet accelerator deployment can author exactly one of the four, and it
 //! is the load-bearing one. `accelerator_artifact_release` is the identity of
-//! the `ArtifactReleaseV1` record the Registry finalizes over a deployment,
+//! the `ArtifactReleaseV2` record the Registry finalizes over a deployment,
 //! and it is what every action's `ExecutionStrategyCertificateV2` pins — so a
 //! General market compiled with a projected value names an accelerator that
 //! does not exist and cannot execute one batch. Here it is OBSERVED: the
@@ -61,7 +61,7 @@ use dclutch_operator::general_selected_release_v1::{
     GeneralConfigWindowsV1, GeneralDeploymentFactsV1, GeneralSelectedReleaseInputV1,
     general_external_account_widths_v3,
 };
-use dclutch_registry::ArtifactReleaseV1;
+use dclutch_registry::ArtifactReleaseV2;
 use dclutch_registry::svm::{LOADER_V3_PROGRAM_BYTES, ProgramDataV3View, ProgramV3View};
 use dclutch_release_tool::{
     CHECKED_TRANSLATION_VALIDATION_BYTES_V1, CheckedTranslationValidationV1,
@@ -192,7 +192,7 @@ pub(crate) struct ObservedAcceleratorDeploymentV1 {
     pub(crate) upgrade_authority: Option<Pubkey>,
     pub(crate) programdata_bytes: usize,
     pub(crate) live_elf_padding_bytes: usize,
-    pub(crate) release: ArtifactReleaseV1,
+    pub(crate) release: ArtifactReleaseV2,
     pub(crate) artifact_release_id: [u8; 32],
 }
 
@@ -210,7 +210,7 @@ pub(crate) struct ObservedAcceleratorDeploymentV1 {
 /// instead of minting a release that hands them the hot path.
 ///
 /// The minted record is then re-authenticated against its own observation by
-/// `ArtifactReleaseV1::authenticate_deployment`, which is the SAME eight
+/// `ArtifactReleaseV2::authenticate_deployment`, which is the SAME eight
 /// conjuncts the Registry runs at `Finalize`. Two authorities over one
 /// observation: if this compiler and the chain can disagree, they disagree
 /// here, offline, and not after a cohort has founded a market on it.
@@ -331,15 +331,16 @@ pub(crate) fn observe_accelerator_deployment_v1(
     }
 
     let elf_digest: [u8; 32] = Sha256::digest(live).into();
+    let code_commitment = crate::plan::code_commitment_v2(live)?;
     // The seven cohort roles' releases and this one are minted by ONE author.
     let facts = crate::plan::release_facts(
         program,
         arguments.semantic_release_id,
-        elf_digest,
+        code_commitment,
         programdata_view.deployment_slot(),
         observed_authority,
     )?;
-    let observation = crate::plan::deployment_observation_v1(
+    let observation = crate::plan::deployment_observation_v2(
         program,
         program_account.owner,
         program_account.executable,
@@ -348,7 +349,7 @@ pub(crate) fn observe_accelerator_deployment_v1(
         programdata_account.executable,
         program_view.programdata(),
         programdata_view.deployment_slot(),
-        elf_digest,
+        code_commitment,
         observed_authority,
     )?;
     facts
@@ -383,7 +384,7 @@ impl ObservedAcceleratorDeploymentV1 {
     /// campaign consumes and a second object on it would corrupt the only
     /// output this command has. The `artifact_release_body` is the exact
     /// 216-byte record a cohort must publish into its Registry under
-    /// `ARTIFACT_RELEASE_SCHEMA_ID_V1` — finalizing it is what makes the
+    /// `ARTIFACT_RELEASE_SCHEMA_ID_V2` — finalizing it is what makes the
     /// certificates this market compiles executable, because the Registry
     /// observes the deployment at that moment and refuses a record that
     /// describes a different one.

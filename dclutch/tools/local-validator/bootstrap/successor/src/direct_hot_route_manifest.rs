@@ -4,7 +4,7 @@
 //!
 //! `devnet-checked-execution-release-v1` materializes the 1592-byte
 //! `dclutch-checked-multiprogram-v1` file for the LIVE activated release set:
-//! the five embedded `ArtifactReleaseV1` records are read verbatim out of the
+//! the five embedded `ArtifactReleaseV2` records are read verbatim out of the
 //! finalized Registry activation cache (the chain is their author), and the
 //! five checked-release identities come from the sha-pinned checked-release
 //! manifests the deployment sealed. Nothing here invents a release fact: the
@@ -32,7 +32,7 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use dclutch_registry::{ARTIFACT_RELEASE_BYTES_V1, ActivatedExecutionReleaseSetV1};
+use dclutch_registry::{ARTIFACT_RELEASE_BYTES_V2, ActivatedExecutionReleaseSetV1};
 use dclutch_registry::release_set::{EXECUTION_RELEASE_SET_BYTES_V1, ExecutionRoleV1};
 use dclutch_release_tool::{
     CHECKED_INFRASTRUCTURE_BYTES_V1, CHECKED_INFRASTRUCTURE_COMPONENTS_V1,
@@ -40,7 +40,7 @@ use dclutch_release_tool::{
     CHECKED_INFRASTRUCTURE_SCHEMA_V2, CHECKED_MULTIPROGRAM_BYTES_V1,
     CHECKED_MULTIPROGRAM_HEADER_BYTES_V1, CHECKED_MULTIPROGRAM_MAGIC_V1,
     CHECKED_MULTIPROGRAM_SCHEMA_V1, CheckedExecutionReleaseSetV1, CheckedInfrastructureV1,
-    CheckedReleaseV1,
+    CheckedReleaseV2,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -314,8 +314,8 @@ fn admit_checked_release(
     pin_elf_sha256: &str,
     source_revision: &str,
     source_tree_sha256: &str,
-) -> Result<CheckedReleaseV1> {
-    let checked = CheckedReleaseV1::decode(bytes).map_err(|error| {
+) -> Result<CheckedReleaseV2> {
+    let checked = CheckedReleaseV2::decode(bytes).map_err(|error| {
         refusal(
             "checked-release/undecodable",
             format!("{role} checked release refused: {error:?}"),
@@ -447,9 +447,9 @@ fn assemble_checked_execution_release_v1(
         })?;
         let offset = CHECKED_MULTIPROGRAM_HEADER_BYTES_V1
             + EXECUTION_RELEASE_SET_BYTES_V1
-            + index * (ARTIFACT_RELEASE_BYTES_V1 + 32);
-        bytes[offset..offset + ARTIFACT_RELEASE_BYTES_V1].copy_from_slice(&artifact_bytes);
-        bytes[offset + ARTIFACT_RELEASE_BYTES_V1..offset + ARTIFACT_RELEASE_BYTES_V1 + 32]
+            + index * (ARTIFACT_RELEASE_BYTES_V2 + 32);
+        bytes[offset..offset + ARTIFACT_RELEASE_BYTES_V2].copy_from_slice(&artifact_bytes);
+        bytes[offset + ARTIFACT_RELEASE_BYTES_V2..offset + ARTIFACT_RELEASE_BYTES_V2 + 32]
             .copy_from_slice(checked_id.as_bytes());
     }
 
@@ -578,7 +578,7 @@ fn record_account(
             format!("{label} {address} bytes differ from the plan's sealed content digest"),
         ));
     }
-    if account.data.len() != ARTIFACT_RELEASE_BYTES_V1 {
+    if account.data.len() != ARTIFACT_RELEASE_BYTES_V2 {
         return Err(refusal(
             "route-manifest/record-width",
             format!("{label} {address} is not one exact artifact release record"),
@@ -658,12 +658,12 @@ fn assemble_checked_infrastructure_v1(
     offset += profile.data.len();
     bytes[offset..offset + 32].copy_from_slice(&profile_address.to_bytes());
     offset += 32;
-    bytes[offset..offset + ARTIFACT_RELEASE_BYTES_V1].copy_from_slice(&registry_record);
-    offset += ARTIFACT_RELEASE_BYTES_V1;
+    bytes[offset..offset + ARTIFACT_RELEASE_BYTES_V2].copy_from_slice(&registry_record);
+    offset += ARTIFACT_RELEASE_BYTES_V2;
     bytes[offset..offset + 32].copy_from_slice(registry_checked_id.as_bytes());
     offset += 32;
-    bytes[offset..offset + ARTIFACT_RELEASE_BYTES_V1].copy_from_slice(&rent_record);
-    offset += ARTIFACT_RELEASE_BYTES_V1;
+    bytes[offset..offset + ARTIFACT_RELEASE_BYTES_V2].copy_from_slice(&rent_record);
+    offset += ARTIFACT_RELEASE_BYTES_V2;
     bytes[offset..offset + 32].copy_from_slice(rent_checked_id.as_bytes());
     offset += 32;
     if offset != CHECKED_INFRASTRUCTURE_BYTES_V1 {

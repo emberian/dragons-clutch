@@ -69,11 +69,11 @@ try {
 } finally {
   rmSync(bundle, { force: true });
 }
-const { parseCheckedReleaseFragmentV1, parsePublicDevnetCutV1, stageCheckedReleaseV1 } = staging;
+const { parseCheckedReleaseFragmentV1, parsePublicDevnetCutV1, stageCheckedReleaseV2 } = staging;
 
 const fragment = parseCheckedReleaseFragmentV1(JSON.parse(readFileSync(fragmentPath, 'utf8')));
 const cut = parsePublicDevnetCutV1(JSON.parse(readFileSync(fixture, 'utf8')));
-const staged = stageCheckedReleaseV1(cut, fragment, releaseSet);
+const staged = stageCheckedReleaseV2(cut, fragment, releaseSet);
 
 const serialized = `${JSON.stringify(staged, null, 2)}\n`;
 // Re-parse what is about to be written. A generator that validates its INPUT

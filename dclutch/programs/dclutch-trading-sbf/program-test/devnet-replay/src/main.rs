@@ -11,7 +11,7 @@
 //!
 //! It is only a wall on a chain. A hot route never hashes an ELF
 //! (`crates/dclutch-trading/src/shadow_accelerator_auth/deployment.rs:97`
-//! takes the activation-bound arm, and `slot_pinned_release_elf_digest_v1`
+//! takes the activation-bound arm, and `slot_pinned_release_code_commitment_v2`
 //! compares the SLOT and the AUTHORITY and returns the release's own recorded
 //! digest). So the pins are satisfied by the ProgramData account's 45-byte
 //! Loader V3 HEADER, and the ELF tail behind it is free. `--programdata-elf`
@@ -325,7 +325,7 @@ fn main() -> ExitCode {
     //
     // WHICH SLOT TO EQUALIZE TO is not free either: the release pins that then
     // have to move live in two places, and only one of them can be rewritten.
-    // A standalone `ArtifactReleaseV1` raw record is CONTENT-ADDRESSED -- its
+    // A standalone `ArtifactReleaseV2` raw record is CONTENT-ADDRESSED -- its
     // body hashes to the digest in its own address -- so its `deployment_slot`
     // cannot be edited; the Registry activation cache is a PDA and can. Pick D
     // = the slot the immovable record already pins, `--programdata-slot`

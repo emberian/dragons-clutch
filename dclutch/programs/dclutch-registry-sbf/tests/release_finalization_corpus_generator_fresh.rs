@@ -1,7 +1,7 @@
 //! Exact Lean-generator freshness check for the release-finalization corpus.
 //!
 //! The corpus is the only thing checking this program's three-way refusal
-//! partition, and `ArtifactReleaseV1::authenticate_deployment`'s conjunct
+//! partition, and `ArtifactReleaseV2::authenticate_deployment`'s conjunct
 //! order behind it, against `ProtocolInfrastructure.lean`. A corpus that
 //! drifted from its emitter would check the adapter against a stale opinion,
 //! so it is byte-gated like every other emission in the tree.

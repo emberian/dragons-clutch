@@ -137,7 +137,7 @@ pub enum ExecutionDispositionV1 {
 /// Immutable certificate for one stateless AOT implementation.
 ///
 /// Program, ProgramData, ELF, deployment slot, semantic release, and upgrade
-/// policy remain solely owned by the referenced `ArtifactReleaseV1` record and
+/// policy remain solely owned by the referenced `ArtifactReleaseV2` record and
 /// are intentionally not duplicated here.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ExecutionStrategyCertificateV1 {

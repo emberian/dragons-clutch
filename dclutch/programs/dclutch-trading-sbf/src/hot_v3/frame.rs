@@ -196,7 +196,7 @@ pub(super) fn authenticate_top_level_root_roles_from_cache_v3(
         frame.core_programdata,
     )
     .map_err(TradingSbfError::from)?;
-    // Kept although `cached_role_deployment_observation_v1` already required
+    // Kept although `cached_role_deployment_observation_v2` already required
     // `program.key == release.program()` before it observed anything: this is
     // the comparison the CPI arm made on the returned receipt, and dropping it
     // in the same change that removes the CPI would make the diff say something

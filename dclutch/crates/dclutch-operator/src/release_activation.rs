@@ -8,7 +8,7 @@
 
 use dclutch_registry::release_set::{EXECUTION_ROLE_COUNT_V1, ExecutionRoleV1};
 use dclutch_release_tool::{
-    CheckedExecutionReleaseSetV1, CheckedReleaseV1, build_checked_execution_release_set,
+    CheckedExecutionReleaseSetV1, CheckedReleaseV2, build_checked_execution_release_set,
 };
 use solana_hash::Hash;
 use solana_program::{hash::hash, pubkey::Pubkey};
@@ -102,8 +102,8 @@ impl CheckedRegistryActivationPlanV1 {
         );
         push_line(
             &mut output,
-            "elf_bytes_hashed_total",
-            &self.activation.compute.elf_bytes_hashed.to_string(),
+            "elf_bytes_authenticated_total",
+            &self.activation.compute.elf_bytes_authenticated.to_string(),
         );
         push_line(
             &mut output,
@@ -113,8 +113,8 @@ impl CheckedRegistryActivationPlanV1 {
         for plan in &self.activation.roles {
             push_line(
                 &mut output,
-                &format!("role_elf_bytes_hashed_{}", role_label(plan.role)),
-                &plan.compute.elf_bytes_hashed.to_string(),
+                &format!("role_elf_bytes_authenticated_{}", role_label(plan.role)),
+                &plan.compute.elf_bytes_authenticated.to_string(),
             );
         }
         push_optional_u32(
@@ -176,7 +176,7 @@ pub enum Error {
 pub fn build_checked_registry_activation_packet_v1(
     registry_program: Pubkey,
     checked_release_set: CheckedExecutionReleaseSetV1,
-    checked_releases: [&CheckedReleaseV1; EXECUTION_ROLE_COUNT_V1],
+    checked_releases: [&CheckedReleaseV2; EXECUTION_ROLE_COUNT_V1],
     state: &RegistryActivationState,
     fee_payer: Pubkey,
     recent_blockhash: Hash,
@@ -215,7 +215,7 @@ pub fn build_checked_registry_activation_packet_v1(
             || checked_artifact.programdata() != checked_release.programdata_id()
             || checked_artifact.loader_program().to_bytes() != checked_release.loader_program_id()
             || checked_artifact.semantic_release_id() != checked_release.semantic_release_id()
-            || checked_artifact.elf_digest() != checked_release.artifact_digest()
+            || checked_artifact.code_commitment() != checked_release.code_commitment()
             || checked_artifact.deployment_slot() != checked_release.deployment_slot()
             || checked_artifact.upgrade_authority() != checked_release.upgrade_authority()
         {

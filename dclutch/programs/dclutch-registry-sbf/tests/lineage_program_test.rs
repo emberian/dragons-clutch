@@ -44,8 +44,8 @@ use dclutch_registry::release_set::{
     ExecutionRoleV1, ProgramIdentityV1,
 };
 use dclutch_registry::{
-    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ArtifactActivationInputV1, ArtifactReleaseV1,
-    ArtifactUpgradePolicyV1, DeploymentObservationV1, LineageAt, RELEASE_LINEAGE_BYTES_V1,
+    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ArtifactActivationInputV1, ArtifactReleaseV2,
+    ArtifactUpgradePolicyV1, DeploymentObservationV2, LineageAt, RELEASE_LINEAGE_BYTES_V1,
     ReleaseLineageV1, activate_execution_role_into_v1, initialize_activation_cache_v1,
     put_activation_cache_bump_v1, walk_lineage_to, walk_lineage_to_head,
 };
@@ -195,11 +195,11 @@ fn moved_mask(before: [RoleSpec; 5], after: [RoleSpec; 5]) -> [bool; 5] {
     mask
 }
 
-fn release_for(spec: RoleSpec) -> ArtifactReleaseV1 {
+fn release_for(spec: RoleSpec) -> ArtifactReleaseV2 {
     let program = Pubkey::new_from_array([spec.program; 32]);
     let programdata =
         Pubkey::find_program_address(&[program.as_ref()], &bpf_loader_upgradeable::ID).0;
-    ArtifactReleaseV1::new(
+    ArtifactReleaseV2::new(
         ProgramIdentityV1::new(program.to_bytes()).expect("program identity"),
         ProgramIdentityV1::new(bpf_loader_upgradeable::ID.to_bytes()).expect("loader identity"),
         programdata.to_bytes(),
@@ -215,7 +215,7 @@ fn release_for(spec: RoleSpec) -> ArtifactReleaseV1 {
     .expect("artifact release")
 }
 
-fn artifact_id(release: ArtifactReleaseV1) -> ArtifactReleaseIdV1 {
+fn artifact_id(release: ArtifactReleaseV2) -> ArtifactReleaseIdV1 {
     ArtifactReleaseIdV1::new(hash(&release.to_bytes()).to_bytes()).expect("artifact release id")
 }
 
@@ -224,11 +224,11 @@ fn artifact_id(release: ArtifactReleaseV1) -> ArtifactReleaseIdV1 {
 /// The declaration route reads only the two cache accounts and never observes a
 /// deployment, so composing the cache from the release itself is the same input
 /// the route sees on chain rather than a shortcut past a check it makes.
-fn activation_input(release: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
+fn activation_input(release: ArtifactReleaseV2) -> ArtifactActivationInputV1 {
     ArtifactActivationInputV1::new(
         artifact_id(release),
         release,
-        DeploymentObservationV1::new(
+        DeploymentObservationV2::new(
             release.program().to_bytes(),
             bpf_loader_upgradeable::ID.to_bytes(),
             true,
@@ -238,7 +238,7 @@ fn activation_input(release: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
             release.programdata(),
             bpf_loader_upgradeable::ID.to_bytes(),
             release.deployment_slot(),
-            release.elf_digest(),
+            release.code_commitment(),
             release.upgrade_authority(),
         )
         .expect("deployment observation"),
@@ -253,7 +253,7 @@ struct CacheFixture {
 }
 
 fn build_cache(specs: [RoleSpec; 5]) -> CacheFixture {
-    let releases: Vec<ArtifactReleaseV1> = specs.iter().copied().map(release_for).collect();
+    let releases: Vec<ArtifactReleaseV2> = specs.iter().copied().map(release_for).collect();
     let bindings: Vec<ExecutionRoleBindingV1> = releases
         .iter()
         .map(|release| ExecutionRoleBindingV1::new(release.program(), artifact_id(*release)))

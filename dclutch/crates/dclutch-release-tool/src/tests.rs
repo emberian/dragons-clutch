@@ -241,7 +241,7 @@ fn checked_release_round_trips_and_text_surfaces_every_boundary() -> Result<()> 
     let fixture = Fixture::capability()?;
     let release = build_checked_release(fixture.evidence())?;
     let bytes = release.encode()?;
-    assert_eq!(CheckedReleaseV1::decode(&bytes), Ok(release.clone()));
+    assert_eq!(CheckedReleaseV2::decode(&bytes), Ok(release.clone()));
     assert_eq!(
         verify_checked_release(&bytes, fixture.evidence()),
         Ok(release.clone())
@@ -318,17 +318,17 @@ fn hostile_binary_manifests_and_evidence_tampering_refuse() -> Result<()> {
     let bytes = release.encode()?;
     for length in 0..bytes.len() {
         let truncated = bytes.get(..length).ok_or(Error::InvalidLength)?;
-        assert!(CheckedReleaseV1::decode(truncated).is_err());
+        assert!(CheckedReleaseV2::decode(truncated).is_err());
     }
     let mut trailing = bytes.clone();
     trailing.push(0);
     assert_eq!(
-        CheckedReleaseV1::decode(&trailing),
+        CheckedReleaseV2::decode(&trailing),
         Err(Error::InvalidManifestLength)
     );
     for (offset, value, expected) in [
         (0, 0, Error::InvalidMagic),
-        (8, 2, Error::UnsupportedSchema),
+        (8, 1, Error::UnsupportedSchema),
         (RESERVED_OFFSET, 1, Error::NonCanonicalReservedBytes),
         (SEMANTIC_KIND_OFFSET, 9, Error::UnknownSemanticKind),
         (LOADER_KIND_OFFSET, 9, Error::UnknownLoaderKind),
@@ -340,13 +340,13 @@ fn hostile_binary_manifests_and_evidence_tampering_refuse() -> Result<()> {
     ] {
         let mut hostile = bytes.clone();
         *hostile.get_mut(offset).ok_or(Error::InvalidLength)? = value;
-        assert_eq!(CheckedReleaseV1::decode(&hostile), Err(expected));
+        assert_eq!(CheckedReleaseV2::decode(&hostile), Err(expected));
     }
     let mut false_digest = bytes.clone();
     *false_digest
         .get_mut(ARTIFACT_DIGEST_OFFSET)
         .ok_or(Error::InvalidLength)? ^= 1;
-    let decoded = CheckedReleaseV1::decode(&false_digest)?;
+    let decoded = CheckedReleaseV2::decode(&false_digest)?;
     assert_ne!(decoded.artifact_digest(), release.artifact_digest());
     assert_eq!(
         verify_checked_release(&false_digest, fixture.evidence()),
@@ -458,7 +458,7 @@ fn sbf_header_and_pyth_semantic_owner_are_not_bypassed() -> Result<()> {
     assert_eq!(semantic.len(), PYTH_RELEASE_V1_ENCODED_LEN);
     let pyth = Fixture::new("pyth-v1", semantic, Some([9; 32]))?;
     let checked = build_checked_release(pyth.evidence())?;
-    assert_eq!(CheckedReleaseV1::decode(&checked.encode()?), Ok(checked));
+    assert_eq!(CheckedReleaseV2::decode(&checked.encode()?), Ok(checked));
 
     let mut hostile = Fixture::new("pyth-v1", pyth_semantic_preimage()?, Some([9; 32]))?;
     *hostile.semantic.get_mut(0).ok_or(Error::InvalidLength)? ^= 1;
@@ -534,7 +534,7 @@ fn unowned_semantic_kind_is_a_named_absence_not_a_silent_capability_claim() -> R
     assert_eq!(release.semantic_kind, SemanticPreimageKindV1::Unowned);
     assert!(release.render_text()?.contains("semantic_kind=unowned\n"));
     let bytes = release.encode()?;
-    assert_eq!(CheckedReleaseV1::decode(&bytes), Ok(release));
+    assert_eq!(CheckedReleaseV2::decode(&bytes), Ok(release));
 
     // An unowned preimage is still exact: empty bytes remain a refusal, and the
     // manifest byte is not interchangeable with the capability kind.
@@ -548,7 +548,7 @@ fn unowned_semantic_kind_is_a_named_absence_not_a_silent_capability_claim() -> R
         .get_mut(SEMANTIC_KIND_OFFSET)
         .ok_or(Error::InvalidLength)? = 0;
     assert_ne!(
-        CheckedReleaseV1::decode(&relabeled)?.semantic_kind,
+        CheckedReleaseV2::decode(&relabeled)?.semantic_kind,
         SemanticPreimageKindV1::Unowned
     );
     Ok(())
@@ -721,5 +721,37 @@ fn a_revoked_program_keeps_its_former_authority_and_the_release_path_takes_it() 
         predicted.programdata_account_digest,
         release.programdata_account_digest
     );
+    Ok(())
+}
+
+#[test]
+fn checked_release_v2_binds_full_loader_code_and_refuses_false_commitment() -> Result<()> {
+    let fixture = Fixture::capability()?;
+    let release = build_checked_release(fixture.evidence())?;
+    let expected = code_commitment_v2(&fixture.programdata[LOADER_V3_PROGRAMDATA_METADATA_BYTES..])
+        .map_err(Error::CodeCommitment)?;
+    assert_eq!(release.code_commitment(), expected);
+    assert_eq!(release.artifact_digest(), sha256(&fixture.elf));
+    assert_ne!(release.code_commitment(), release.artifact_digest());
+    assert_eq!(
+        artifact_release_from_checked(&release)?.code_commitment(),
+        expected
+    );
+    let mut padded = Fixture::capability()?;
+    padded.programdata.extend_from_slice(&[0; 128]);
+    let larger = build_checked_release(padded.evidence())?;
+    assert_eq!(larger.artifact_digest(), release.artifact_digest());
+    assert_ne!(larger.code_commitment(), release.code_commitment());
+    let mut bytes = release.encode()?;
+    bytes[CHECKED_RELEASE_CODE_COMMITMENT_OFFSET_V2] ^= 1;
+    assert_eq!(
+        verify_checked_release(&bytes, fixture.evidence()),
+        Err(Error::CheckedManifestMismatch)
+    );
+    bytes[CHECKED_RELEASE_CODE_COMMITMENT_OFFSET_V2..CHECKED_RELEASE_FIXED_BYTES_V2].fill(0);
+    assert_eq!(CheckedReleaseV2::decode(&bytes), Err(Error::ZeroIdentifier));
+    let mut legacy = release.encode()?;
+    legacy[..8].copy_from_slice(b"DCLTREL1");
+    assert_eq!(CheckedReleaseV2::decode(&legacy), Err(Error::InvalidMagic));
     Ok(())
 }

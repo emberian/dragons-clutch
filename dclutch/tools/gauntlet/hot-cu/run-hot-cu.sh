@@ -23,7 +23,8 @@
 # MEAN. Never a worst margin, never one seed's number as a bound.
 #
 # The Hot path derives program addresses whose seeds include the ARTIFACT
-# RELEASE IDENTITY, and that identity is `hash(elf)` -- see `hash(elf)` in
+# RELEASE IDENTITY, and that identity is the hash of the `ArtifactReleaseV2`
+# body carrying the payload code commitment -- see `release` in
 # `programs/dclutch-trading-sbf/program-test/direct-hot/src/waist.rs`.
 # `try_find_program_address` costs 1,500 CU per rejected bump and walks up to 31
 # of them, so each seed's total carries `n * 1,500` of pure draw: a swing of
@@ -54,7 +55,7 @@
 # `program-test/direct-hot/src/waist.rs::FixtureSubstrateV1`.
 #
 # Decision 0012 admitted a MUTABLE substrate onto the cached-digest path.
-# `slot_pinned_release_elf_digest_v1` branches on the release's upgrade policy,
+# `slot_pinned_release_code_commitment_v2` branches on the release's upgrade policy,
 # and until this option existed the fixture could only ever build `Immutable`
 # releases over ProgramData with no authority -- so the ExactAuthority arm, the
 # whole of what 0012 added, had never executed against a validator and this
@@ -62,7 +63,7 @@
 #
 # THE THREE ARMS ARE NOT TWO. `slot-pinned` minus `immutable` is NOT 0012's
 # cost: the policy byte, the bound authority and the bound slot all live inside
-# `ArtifactReleaseV1::to_bytes`, so they move the artifact id, the release-set
+# `ArtifactReleaseV2::to_bytes`, so they move the artifact id, the release-set
 # identity, and every PDA seeded by it -- which under M-61 is a REDRAWN LOTTERY
 # worth tens of thousands of CU by itself. `immutable-pinned` is the control:
 # same `Immutable` digest arm, same absent authority, but the same nonzero bound

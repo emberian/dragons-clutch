@@ -722,7 +722,7 @@ async fn the_close_frame_refuses_an_unsigned_beneficiary_and_a_foreign_registry(
 ///
 /// The close's entire release argument rests on the cache the closer exhibits
 /// being CURRENT, and "current" is not a claim the cache makes about itself: it
-/// is `cached_role_deployment_observation_v1` requiring the release's pinned
+/// is `cached_role_deployment_observation_v2` requiring the release's pinned
 /// deployment slot to equal the slot the Loader wrote into ProgramData
 /// (decision 0012). `SlotPinnedSuperseded` is the substrate where the whole set
 /// was redeployed and every release except Trading's was re-pinned, so exactly

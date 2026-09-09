@@ -22,7 +22,7 @@
 //!
 //! [`encode_account_set_id_preimage_v1`]: crate::relay::release::encode_account_set_id_preimage_v1
 
-use dclutch_registry::{ArtifactReleaseV1, DeploymentObservationV1};
+use dclutch_registry::{ArtifactReleaseV2, DeploymentObservationV2};
 
 use crate::relay::{
     ADDRESS_BYTES, COPTION_NONE_TAG_V1, COPTION_SOME_TAG_V1, DBC_ADMITTED_DATA_LENGTHS_V1,
@@ -280,7 +280,7 @@ pub const RELAYED_OBSERVABLE_TABLE_V1: &[RelayedObservableV1] = &[
 ///
 /// * [`Self::LoaderV3`]: the state is owned by an upgradeable program. The set
 ///   carries the program's `Program` and `ProgramData` bodies and the adapter
-///   rebuilds a [`DeploymentObservationV1`] and authenticates it against the
+///   rebuilds a [`DeploymentObservationV2`] and authenticates it against the
 ///   pinned release — the Loopscale defense in full, because the venue can be
 ///   upgraded under a market.
 /// * [`Self::Native`]: the state is owned by a program the validator itself
@@ -424,7 +424,7 @@ pub struct RelayedObservationOutcomeV1 {
     atoms: i128,
     observed_unix_seconds: i64,
     observed_slot: u64,
-    venue_deployment: Option<DeploymentObservationV1>,
+    venue_deployment: Option<DeploymentObservationV2>,
 }
 
 impl RelayedObservationOutcomeV1 {
@@ -447,7 +447,7 @@ impl RelayedObservationOutcomeV1 {
     /// The venue deployment reconstructed from the attested Loader V3 bodies.
     /// `None` for a [`RelayedVenueKindV1::Native`] row, which has no
     /// `Program`/`ProgramData` positions to reconstruct one from.
-    pub const fn venue_deployment(self) -> Option<DeploymentObservationV1> {
+    pub const fn venue_deployment(self) -> Option<DeploymentObservationV2> {
         self.venue_deployment
     }
 }
@@ -505,8 +505,8 @@ fn require_pinned_venue(
     program: AccountObservationV1<'_>,
     programdata: AccountObservationV1<'_>,
     venue: AccountObservationV1<'_>,
-    pinned_venue_release: ArtifactReleaseV1,
-) -> Result<DeploymentObservationV1> {
+    pinned_venue_release: ArtifactReleaseV2,
+) -> Result<DeploymentObservationV2> {
     // Both positions are required for a `LoaderV3` row — `venue_kind` never
     // pairs one with `None` — so these `ok_or`s name that invariant rather
     // than a reachable runtime state.
@@ -913,7 +913,7 @@ pub fn interpret_sealed_record_v1(
     config: RelayedAdapterConfigV1,
     entries: &[AccountSetEntryV1],
     recomputed_account_set_id: [u8; 32],
-    pinned_venue_release: Option<ArtifactReleaseV1>,
+    pinned_venue_release: Option<ArtifactReleaseV2>,
     pinned_cluster_id: [u8; ADDRESS_BYTES],
     current_unix_seconds: i64,
 ) -> Result<RelayedObservationOutcomeV1> {
@@ -1814,8 +1814,8 @@ mod tests {
         ]
     }
 
-    fn pinned_release() -> ArtifactReleaseV1 {
-        ArtifactReleaseV1::new(
+    fn pinned_release() -> ArtifactReleaseV2 {
+        ArtifactReleaseV2::new(
             ProgramIdentityV1::new(VENUE_PROGRAM_KEY).expect("program"),
             ProgramIdentityV1::new(LOADER_V3_PROGRAM_ID).expect("loader"),
             VENUE_PROGRAMDATA_KEY,

@@ -547,7 +547,7 @@ fn live_registry_artifact_pair_v1(
     let profile = ProtocolInfrastructureProfileV2::decode(&account.data)
         .map_err(|error| Error::new(format!("Ensemble infrastructure profile: {error:?}")))?;
     let identity = profile.registry().artifact_release().to_bytes();
-    let schema = dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V1;
+    let schema = dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V2;
     let raw =
         Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &schema, &identity], &registry).0;
     let staging =

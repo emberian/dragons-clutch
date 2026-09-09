@@ -3770,7 +3770,7 @@ fn producer_selected_input(
         )?;
         let (raw, staging) = provider_record_pair_v1(
             registry_program,
-            dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V2,
             hex32(&selected.artifact_release_id)?,
         );
         (raw.to_string(), staging.to_string())

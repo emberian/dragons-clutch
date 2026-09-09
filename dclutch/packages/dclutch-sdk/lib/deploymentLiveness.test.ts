@@ -189,7 +189,7 @@ describe('the deployment liveness gate', () => {
   });
 
   it('REFUSES A CHECKED-RELEASE TABLE ABOUT A SET THE MARKET DOES NOT SELECT', async () => {
-    // The reverse conjunct. `stageCheckedReleaseV1` proves this once, from an
+    // The reverse conjunct. `stageCheckedReleaseV2` proves this once, from an
     // argument a human passes; a cut that outlives a cohort keeps saying a
     // release was checked for a market that no longer selects it.
     const liveness = await readDeploymentLivenessV1(stubClient({ marketReleaseSetId: 'ab'.repeat(32) }), shipped);

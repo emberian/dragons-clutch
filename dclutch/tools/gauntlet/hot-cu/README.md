@@ -255,7 +255,7 @@ seed by more than any substrate effect could.
 | `slot-pinned-superseded` | `ExactAuthority` | `[0x9a; 32]` | 531, except Trading's release at 167 | refuses, by name |
 
 **`slot-pinned` minus `immutable` is not 0012's cost.** The policy byte, the
-bound authority and the bound slot all live inside `ArtifactReleaseV1::to_bytes`,
+bound authority and the bound slot all live inside `ArtifactReleaseV2::to_bytes`,
 so changing the arm moves the artifact id, the release-set identity, and every
 PDA seeded by it — and the Registry derives its activation cache and its Hot
 admission address with `find_program_address` **on chain**. Switching arms

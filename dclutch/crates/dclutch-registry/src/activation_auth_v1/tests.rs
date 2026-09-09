@@ -97,7 +97,7 @@ struct Fixture {
     registry: Pubkey,
     release_set_id: ContentId,
     artifact_id: ArtifactReleaseIdV1,
-    release: ArtifactReleaseV1,
+    release: ArtifactReleaseV2,
     cache_bytes: Vec<u8>,
     program: AccountInfo<'static>,
     programdata: AccountInfo<'static>,
@@ -141,12 +141,12 @@ impl Fixture {
         let role_program = Pubkey::new_from_array([seed; 32]);
         let programdata_key =
             Pubkey::find_program_address(&[role_program.as_ref()], &bpf_loader_upgradeable::ID).0;
-        let release = ArtifactReleaseV1::new(
+        let release = ArtifactReleaseV2::new(
             ProgramIdentityV1::new(role_program.to_bytes()).expect("program"),
             ProgramIdentityV1::new(bpf_loader_upgradeable::ID.to_bytes()).expect("loader"),
             programdata_key.to_bytes(),
             ContentId::new([seed ^ 0x5a; 32]).expect("semantic release"),
-            hash(&elf).to_bytes(),
+            crate::artifact_code_commitment_v2::code_commitment_v2(&elf).expect("exact fixture code commitment"),
             slot,
             match authority {
                 None => ArtifactUpgradePolicyV1::Immutable,
@@ -162,7 +162,7 @@ impl Fixture {
             .expect("aliased release set");
         let release_set_id =
             ContentId::new(hash(&release_set.to_bytes()).to_bytes()).expect("release set id");
-        let observation = DeploymentObservationV1::new(
+        let observation = DeploymentObservationV2::new(
             role_program.to_bytes(),
             bpf_loader_upgradeable::ID.to_bytes(),
             true,
@@ -172,7 +172,7 @@ impl Fixture {
             programdata_key.to_bytes(),
             bpf_loader_upgradeable::ID.to_bytes(),
             slot,
-            hash(&elf).to_bytes(),
+            crate::artifact_code_commitment_v2::code_commitment_v2(&elf).expect("exact fixture code commitment"),
             authority,
         )
         .expect("observation");
@@ -858,12 +858,12 @@ impl MultiRoleFixture {
             let programdata_key =
                 Pubkey::find_program_address(&[program_key.as_ref()], &bpf_loader_upgradeable::ID)
                     .0;
-            let release = ArtifactReleaseV1::new(
+            let release = ArtifactReleaseV2::new(
                 ProgramIdentityV1::new(program_key.to_bytes()).expect("program"),
                 ProgramIdentityV1::new(bpf_loader_upgradeable::ID.to_bytes()).expect("loader"),
                 programdata_key.to_bytes(),
                 ContentId::new([seed ^ 0x5a; 32]).expect("semantic release"),
-                hash(&elf).to_bytes(),
+                crate::artifact_code_commitment_v2::code_commitment_v2(&elf).expect("exact fixture code commitment"),
                 slot,
                 ArtifactUpgradePolicyV1::Immutable,
                 None,
@@ -872,7 +872,7 @@ impl MultiRoleFixture {
             let artifact_id = ArtifactReleaseIdV1::new(hash(&release.to_bytes()).to_bytes())
                 .expect("artifact id");
             bindings.push(ExecutionRoleBindingV1::new(release.program(), artifact_id));
-            let observation = DeploymentObservationV1::new(
+            let observation = DeploymentObservationV2::new(
                 program_key.to_bytes(),
                 bpf_loader_upgradeable::ID.to_bytes(),
                 true,
@@ -882,7 +882,7 @@ impl MultiRoleFixture {
                 programdata_key.to_bytes(),
                 bpf_loader_upgradeable::ID.to_bytes(),
                 slot,
-                hash(&elf).to_bytes(),
+                crate::artifact_code_commitment_v2::code_commitment_v2(&elf).expect("exact fixture code commitment"),
                 None,
             )
             .expect("observation");
@@ -1043,7 +1043,7 @@ fn one_decode_authenticates_every_role_exactly_as_five_separate_reads_would() {
 /// The aliased `Fixture` cannot state this case at all: with every role bound to
 /// one program, every substitution is the identity. Here Core's Program and
 /// ProgramData are handed to a Trading read, and
-/// `cached_role_deployment_observation_v1` refuses at
+/// `cached_role_deployment_observation_v2` refuses at
 /// `program.key != release.program()`.
 #[test]
 fn a_role_read_with_another_roles_deployment_refuses() {

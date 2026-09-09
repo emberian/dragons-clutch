@@ -10,6 +10,7 @@
 use std::{fmt, str};
 
 use dclutch_core_contract::ContentId;
+use dclutch_registry::artifact_code_commitment_v2::{CodeCommitmentErrorV2, code_commitment_v2};
 use dclutch_source::pyth::{
     LoaderV3Error, ProgramDataV3View, ProgramV3View, PythReleaseV1, PythReleaseV1Error,
 };
@@ -31,11 +32,11 @@ pub use series_translation::*;
 pub use translation::*;
 
 /// Canonical checked-release magic.
-pub const CHECKED_RELEASE_MAGIC_V1: [u8; 8] = *b"DCLTREL1";
+pub const CHECKED_RELEASE_MAGIC_V2: [u8; 8] = *b"DCLTREL2";
 /// Implemented checked-release schema.
-pub const CHECKED_RELEASE_SCHEMA_V1: u16 = 1;
+pub const CHECKED_RELEASE_SCHEMA_V2: u16 = 2;
 /// Fixed byte prefix before length-prefixed reproducibility text.
-pub const CHECKED_RELEASE_FIXED_BYTES_V1: usize = 388;
+pub const CHECKED_RELEASE_FIXED_BYTES_V2: usize = 420;
 /// Loader V3's fixed ProgramData metadata allocation width.
 pub const LOADER_V3_PROGRAMDATA_METADATA_BYTES: usize = 45;
 /// Exact Loader V3 Program account-data width.
@@ -70,6 +71,8 @@ const LOADER_ID_OFFSET: usize = 260;
 const UPGRADE_AUTHORITY_OFFSET: usize = 292;
 const SOURCE_DIGEST_OFFSET: usize = 324;
 const CARGO_LOCK_DIGEST_OFFSET: usize = 356;
+/// Offset of the native commitment to the complete Loader code region.
+pub const CHECKED_RELEASE_CODE_COMMITMENT_OFFSET_V2: usize = 388;
 
 const LOADER_KIND_UPGRADEABLE_V3: u8 = 1;
 const AUTHORITY_NONE: u8 = 0;
@@ -146,6 +149,8 @@ pub enum Error {
     /// A checked release could not be projected into the canonical onchain
     /// artifact-release record.
     InvalidArtifactRelease,
+    /// Native code-commitment construction refused the observed Loader tail.
+    CodeCommitment(CodeCommitmentErrorV2),
     /// A five-role execution release set was malformed or did not bind the
     /// supplied checked artifacts exactly.
     InvalidExecutionReleaseSet,
@@ -201,7 +206,7 @@ pub enum SemanticPreimageKindV1 {
     /// Exact preimage that **no** in-tree semantic contract decodes.
     ///
     /// The five execution roles, Registry, and Rent each persist a
-    /// `semantic_release_id` inside their `ArtifactReleaseV1`, but no first-party
+    /// `semantic_release_id` inside their `ArtifactReleaseV2`, but no first-party
     /// contract in this tree owns or decodes a role-program release preimage.
     /// Labeling such a preimage `capability` would assert an owner that does not
     /// exist. This kind records the exact supplied bytes and their SHA-256
@@ -409,7 +414,7 @@ pub struct ReleaseEvidenceV1<'a> {
 #[derive(Clone, Copy, Debug)]
 pub struct RedeployedReleaseEvidenceV1<'a> {
     /// Exact checked manifest that authenticated the built ELF.
-    pub build_basis: &'a CheckedReleaseV1,
+    pub build_basis: &'a CheckedReleaseV2,
     /// Exact built SBF ELF, required to match `build_basis` byte-for-byte by
     /// digest before any new checked identity is constructed.
     pub elf: &'a [u8],
@@ -432,7 +437,7 @@ pub struct RedeployedReleaseEvidenceV1<'a> {
 
 /// Canonical checked binding between semantic, artifact, loader, and build facts.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CheckedReleaseV1 {
+pub struct CheckedReleaseV2 {
     semantic_kind: SemanticPreimageKindV1,
     semantic_preimage_len: u64,
     elf_len: u64,
@@ -441,6 +446,7 @@ pub struct CheckedReleaseV1 {
     deployment_slot: u64,
     programdata_elf_offset: u64,
     artifact_digest: [u8; 32],
+    code_commitment: [u8; 32],
     semantic_release_id: ContentId,
     program_account_digest: [u8; 32],
     programdata_account_digest: [u8; 32],
@@ -459,16 +465,16 @@ pub struct CheckedReleaseV1 {
     assumptions: Vec<String>,
 }
 
-impl CheckedReleaseV1 {
+impl CheckedReleaseV2 {
     /// Hostile-decode one exact canonical checked-release binary manifest.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        if bytes.len() < CHECKED_RELEASE_FIXED_BYTES_V1 {
+        if bytes.len() < CHECKED_RELEASE_FIXED_BYTES_V2 {
             return Err(Error::InvalidLength);
         }
-        if bytes.get(..8) != Some(CHECKED_RELEASE_MAGIC_V1.as_slice()) {
+        if bytes.get(..8) != Some(CHECKED_RELEASE_MAGIC_V2.as_slice()) {
             return Err(Error::InvalidMagic);
         }
-        if read_u16(bytes, 8)? != CHECKED_RELEASE_SCHEMA_V1 {
+        if read_u16(bytes, 8)? != CHECKED_RELEASE_SCHEMA_V2 {
             return Err(Error::UnsupportedSchema);
         }
         if bytes.get(RESERVED_OFFSET..MANIFEST_LENGTH_OFFSET) != Some([0_u8; 2].as_slice()) {
@@ -501,7 +507,7 @@ impl CheckedReleaseV1 {
             .map_err(|_| Error::ZeroIdentifier)?;
         let mut decoder = Decoder::new(
             bytes
-                .get(CHECKED_RELEASE_FIXED_BYTES_V1..)
+                .get(CHECKED_RELEASE_FIXED_BYTES_V2..)
                 .ok_or(Error::InvalidLength)?,
         );
         let source_revision = decoder.text()?;
@@ -524,6 +530,7 @@ impl CheckedReleaseV1 {
             deployment_slot: read_u64(bytes, DEPLOYMENT_SLOT_OFFSET)?,
             programdata_elf_offset: read_u64(bytes, PROGRAMDATA_ELF_OFFSET_OFFSET)?,
             artifact_digest: read_array(bytes, ARTIFACT_DIGEST_OFFSET)?,
+            code_commitment: read_array(bytes, CHECKED_RELEASE_CODE_COMMITMENT_OFFSET_V2)?,
             semantic_release_id,
             program_account_digest: read_array(bytes, PROGRAM_DIGEST_OFFSET)?,
             programdata_account_digest: read_array(bytes, PROGRAMDATA_DIGEST_OFFSET)?,
@@ -556,8 +563,8 @@ impl CheckedReleaseV1 {
         let assumption_count =
             u8::try_from(self.assumptions.len()).map_err(|_| Error::ArithmeticOverflow)?;
         let mut output = Vec::with_capacity(encoded_len);
-        output.extend_from_slice(&CHECKED_RELEASE_MAGIC_V1);
-        output.extend_from_slice(&CHECKED_RELEASE_SCHEMA_V1.to_le_bytes());
+        output.extend_from_slice(&CHECKED_RELEASE_MAGIC_V2);
+        output.extend_from_slice(&CHECKED_RELEASE_SCHEMA_V2.to_le_bytes());
         output.push(self.semantic_kind.byte());
         output.push(LOADER_KIND_UPGRADEABLE_V3);
         output.push(if self.upgrade_authority.is_some() {
@@ -584,6 +591,7 @@ impl CheckedReleaseV1 {
         output.extend_from_slice(&self.upgrade_authority.unwrap_or([0; 32]));
         output.extend_from_slice(&self.source_digest);
         output.extend_from_slice(&self.cargo_lock_digest);
+        output.extend_from_slice(&self.code_commitment);
         for text in [
             self.source_revision.as_str(),
             self.rustc_version.as_str(),
@@ -611,7 +619,7 @@ impl CheckedReleaseV1 {
     /// Emit the deterministic line-oriented machine-readable text projection.
     pub fn render_text(&self) -> Result<String> {
         let mut output = String::new();
-        push_line(&mut output, "format", "dclutch-checked-release-v1");
+        push_line(&mut output, "format", "dclutch-checked-release-v2");
         push_line(
             &mut output,
             "checked_release_id",
@@ -637,6 +645,11 @@ impl CheckedReleaseV1 {
             &mut output,
             "artifact_sha256",
             &encode_hex(&self.artifact_digest),
+        );
+        push_line(
+            &mut output,
+            "code_commitment",
+            &encode_hex(&self.code_commitment),
         );
         push_line(&mut output, "artifact_bytes", &self.elf_len.to_string());
         push_line(&mut output, "elf_class", "ELF64");
@@ -734,6 +747,11 @@ impl CheckedReleaseV1 {
         self.artifact_digest
     }
 
+    /// Return the native commitment to the entire observed Loader ELF tail, including padding.
+    pub const fn code_commitment(&self) -> [u8; 32] {
+        self.code_commitment
+    }
+
     /// Return the Loader V3 deployment slot from ProgramData.
     pub const fn deployment_slot(&self) -> u64 {
         self.deployment_slot
@@ -826,6 +844,7 @@ impl CheckedReleaseV1 {
         }
         for value in [
             self.artifact_digest,
+            self.code_commitment,
             self.program_account_digest,
             self.programdata_account_digest,
             self.program_id,
@@ -859,7 +878,7 @@ impl CheckedReleaseV1 {
     }
 
     fn encoded_len(&self) -> Result<usize> {
-        let mut total = CHECKED_RELEASE_FIXED_BYTES_V1;
+        let mut total = CHECKED_RELEASE_FIXED_BYTES_V2;
         for text in [
             self.source_revision.as_str(),
             self.rustc_version.as_str(),
@@ -879,7 +898,7 @@ impl CheckedReleaseV1 {
 }
 
 /// Construct a checked release from exact offline evidence.
-pub fn build_checked_release(evidence: ReleaseEvidenceV1<'_>) -> Result<CheckedReleaseV1> {
+pub fn build_checked_release(evidence: ReleaseEvidenceV1<'_>) -> Result<CheckedReleaseV2> {
     evidence.metadata.validate()?;
     if evidence.semantic_preimage.is_empty() || evidence.elf.is_empty() {
         return Err(Error::EmptyInput);
@@ -921,7 +940,7 @@ pub fn build_checked_release(evidence: ReleaseEvidenceV1<'_>) -> Result<CheckedR
         .map_err(|_| Error::ArithmeticOverflow)?;
     let semantic_release_id =
         ContentId::new(sha256(evidence.semantic_preimage)).map_err(|_| Error::ZeroIdentifier)?;
-    let result = CheckedReleaseV1 {
+    let result = CheckedReleaseV2 {
         semantic_kind: evidence.metadata.semantic_kind,
         semantic_preimage_len,
         elf_len,
@@ -930,6 +949,7 @@ pub fn build_checked_release(evidence: ReleaseEvidenceV1<'_>) -> Result<CheckedR
         deployment_slot: programdata.deployment_slot(),
         programdata_elf_offset,
         artifact_digest: sha256(evidence.elf),
+        code_commitment: code_commitment_v2(payload).map_err(Error::CodeCommitment)?,
         semantic_release_id,
         program_account_digest: sha256(evidence.program_account_data),
         programdata_account_digest: sha256(evidence.programdata_account_data),
@@ -960,7 +980,7 @@ pub fn build_checked_release(evidence: ReleaseEvidenceV1<'_>) -> Result<CheckedR
 /// names the new deployment rather than reusing or inventing an identifier.
 pub fn build_redeployed_checked_release(
     evidence: RedeployedReleaseEvidenceV1<'_>,
-) -> Result<CheckedReleaseV1> {
+) -> Result<CheckedReleaseV2> {
     if sha256(evidence.elf) != evidence.build_basis.artifact_digest {
         return Err(Error::DeployedElfMismatch);
     }
@@ -996,8 +1016,8 @@ pub fn build_redeployed_checked_release(
 pub fn verify_checked_release(
     manifest_bytes: &[u8],
     evidence: ReleaseEvidenceV1<'_>,
-) -> Result<CheckedReleaseV1> {
-    let checked = CheckedReleaseV1::decode(manifest_bytes)?;
+) -> Result<CheckedReleaseV2> {
+    let checked = CheckedReleaseV2::decode(manifest_bytes)?;
     let rebuilt = build_checked_release(evidence)?;
     if checked != rebuilt {
         return Err(Error::CheckedManifestMismatch);
@@ -1071,7 +1091,7 @@ pub fn loader_v3_program_account_data_v1(
 ///
 /// The reader side always understood this: `ProgramDataMetadataV3View::parse`
 /// reads tag 0 as `None` and never surfaces the residue, and
-/// `CheckedReleaseV1` records `upgrade_authority: None` for it while its
+/// `CheckedReleaseV2` records `upgrade_authority: None` for it while its
 /// account digest commits to the retained bytes. Only the CONSTRUCTOR could
 /// not express it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

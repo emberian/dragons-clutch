@@ -51,7 +51,7 @@ use dclutch_registry::release_set::{
 };
 use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1, ArtifactActivationInputV1,
-    ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1,
+    ArtifactReleaseV2, ArtifactUpgradePolicyV1, DeploymentObservationV2,
     activate_execution_role_into_v1, initialize_activation_cache_v1,
 };
 use dclutch_trading::scoring_rule::records_v1::{DealerFundV1, FundPhaseV1, ScoringRuleRecordV1};
@@ -155,8 +155,8 @@ fn programdata(program: Pubkey) -> Pubkey {
     Pubkey::find_program_address(&[program.as_ref()], &bpf_loader_upgradeable::ID).0
 }
 
-fn release(program: Pubkey, semantic: u8) -> ArtifactReleaseV1 {
-    ArtifactReleaseV1::new(
+fn release(program: Pubkey, semantic: u8) -> ArtifactReleaseV2 {
+    ArtifactReleaseV2::new(
         ProgramIdentityV1::new(program.to_bytes()).expect("program identity"),
         ProgramIdentityV1::new(bpf_loader_upgradeable::ID.to_bytes()).expect("loader identity"),
         programdata(program).to_bytes(),
@@ -169,19 +169,19 @@ fn release(program: Pubkey, semantic: u8) -> ArtifactReleaseV1 {
     .expect("immutable artifact release")
 }
 
-fn artifact_id(value: ArtifactReleaseV1) -> ArtifactReleaseIdV1 {
+fn artifact_id(value: ArtifactReleaseV2) -> ArtifactReleaseIdV1 {
     ArtifactReleaseIdV1::new(hash(&value.to_bytes()).to_bytes()).expect("artifact identity")
 }
 
-fn binding(value: ArtifactReleaseV1) -> ExecutionRoleBindingV1 {
+fn binding(value: ArtifactReleaseV2) -> ExecutionRoleBindingV1 {
     ExecutionRoleBindingV1::new(value.program(), artifact_id(value))
 }
 
-fn activation_input(value: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
+fn activation_input(value: ArtifactReleaseV2) -> ArtifactActivationInputV1 {
     ArtifactActivationInputV1::new(
         artifact_id(value),
         value,
-        DeploymentObservationV1::new(
+        DeploymentObservationV2::new(
             value.program().to_bytes(),
             bpf_loader_upgradeable::ID.to_bytes(),
             true,
@@ -191,7 +191,7 @@ fn activation_input(value: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
             value.programdata(),
             bpf_loader_upgradeable::ID.to_bytes(),
             value.deployment_slot(),
-            value.elf_digest(),
+            value.code_commitment(),
             value.upgrade_authority(),
         )
         .expect("current immutable deployment observation"),

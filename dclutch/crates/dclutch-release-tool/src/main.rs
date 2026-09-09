@@ -19,7 +19,7 @@ use dclutch_release_tool::{
     BuildMetadataV1, CHECKED_TRANSLATION_VALIDATION_INPUT_COUNT_V1,
     CHECKED_TRANSLATION_VALIDATION_LABELS_V1, CheckedCapabilityExecutionV1,
     CheckedExecutionReleaseSetV1, CheckedGenesisInfrastructureV1, CheckedInfrastructureV1,
-    CheckedReleaseV1, CheckedTranslationValidationV1, LoaderV3AuthorityStateV1, ReleaseEvidenceV1,
+    CheckedReleaseV2, CheckedTranslationValidationV1, LoaderV3AuthorityStateV1, ReleaseEvidenceV1,
     SealAccountDumpV1, TranslationValidationEvidenceV1,
     build_checked_capability_execution_from_bytes_v1, build_checked_execution_release_set,
     build_checked_genesis_infrastructure_v1, build_checked_infrastructure_v1,
@@ -841,11 +841,11 @@ fn inspect(flags: &mut BTreeMap<String, PathBuf>) -> Result<(), String> {
     require_no_flags(flags)?;
     let manifest = fs::read(&manifest_path)
         .map_err(|error| format!("failed reading {}: {error}", manifest_path.display()))?;
-    let release = CheckedReleaseV1::decode(&manifest).map_err(format_release_error)?;
+    let release = CheckedReleaseV2::decode(&manifest).map_err(format_release_error)?;
     emit_text(&release, text_output)
 }
 
-fn emit_text(release: &CheckedReleaseV1, output: Option<PathBuf>) -> Result<(), String> {
+fn emit_text(release: &CheckedReleaseV2, output: Option<PathBuf>) -> Result<(), String> {
     let text = release.render_text().map_err(format_release_error)?;
     if let Some(path) = output {
         fs::write(&path, text)
@@ -999,13 +999,13 @@ impl CheckedManifestFiles {
         })
     }
 
-    fn decode(&self) -> Result<[CheckedReleaseV1; 5], String> {
+    fn decode(&self) -> Result<[CheckedReleaseV2; 5], String> {
         Ok([
-            CheckedReleaseV1::decode(&self.manifests[0]).map_err(format_release_error)?,
-            CheckedReleaseV1::decode(&self.manifests[1]).map_err(format_release_error)?,
-            CheckedReleaseV1::decode(&self.manifests[2]).map_err(format_release_error)?,
-            CheckedReleaseV1::decode(&self.manifests[3]).map_err(format_release_error)?,
-            CheckedReleaseV1::decode(&self.manifests[4]).map_err(format_release_error)?,
+            CheckedReleaseV2::decode(&self.manifests[0]).map_err(format_release_error)?,
+            CheckedReleaseV2::decode(&self.manifests[1]).map_err(format_release_error)?,
+            CheckedReleaseV2::decode(&self.manifests[2]).map_err(format_release_error)?,
+            CheckedReleaseV2::decode(&self.manifests[3]).map_err(format_release_error)?,
+            CheckedReleaseV2::decode(&self.manifests[4]).map_err(format_release_error)?,
         ])
     }
 
@@ -1026,8 +1026,8 @@ fn load_release_set(path: PathBuf) -> Result<ExecutionReleaseSetV1, String> {
         .map_err(|error| format!("execution release set refused: {error:?}"))
 }
 
-fn load_checked_release(path: PathBuf) -> Result<CheckedReleaseV1, String> {
-    CheckedReleaseV1::decode(&read_bytes(path)?).map_err(format_release_error)
+fn load_checked_release(path: PathBuf) -> Result<CheckedReleaseV2, String> {
+    CheckedReleaseV2::decode(&read_bytes(path)?).map_err(format_release_error)
 }
 
 impl EvidenceFiles {

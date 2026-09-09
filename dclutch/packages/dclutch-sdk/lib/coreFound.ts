@@ -76,7 +76,7 @@ import {
 } from './generated/realmPositionV1';
 import {
   CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
-  ARTIFACT_RELEASE_SCHEMA_ID_V1,
+  ARTIFACT_RELEASE_SCHEMA_ID_V2,
   GRADED_BASIS_RECORD_SCHEMA_ID_V3,
   MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1,
   SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1,
@@ -1096,8 +1096,8 @@ export async function prepareCoreFoundV2(client: SolanaRpcClient, input: CoreFou
     market.toBytes(),
     generationBytes(input.generation),
   ], key(infrastructure.rent.program, 'Rent program'));
-  const registryArtifact = deriveFinalizedRecordAddressesV1(input.registryProgram, ARTIFACT_RELEASE_SCHEMA_ID_V1, Uint8Array.from(infrastructure.registry.artifactReleaseId.match(/../g) ?? [], (value) => Number.parseInt(value, 16)));
-  const rentArtifact = deriveFinalizedRecordAddressesV1(input.registryProgram, ARTIFACT_RELEASE_SCHEMA_ID_V1, Uint8Array.from(infrastructure.rent.artifactReleaseId.match(/../g) ?? [], (value) => Number.parseInt(value, 16)));
+  const registryArtifact = deriveFinalizedRecordAddressesV1(input.registryProgram, ARTIFACT_RELEASE_SCHEMA_ID_V2, Uint8Array.from(infrastructure.registry.artifactReleaseId.match(/../g) ?? [], (value) => Number.parseInt(value, 16)));
+  const rentArtifact = deriveFinalizedRecordAddressesV1(input.registryProgram, ARTIFACT_RELEASE_SCHEMA_ID_V2, Uint8Array.from(infrastructure.rent.artifactReleaseId.match(/../g) ?? [], (value) => Number.parseInt(value, 16)));
   const accountAddresses = [
     input.payer, market.toBase58(), rentCredit.toBase58(), infrastructure.rent.program,
     realm.raw, realm.staging, product.raw, product.staging, domain.raw, domain.staging, portfolio.raw, portfolio.staging,

@@ -58,7 +58,7 @@ use dclutch_registry::release_set::ExecutionRoleV1;
 use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
-    ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1, DeploymentObservationV1,
+    ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV2, DeploymentObservationV2,
 };
 use dclutch_trading::{
     artifacts_v4::{
@@ -1090,8 +1090,8 @@ pub(crate) fn authenticate_direct_role_deployment_v4(
 pub(crate) fn direct_deployment_observation_v4(
     program: &ObservedAccount,
     programdata: &ObservedAccount,
-    release: ArtifactReleaseV1,
-) -> Result<DeploymentObservationV1, Error> {
+    release: ArtifactReleaseV2,
+) -> Result<DeploymentObservationV2, Error> {
     if release.loader_program().to_bytes() != bpf_loader_upgradeable::ID.to_bytes()
         || program.key.to_bytes() != release.program().to_bytes()
         || programdata.key.to_bytes() != release.programdata()
@@ -1109,7 +1109,7 @@ pub(crate) fn direct_deployment_observation_v4(
         return Err(Error::ArtifactMismatch);
     }
     let data = ProgramDataV3View::parse(&programdata.data).map_err(Error::RegistrySvm)?;
-    DeploymentObservationV1::new(
+    DeploymentObservationV2::new(
         program.key.to_bytes(),
         program.owner.to_bytes(),
         program.executable,
@@ -1119,7 +1119,8 @@ pub(crate) fn direct_deployment_observation_v4(
         program_view.programdata(),
         bpf_loader_upgradeable::ID.to_bytes(),
         data.deployment_slot(),
-        hash(data.elf()).to_bytes(),
+        dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(data.elf())
+            .map_err(|_| Error::ArtifactMismatch)?,
         data.upgrade_authority(),
     )
     .map_err(Error::Registry)

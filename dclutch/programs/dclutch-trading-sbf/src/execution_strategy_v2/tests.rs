@@ -25,7 +25,7 @@ use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, CapabilityExecutionSelectionV1, ExecutionRoleV1, ProgramIdentityV1,
 };
 use dclutch_registry::svm::{LOADER_V3_PROGRAM_BYTES, LOADER_V3_PROGRAMDATA_METADATA_BYTES};
-use dclutch_registry::{ArtifactReleaseV1, ArtifactUpgradePolicyV1};
+use dclutch_registry::{ArtifactReleaseV2, ArtifactUpgradePolicyV1};
 use solana_program::{
     account_info::AccountInfo, hash::hash, pubkey::Pubkey, rent::Rent, sysvar::SysvarSerialize,
 };
@@ -160,7 +160,7 @@ impl Fixture {
     /// Same accounts, but the Certificate binds a source-derived identity.
     ///
     /// Everything else is byte-identical to [`Self::new`]: the same ELF, the
-    /// same finalized `ArtifactReleaseV1`, the same deployment. Only what the
+    /// same finalized `ArtifactReleaseV2`, the same deployment. Only what the
     /// Certificate names changes, so a difference in outcome is attributable to
     /// the binding and to nothing else.
     fn with_semantic_binding(disposition: StrategyDispositionV2, semantic: ContentId) -> Self {
@@ -198,12 +198,12 @@ impl Fixture {
         } else {
             ArtifactUpgradePolicyV1::Immutable
         };
-        let release = ArtifactReleaseV1::new(
+        let release = ArtifactReleaseV2::new(
             program_identity(accelerator_program),
             program_identity(bpf_loader_upgradeable::ID),
             accelerator_programdata.to_bytes(),
             id(20),
-            hash(ELF).to_bytes(),
+            dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(ELF).expect("exact fixture code commitment"),
             SLOT,
             upgrade_policy,
             upgrade_authority.map(|value| value.to_bytes()),
@@ -337,7 +337,7 @@ impl Fixture {
         );
         let artifact_record = finalized_record(
             registry_key,
-            ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            ARTIFACT_RELEASE_SCHEMA_ID_V2,
             release_bytes.to_vec(),
             &rent_value,
         );
@@ -846,7 +846,7 @@ fn registry_rent_privileges_and_account_width_are_not_caller_trust() {
 /// The on-chain half of the certificate rebind. The Certificate names the
 /// release's source-derived `semantic_release_id` and nothing about the built
 /// artifact, yet the authentication still ends at the same two facts: the
-/// finalized `ArtifactReleaseV1` selected by its own content digest, and that
+/// finalized `ArtifactReleaseV2` selected by its own content digest, and that
 /// record's `elf_digest` hashed against the live programdata.
 ///
 /// The returned release id is asserted equal to the one the exact-release
@@ -890,7 +890,7 @@ fn shadow_authenticates_a_semantically_bound_certificate_against_the_live_elf() 
         authenticated
             .artifact_release()
             .expect("artifact")
-            .elf_digest(),
+            .code_commitment(),
         hash(ELF).to_bytes()
     );
 }

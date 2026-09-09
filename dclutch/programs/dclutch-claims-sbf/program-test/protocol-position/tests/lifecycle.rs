@@ -44,8 +44,8 @@ use dclutch_market::{CoreState, Identity, Phase as CorePhase};
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
-    ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
-    ArtifactUpgradePolicyV1, DeploymentObservationV1, activate_execution_role_into_v1,
+    ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV2,
+    ArtifactUpgradePolicyV1, DeploymentObservationV2, activate_execution_role_into_v1,
     initialize_activation_cache_v1,
 };
 use dclutch_registry::release_set::{
@@ -169,13 +169,13 @@ fn identity(program: Pubkey) -> ProgramIdentityV1 {
     ProgramIdentityV1::new(program.to_bytes()).expect("program identity")
 }
 
-fn release(program: Pubkey, semantic: u8, elf: &[u8]) -> ArtifactReleaseV1 {
-    ArtifactReleaseV1::new(
+fn release(program: Pubkey, semantic: u8, elf: &[u8]) -> ArtifactReleaseV2 {
+    ArtifactReleaseV2::new(
         identity(program),
         identity(bpf_loader_upgradeable::ID),
         programdata(program).to_bytes(),
         ContentId::new([semantic; 32]).expect("semantic release"),
-        hash(elf).to_bytes(),
+        dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(elf).expect("exact fixture code commitment"),
         0,
         ArtifactUpgradePolicyV1::Immutable,
         None,
@@ -183,15 +183,15 @@ fn release(program: Pubkey, semantic: u8, elf: &[u8]) -> ArtifactReleaseV1 {
     .expect("release")
 }
 
-fn artifact_id(release: ArtifactReleaseV1) -> ArtifactReleaseIdV1 {
+fn artifact_id(release: ArtifactReleaseV2) -> ArtifactReleaseIdV1 {
     ArtifactReleaseIdV1::new(hash(&release.to_bytes()).to_bytes()).expect("artifact id")
 }
 
-fn activation_input(release: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
+fn activation_input(release: ArtifactReleaseV2) -> ArtifactActivationInputV1 {
     ArtifactActivationInputV1::new(
         artifact_id(release),
         release,
-        DeploymentObservationV1::new(
+        DeploymentObservationV2::new(
             release.program().to_bytes(),
             bpf_loader_upgradeable::ID.to_bytes(),
             true,
@@ -201,7 +201,7 @@ fn activation_input(release: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
             release.programdata(),
             bpf_loader_upgradeable::ID.to_bytes(),
             0,
-            release.elf_digest(),
+            release.code_commitment(),
             release.upgrade_authority(),
         )
         .expect("observation"),

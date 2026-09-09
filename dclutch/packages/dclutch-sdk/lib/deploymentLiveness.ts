@@ -39,7 +39,7 @@ import type { SolanaRpcClient } from './rpc';
  *
  * A live cohort is not enough. The site also PUBLISHES a featured market and a
  * table of checked execution releases, and those are the sentences a reader
- * actually acts on. `stageCheckedReleaseV1` proves at staging time that the row
+ * actually acts on. `stageCheckedReleaseV2` proves at staging time that the row
  * is about the set the Market selects -- once, from an argument a human passed.
  * Nothing re-asked afterwards, so a cut that survived a cohort boundary would
  * keep saying a release was checked for a market that no longer selects it, or

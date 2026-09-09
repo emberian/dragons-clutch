@@ -70,8 +70,8 @@ use dclutch_product::svm_reader::{
 use dclutch_product::{ContentId as ProductContentId, ResultDomainV2};
 use dclutch_registry::release_set::ExecutionRoleV1;
 use dclutch_registry::{
-    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_BYTES_V1,
-    ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1,
+    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_BYTES_V2,
+    ARTIFACT_RELEASE_SCHEMA_ID_V2, ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV2,
 };
 use dclutch_source::relay::{
     Error as RelayContractError, MAX_RELAYED_ACCOUNTS_V1, RELAYED_ADAPTER_CONFIG_BYTES,
@@ -927,7 +927,7 @@ fn process_retire(
 /// 2. the Market, its Core ownership, its derived address, and this Program as
 ///    its Resolution role;
 /// 3. the Source graph, link by link, from the material the Market itself names;
-/// 4. the venue's pinned `ArtifactReleaseV1`, named by the Source spec;
+/// 4. the venue's pinned `ArtifactReleaseV2`, named by the Source spec;
 /// 5. the Product Runtime V2 graph, against the Market's own Product record;
 /// 6. the record account's program custody and its slot-seeded address;
 /// 7. the Source state account's own derived address;
@@ -2825,12 +2825,12 @@ fn consume_source_records(
                 registry,
                 consume_slot(accounts, venue, 19)?,
                 consume_slot(accounts, venue, 20)?,
-                ARTIFACT_RELEASE_SCHEMA_ID_V1,
+                ARTIFACT_RELEASE_SCHEMA_ID_V2,
                 venue_release_id,
                 &venue_data,
-                ARTIFACT_RELEASE_BYTES_V1,
+                ARTIFACT_RELEASE_BYTES_V2,
             )?;
-            let release = ArtifactReleaseV1::decode(&venue_data)
+            let release = ArtifactReleaseV2::decode(&venue_data)
                 .map_err(|_| ResolutionError::ProviderRelease)?;
             drop(venue_data);
             Some(AuthenticatedVenueReleaseV1 {

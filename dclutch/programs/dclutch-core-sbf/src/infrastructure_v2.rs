@@ -55,7 +55,7 @@ use dclutch_registry::release_set::{
     ProtocolInfrastructureProfileV2,
 };
 use dclutch_registry::{
-    ARTIFACT_RELEASE_BYTES_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1,
+    ARTIFACT_RELEASE_BYTES_V2, ARTIFACT_RELEASE_SCHEMA_ID_V2, ArtifactReleaseV2,
     require_slot_pinned_release_v1,
 };
 use solana_program::{
@@ -187,7 +187,7 @@ fn moved(
     let bytes = successor_raw
         .try_borrow_data()
         .map_err(|_| CoreSbfError::Infrastructure)?;
-    if bytes.len() != ARTIFACT_RELEASE_BYTES_V1 {
+    if bytes.len() != ARTIFACT_RELEASE_BYTES_V2 {
         return Err(CoreSbfError::Infrastructure);
     }
     let digest = ArtifactReleaseIdV1::new(hash(&bytes).to_bytes())
@@ -247,7 +247,7 @@ fn authenticate_predecessor_profile(
 fn authenticate_succession_arm(
     registry: &Pubkey,
     predecessor_binding: ExecutionRoleBindingV1,
-    successor_release: ArtifactReleaseV1,
+    successor_release: ArtifactReleaseV2,
     moved: bool,
     predecessor_raw: &AccountInfo<'_>,
     predecessor_staging: &AccountInfo<'_>,
@@ -303,11 +303,11 @@ fn authenticate_predecessor_record(
     raw: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
     binding: ExecutionRoleBindingV1,
-) -> Result<ArtifactReleaseV1, CoreSbfError> {
+) -> Result<ArtifactReleaseV2, CoreSbfError> {
     let bytes = raw
         .try_borrow_data()
         .map_err(|_| CoreSbfError::Infrastructure)?;
-    if bytes.len() != ARTIFACT_RELEASE_BYTES_V1 {
+    if bytes.len() != ARTIFACT_RELEASE_BYTES_V2 {
         return Err(CoreSbfError::Infrastructure);
     }
     let digest = hash(&bytes).to_bytes();
@@ -320,11 +320,11 @@ fn authenticate_predecessor_record(
         registry,
         raw,
         staging,
-        ARTIFACT_RELEASE_SCHEMA_ID_V1,
+        ARTIFACT_RELEASE_SCHEMA_ID_V2,
         digest,
         &bytes,
     )?;
-    let release = ArtifactReleaseV1::decode(&bytes).map_err(|_| CoreSbfError::Infrastructure)?;
+    let release = ArtifactReleaseV2::decode(&bytes).map_err(|_| CoreSbfError::Infrastructure)?;
     if release.program() != binding.program() {
         return Err(CoreSbfError::Infrastructure);
     }

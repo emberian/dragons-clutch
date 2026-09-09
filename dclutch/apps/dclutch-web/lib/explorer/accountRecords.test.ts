@@ -2,6 +2,21 @@ import { PublicKey } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
 import {
+  ARTIFACT_RELEASE_BYTES_V2,
+  ARTIFACT_RELEASE_CODE_COMMITMENT_OFFSET_V2,
+  ARTIFACT_RELEASE_DEPLOYMENT_SLOT_OFFSET_V2,
+  ARTIFACT_RELEASE_HEADER_RESERVED_OFFSET_V2,
+  ARTIFACT_RELEASE_LOADER_OFFSET_V2,
+  ARTIFACT_RELEASE_PROFILE_OFFSET_V2,
+  ARTIFACT_RELEASE_PROFILE_V2,
+  ARTIFACT_RELEASE_PROGRAMDATA_OFFSET_V2,
+  ARTIFACT_RELEASE_PROGRAM_OFFSET_V2,
+  ARTIFACT_RELEASE_SCHEMA_OFFSET_V2,
+  ARTIFACT_RELEASE_SCHEMA_VERSION_V2,
+  ARTIFACT_RELEASE_SEMANTIC_RELEASE_OFFSET_V2,
+  ARTIFACT_RELEASE_UPGRADE_AUTHORITY_OFFSET_V2,
+  ARTIFACT_RELEASE_UPGRADE_POLICY_OFFSET_V2,
+  ARTIFACT_RELEASE_UPGRADE_POLICY_TAGS_V2,
   CORE_PHASE_OPEN_TAG,
   CORE_READINESS_READY_TAG,
   CORE_STATE_BYTES,
@@ -19,6 +34,8 @@ import {
   STATISTIC_SPEC_SOURCE_SCALE_EXPONENT_OFFSET_V1,
   STATISTIC_SPEC_THRESHOLD_ATOMS_OFFSET_V1,
 } from '@dclutch/sdk/generated/coreFound';
+import { ARTIFACT_RELEASE_MAGIC_V2 } from '@dclutch/sdk/generated/protocolConstantsV1';
+import { decodeArtifactReleaseV2 } from '@dclutch/sdk/releaseRegistry';
 import { REALM_BYTES_V1, REALM_MAGIC_V1 } from '@dclutch/sdk/generated/realmPositionV1';
 import statisticFixture from '../../fixtures/cohort14-statistic-spec.devnet.json';
 import { deriveClaimsAggregateAddressV2, deriveMarketCoreAddressV2 } from '@dclutch/sdk/marketCoreV2';
@@ -66,6 +83,26 @@ function aggregateBytes(market: string, claims: number): Uint8Array {
   return bytes;
 }
 
+/** A valid exact-authority ArtifactReleaseV2 built only from emitted coordinates. */
+function artifactReleaseBytes(): Uint8Array {
+  const exactAuthority = ARTIFACT_RELEASE_UPGRADE_POLICY_TAGS_V2.find((entry) => entry.name === 'Exact authority');
+  if (exactAuthority === undefined) throw new Error('generated ArtifactReleaseV2 policy table lacks Exact authority');
+  const bytes = new Uint8Array(ARTIFACT_RELEASE_BYTES_V2);
+  bytes.set(new TextEncoder().encode(ARTIFACT_RELEASE_MAGIC_V2));
+  const view = new DataView(bytes.buffer);
+  view.setUint16(ARTIFACT_RELEASE_SCHEMA_OFFSET_V2, ARTIFACT_RELEASE_SCHEMA_VERSION_V2, true);
+  view.setUint16(ARTIFACT_RELEASE_PROFILE_OFFSET_V2, ARTIFACT_RELEASE_PROFILE_V2, true);
+  bytes[ARTIFACT_RELEASE_UPGRADE_POLICY_OFFSET_V2] = exactAuthority.tag;
+  bytes.set(new Uint8Array(32).fill(0x41), ARTIFACT_RELEASE_PROGRAM_OFFSET_V2);
+  bytes.set(new Uint8Array(32).fill(0x42), ARTIFACT_RELEASE_LOADER_OFFSET_V2);
+  bytes.set(new Uint8Array(32).fill(0x43), ARTIFACT_RELEASE_PROGRAMDATA_OFFSET_V2);
+  bytes.set(new Uint8Array(32).fill(0x44), ARTIFACT_RELEASE_SEMANTIC_RELEASE_OFFSET_V2);
+  bytes.set(new Uint8Array(32).fill(0x45), ARTIFACT_RELEASE_CODE_COMMITMENT_OFFSET_V2);
+  view.setBigUint64(ARTIFACT_RELEASE_DEPLOYMENT_SLOT_OFFSET_V2, 987_654n, true);
+  bytes.set(new Uint8Array(32).fill(0x46), ARTIFACT_RELEASE_UPGRADE_AUTHORITY_OFFSET_V2);
+  return bytes;
+}
+
 describe('identifying a record by its own magic', () => {
   it('resolves a Core state by its leading bytes', () => {
     const bytes = coreStateBytes(7n);
@@ -89,6 +126,47 @@ describe('identifying a record by its own magic', () => {
 });
 
 describe('decoding against a spec', () => {
+  it('renders every ArtifactReleaseV2 identity and deployment pin', () => {
+    const bytes = artifactReleaseBytes();
+    const canonical = decodeArtifactReleaseV2(bytes);
+    const spec = specForMagic(ARTIFACT_RELEASE_MAGIC_V2);
+    expect(spec).not.toBeNull();
+    if (spec === null) return;
+    const decoded = decodeAgainstSpec(spec, bytes);
+    const read = (label: string) => decoded.fields.find((entry) => entry.label === label)?.value;
+
+    expect(decoded.widthCheck.ok).toBe(true);
+    expect(read('Schema version')).toEqual({ form: 'scalar', text: String(ARTIFACT_RELEASE_SCHEMA_VERSION_V2) });
+    expect(read('Artifact profile')).toEqual({ form: 'scalar', text: String(ARTIFACT_RELEASE_PROFILE_V2) });
+    expect(read('Upgrade policy')).toEqual({
+      form: 'enum',
+      tag: ARTIFACT_RELEASE_UPGRADE_POLICY_TAGS_V2.find((entry) => entry.name === 'Exact authority')?.tag,
+      name: 'Exact authority',
+    });
+    expect(read('Program')).toEqual({ form: 'address', base58: canonical.program });
+    expect(read('Loader program')).toEqual({ form: 'address', base58: canonical.loader });
+    expect(read('ProgramData')).toEqual({ form: 'address', base58: canonical.programData });
+    expect(read('Semantic release identity')).toEqual({ form: 'identity', hex: canonical.semanticReleaseId });
+    expect(read('Code commitment')).toEqual({ form: 'identity', hex: canonical.codeCommitment });
+    expect(read('Deployment slot')).toEqual({ form: 'scalar', text: canonical.deploymentSlot.toString() });
+    expect(read('Upgrade authority (zero means absent)')).toEqual({ form: 'address', base58: canonical.upgradeAuthority });
+  });
+
+  it('leaves ArtifactReleaseV2 validation with the SDK decoder', () => {
+    const bytes = artifactReleaseBytes();
+    bytes[ARTIFACT_RELEASE_HEADER_RESERVED_OFFSET_V2] = 1;
+    expect(() => decodeArtifactReleaseV2(bytes)).toThrow('reserved');
+
+    const spec = specForMagic(ARTIFACT_RELEASE_MAGIC_V2);
+    if (spec === null) throw new Error('the explorer does not render DCLTARF2');
+    const decoded = decodeAgainstSpec(spec, bytes);
+    expect(decoded.widthCheck.ok).toBe(true);
+    expect(decoded.fields.find((entry) => entry.label === 'Reserved')?.value).toEqual({
+      form: 'reserved', zero: false, hex: '010000',
+    });
+    expect(spec.note).toContain('SDK decoder owns canonical validation');
+  });
+
   it('reads the Core state’s typed fields and checks its exact width', () => {
     const spec = specForMagic(magicText(CORE_STATE_MAGIC));
     expect(spec).not.toBeNull();

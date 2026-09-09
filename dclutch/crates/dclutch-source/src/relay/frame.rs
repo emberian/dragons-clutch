@@ -72,7 +72,7 @@ pub enum RelayAccountNameV1 {
     SourceResolutionState,
     /// The terminal `ResolutionCertificateV2` this consumption writes.
     ResolutionCertificate,
-    /// The raw immutable `ArtifactReleaseV1` pinning the observed venue program.
+    /// The raw immutable `ArtifactReleaseV2` pinning the observed venue program.
     VenueArtifactRelease,
     /// The finalized staging vacancy proving the venue release is immutable.
     VenueArtifactReleaseStagingVacancy,
@@ -330,7 +330,7 @@ pub const RETIRE_RECORD_FRAME_V1: [RelayAccountRoleV1; 4] =
 /// derivation are the authority, so re-presenting the key set here would be a
 /// second place to get the same question wrong.
 ///
-/// The venue's `ArtifactReleaseV1` is the position that carries P-B.  It is
+/// The venue's `ArtifactReleaseV2` is the position that carries P-B.  It is
 /// named by the Source spec, so which third-party deployment a market is pinned
 /// to is a founding-time content identity rather than a caller's choice.
 ///
@@ -382,7 +382,7 @@ pub const CONSUME_RECORD_FRAME_V1: [RelayAccountRoleV1; 30] = [
     SYSTEM,
 ];
 
-/// Where the venue's `ArtifactReleaseV1` sits in [`CONSUME_RECORD_FRAME_V1`].
+/// Where the venue's `ArtifactReleaseV2` sits in [`CONSUME_RECORD_FRAME_V1`].
 pub const CONSUME_VENUE_RELEASE_INDEX_V1: usize = 19;
 
 /// How many positions the venue-release pair occupies.
@@ -401,7 +401,7 @@ pub const CONSUME_VENUE_RELEASE_SLOTS_V1: usize = 2;
 /// else moved.  A row whose state account is owned by a program the validator
 /// itself implements — the Feature program, the sysvar owner — has no
 /// upgradeable venue program: no `ProgramData`, no ELF digest, no upgrade
-/// authority, and therefore no `ArtifactReleaseV1` that could pin a
+/// authority, and therefore no `ArtifactReleaseV2` that could pin a
 /// deployment.  Demanding one anyway is not a stricter frame, it is a frame no
 /// honest caller can fill, which is why the two new observables had a decoder
 /// and no way onto a chain until this existed.

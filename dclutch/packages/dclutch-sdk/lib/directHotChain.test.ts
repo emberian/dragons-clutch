@@ -12,11 +12,12 @@ import {
   validateDirectSignedRequestProfileV2,
 } from './directHotChain';
 import { hex, sha256 } from './bytes';
+import { codeCommitmentV2 } from './codeCommitmentV2';
 import * as Abi from './generated/directInlineV3';
 import {
   LOADER_V3_PROGRAMDATA_OFFSET,
   UPGRADEABLE_LOADER_ID,
-  type ArtifactReleaseV1,
+  type ArtifactReleaseV2,
 } from './releaseRegistry';
 import { type RpcAccount } from './rpc';
 
@@ -100,7 +101,7 @@ async function capabilitySealFixture(): Promise<Readonly<{
 }
 
 async function mutableDeployment(seed: number, slot = 81n): Promise<Readonly<{
-  artifact: ArtifactReleaseV1;
+  artifact: ArtifactReleaseV2;
   programAddress: string;
   program: RpcAccount;
   programDataAddress: string;
@@ -119,15 +120,14 @@ async function mutableDeployment(seed: number, slot = 81n): Promise<Readonly<{
   programDataBytes[12] = 1;
   programDataBytes.set(new PublicKey(authority).toBytes(), 13);
   programDataBytes.fill(seed, LOADER_V3_PROGRAMDATA_OFFSET);
-  const elfDigest = Array.from(await sha256(programDataBytes.slice(LOADER_V3_PROGRAMDATA_OFFSET)),
-    (byte) => byte.toString(16).padStart(2, '0')).join('');
-  const artifact: ArtifactReleaseV1 = Object.freeze({
+  const codeCommitment = hex(await codeCommitmentV2(programDataBytes.slice(LOADER_V3_PROGRAMDATA_OFFSET)));
+  const artifact: ArtifactReleaseV2 = Object.freeze({
     bytes: new Uint8Array(),
     program: programKey.toBase58(),
     loader: UPGRADEABLE_LOADER_ID,
     programData: programDataKey.toBase58(),
     semanticReleaseId: '11'.repeat(32),
-    elfDigest,
+    codeCommitment,
     deploymentSlot: 81n,
     upgradePolicy: 'exact-authority',
     upgradeAuthority: authority,

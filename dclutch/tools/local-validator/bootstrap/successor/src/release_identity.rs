@@ -1,8 +1,8 @@
 //! Campaign-start assertion: the ACTIVATED release must be the LIVE one.
 //!
 //! The activation cache is the chain's own statement of which release is in
-//! force, and `ArtifactReleaseV1::authenticate_deployment` pins each role's
-//! deployment slot and ELF digest against it on chain. So when the programs are
+//! force, and `ArtifactReleaseV2::authenticate_deployment` pins each role's
+//! deployment slot and native code commitment against it on chain. So when the programs are
 //! upgraded in place — which the permanent-ID ladder does on purpose, keeping
 //! every address — and the activated set is not re-activated to follow, the
 //! cache silently describes code that is no longer running. Nothing about the
@@ -71,12 +71,12 @@ pub(crate) fn activated_release_supersession_v1(
             )),
             Some(_) => {}
         }
-        let activated_digest = hex(&release.elf_digest());
-        if let Some(live_digest) = row.observed_live_elf_sha256.as_deref()
+        let activated_digest = hex(&release.code_commitment());
+        if let Some(live_digest) = row.observed_code_commitment.as_deref()
             && live_digest != activated_digest
         {
             refusals.push(format!(
-                "{name}: activation pinned live ELF sha256 {activated_digest}, live ELF hashes to {live_digest}"
+                "{name}: activation pinned code commitment {activated_digest}, live ELF commits to {live_digest}"
             ));
         }
     }
@@ -111,9 +111,7 @@ pub(crate) fn authenticate_activated_release_is_live_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_registry::{
-        ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ARTIFACT_RELEASE_BYTES_V1,
-    };
+    use dclutch_registry::{ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ARTIFACT_RELEASE_BYTES_V2};
     use sha2::Digest as _;
     use solana_sdk::pubkey::Pubkey;
     use solana_sdk_ids::bpf_loader_upgradeable;
@@ -125,7 +123,7 @@ mod tests {
         cache[..8].copy_from_slice(b"DCLTACT1");
         cache[8..10].copy_from_slice(&1u16.to_le_bytes());
         cache[10..12].copy_from_slice(&1u16.to_le_bytes());
-        let mut artifacts: Vec<[u8; ARTIFACT_RELEASE_BYTES_V1]> = Vec::new();
+        let mut artifacts: Vec<[u8; ARTIFACT_RELEASE_BYTES_V2]> = Vec::new();
         let mut digests: Vec<String> = Vec::new();
         for (index, slot) in slots.into_iter().enumerate() {
             let program = Pubkey::new_from_array([(index as u8) + 1; 32]);
@@ -133,10 +131,10 @@ mod tests {
             let elf: Vec<u8> = (0..64u8)
                 .map(|byte| byte.wrapping_add(slot as u8))
                 .collect();
-            let elf_digest: [u8; 32] = sha2::Sha256::digest(&elf).into();
-            let mut record = [0u8; ARTIFACT_RELEASE_BYTES_V1];
-            record[..8].copy_from_slice(b"DCLTARF1");
-            record[8..10].copy_from_slice(&1u16.to_le_bytes());
+            let elf_digest = crate::plan::code_commitment_v2(&elf).expect("exact ELF commitment");
+            let mut record = [0u8; ARTIFACT_RELEASE_BYTES_V2];
+            record[..8].copy_from_slice(b"DCLTARF2");
+            record[8..10].copy_from_slice(&2u16.to_le_bytes());
             record[10..12].copy_from_slice(&1u16.to_le_bytes());
             record[16..48].copy_from_slice(&program.to_bytes());
             record[48..80].copy_from_slice(&loader.to_bytes());
@@ -156,9 +154,9 @@ mod tests {
             let artifact_id: [u8; 32] = sha2::Sha256::digest(record).into();
             release_set[16 + index * 64..48 + index * 64].copy_from_slice(&record[16..48]);
             release_set[48 + index * 64..80 + index * 64].copy_from_slice(&artifact_id);
-            let offset = 48 + index * (32 + ARTIFACT_RELEASE_BYTES_V1);
+            let offset = 48 + index * (32 + ARTIFACT_RELEASE_BYTES_V2);
             cache[offset..offset + 32].copy_from_slice(&artifact_id);
-            cache[offset + 32..offset + 32 + ARTIFACT_RELEASE_BYTES_V1].copy_from_slice(record);
+            cache[offset + 32..offset + 32 + ARTIFACT_RELEASE_BYTES_V2].copy_from_slice(record);
         }
         let release_set_id: [u8; 32] = sha2::Sha256::digest(release_set).into();
         cache[16..48].copy_from_slice(&release_set_id);
@@ -178,7 +176,8 @@ mod tests {
             pinned_authority: None,
             observed_owner: None,
             observed_executable: None,
-            observed_live_elf_sha256: elf,
+            observed_live_elf_sha256: elf.clone(),
+            observed_code_commitment: elf,
             pinned_live_elf_sha256: String::new(),
             checked_candidate_elf_sha256: String::new(),
             live_elf_padding_bytes: 0,
@@ -219,7 +218,7 @@ mod tests {
         assert!(
             refusals
                 .iter()
-                .any(|refusal| refusal.starts_with("custody: activation pinned live ELF sha256"))
+                .any(|refusal| refusal.starts_with("custody: activation pinned code commitment"))
         );
         assert_ne!(activated_digests[0], live_digests[0]);
     }

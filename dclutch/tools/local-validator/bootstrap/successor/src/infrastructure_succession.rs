@@ -73,7 +73,7 @@ use dclutch_operator::{
     },
 };
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V1;
+use dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V2;
 use dclutch_registry::release_set::{
     PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1, PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2,
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1, ProtocolInfrastructureProfileV1,
@@ -265,7 +265,7 @@ fn record_pair(registry_program: Pubkey, digest: &[u8; 32]) -> RecordPairV1 {
         raw: Pubkey::find_program_address(
             &[
                 RAW_RECORD_PDA_SEED_V1,
-                &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+                &ARTIFACT_RELEASE_SCHEMA_ID_V2,
                 digest,
             ],
             &registry_program,
@@ -274,7 +274,7 @@ fn record_pair(registry_program: Pubkey, digest: &[u8; 32]) -> RecordPairV1 {
         staging: Pubkey::find_program_address(
             &[
                 STAGING_CURSOR_PDA_SEED_V1,
-                &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+                &ARTIFACT_RELEASE_SCHEMA_ID_V2,
                 digest,
             ],
             &registry_program,

@@ -67,8 +67,8 @@ use dclutch_registry::release_set::{
 };
 use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
-    ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1,
-    ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1,
+    ARTIFACT_RELEASE_SCHEMA_ID_V2, ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1,
+    ArtifactReleaseV2, ArtifactUpgradePolicyV1, DeploymentObservationV2,
     activate_execution_role_into_v1, initialize_activation_cache_v1,
 };
 use dclutch_resolution_core_v3_operator::{
@@ -372,13 +372,14 @@ fn program_identity(program: Pubkey) -> ProgramIdentityV1 {
     ProgramIdentityV1::new(program.to_bytes()).expect("nonzero program")
 }
 
-fn release(program: Pubkey, semantic: [u8; 32], elf: &[u8]) -> ArtifactReleaseV1 {
-    ArtifactReleaseV1::new(
+fn release(program: Pubkey, semantic: [u8; 32], elf: &[u8]) -> ArtifactReleaseV2 {
+    ArtifactReleaseV2::new(
         program_identity(program),
         program_identity(bpf_loader_upgradeable::ID),
         programdata(program).to_bytes(),
         id(semantic),
-        hash(elf).to_bytes(),
+        dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(elf)
+            .expect("exact ProgramData ELF commitment"),
         0,
         ArtifactUpgradePolicyV1::Immutable,
         None,
@@ -386,19 +387,37 @@ fn release(program: Pubkey, semantic: [u8; 32], elf: &[u8]) -> ArtifactReleaseV1
     .expect("immutable artifact release")
 }
 
-fn artifact_id(release: ArtifactReleaseV1) -> ArtifactReleaseIdV1 {
+#[test]
+fn fixture_release_commits_exact_elf_bytes_v2() {
+    // A synthetic nonempty tail exercises this fixture constructor's argument
+    // semantics; actual SBF campaigns supply the exact loaded ELF bytes here.
+    let elf = b"\x7fELFfixture-code-commitment-v2";
+    let observed = release(Pubkey::new_unique(), [7; 32], elf);
+    let expected = dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(elf)
+        .expect("nonempty exact tail");
+    assert_eq!(observed.code_commitment(), expected);
+    assert_ne!(observed.code_commitment(), hash(elf).to_bytes());
+    let mut changed = elf.to_vec();
+    changed[elf.len() - 1] ^= 1;
+    assert_ne!(
+        observed.code_commitment(),
+        release(observed.program().to_bytes().into(), [7; 32], &changed).code_commitment()
+    );
+}
+
+fn artifact_id(release: ArtifactReleaseV2) -> ArtifactReleaseIdV1 {
     ArtifactReleaseIdV1::new(hash(&release.to_bytes()).to_bytes()).expect("artifact identity")
 }
 
-fn binding(release: ArtifactReleaseV1) -> ExecutionRoleBindingV1 {
+fn binding(release: ArtifactReleaseV2) -> ExecutionRoleBindingV1 {
     ExecutionRoleBindingV1::new(release.program(), artifact_id(release))
 }
 
-fn activation_input(release: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
+fn activation_input(release: ArtifactReleaseV2) -> ArtifactActivationInputV1 {
     ArtifactActivationInputV1::new(
         artifact_id(release),
         release,
-        DeploymentObservationV1::new(
+        DeploymentObservationV2::new(
             release.program().to_bytes(),
             bpf_loader_upgradeable::ID.to_bytes(),
             true,
@@ -408,7 +427,7 @@ fn activation_input(release: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
             release.programdata(),
             bpf_loader_upgradeable::ID.to_bytes(),
             release.deployment_slot(),
-            release.elf_digest(),
+            release.code_commitment(),
             release.upgrade_authority(),
         )
         .expect("current deployment observation"),
@@ -425,11 +444,11 @@ fn activation_input(release: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
 /// whose address is a PDA of the TRADING role and whose walk authenticates the
 /// release-selected program for each role it enters.
 fn activation(
-    core: ArtifactReleaseV1,
-    claims: ArtifactReleaseV1,
-    trading: ArtifactReleaseV1,
-    resolution: ArtifactReleaseV1,
-    custody: ArtifactReleaseV1,
+    core: ArtifactReleaseV2,
+    claims: ArtifactReleaseV2,
+    trading: ArtifactReleaseV2,
+    resolution: ArtifactReleaseV2,
+    custody: ArtifactReleaseV2,
 ) -> ([u8; 32], Vec<u8>) {
     let release_set = ExecutionReleaseSetV1::new(
         binding(core),
@@ -894,7 +913,7 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
     );
     let registry_artifact = add_record(
         &mut test,
-        ARTIFACT_RELEASE_SCHEMA_ID_V1,
+        ARTIFACT_RELEASE_SCHEMA_ID_V2,
         registry_release.to_bytes().to_vec(),
     );
     let infrastructure = Pubkey::find_program_address(

@@ -1055,7 +1055,7 @@ fn direct_market_usage_v1() -> String {
          --plan ABSOLUTE_JSON --rpc-url URL {ack} GENESIS_HASH \
          --direct-fee-basis-points U16 --direct-fee-recipient PUBKEY \
          --relayer-attestation PUBKEY --pool PUBKEY --venue-deployment-slot U64 \
-         --venue-upgrade-authority PUBKEY --venue-elf-sha256 HEX64 --window-start I64 \
+         --venue-upgrade-authority PUBKEY --venue-elf ABS_FILE --venue-elf-sha256 HEX64 --window-start I64 \
          --window-end I64 --max-age-seconds U32 [--venue-program PUBKEY] \
          [--venue-programdata PUBKEY]",
         ack = campaign::DEVNET_ACKNOWLEDGMENT_FLAG_NAME,
@@ -1592,6 +1592,7 @@ fn run_graduation_market(arguments: Vec<String>) -> Result<()> {
     let mut venue_slot = None;
     let mut venue_authority = None;
     let mut venue_elf_sha256 = None;
+    let mut venue_elf = None;
     let mut window_start = None;
     let mut window_end = None;
     let mut max_age = None;
@@ -1610,6 +1611,7 @@ fn run_graduation_market(arguments: Vec<String>) -> Result<()> {
             "--venue-deployment-slot" => Some(&mut venue_slot),
             "--venue-upgrade-authority" => Some(&mut venue_authority),
             "--venue-elf-sha256" => Some(&mut venue_elf_sha256),
+            "--venue-elf" => Some(&mut venue_elf),
             "--window-start" => Some(&mut window_start),
             "--window-end" => Some(&mut window_end),
             "--max-age-seconds" => Some(&mut max_age),
@@ -1626,6 +1628,21 @@ fn run_graduation_market(arguments: Vec<String>) -> Result<()> {
             .map_err(|_| Error::new(format!("{label} must be a decimal number")))
     }
     let registry = parse_pubkey(registry, "--registry-program-id")?;
+    let venue_elf_path = std::path::PathBuf::from(required(venue_elf, "--venue-elf")?);
+    if !venue_elf_path.is_absolute() {
+        return Err(Error::new(
+            "--venue-elf must name the exact observed ELF tail by absolute path",
+        ));
+    }
+    let venue_elf_bytes = std::fs::read(&venue_elf_path)?;
+    let expected_venue_sha256 = hex32(venue_elf_sha256, "--venue-elf-sha256")?;
+    if <sha2::Sha256 as sha2::Digest>::digest(&venue_elf_bytes).as_slice() != expected_venue_sha256
+    {
+        return Err(Error::new(
+            "--venue-elf bytes differ from the supplied flat SHA-256 provenance",
+        ));
+    }
+    let venue_code_commitment = plan::code_commitment_v2(&venue_elf_bytes)?;
     // Meteora DBC's real mainnet addresses, as `twin.rs` and the relay dossier
     // pin them; overridable for a different venue.
     let venue = relayed::RelayedVenueFactsV1 {
@@ -1641,7 +1658,7 @@ fn run_graduation_market(arguments: Vec<String>) -> Result<()> {
         )?
         .to_bytes(),
         pool: parse_pubkey(pool, "--pool")?.to_bytes(),
-        elf_digest: hex32(venue_elf_sha256, "--venue-elf-sha256")?,
+        code_commitment: venue_code_commitment,
         deployment_slot: decimal::<u64>(venue_slot, "--venue-deployment-slot")?,
         upgrade_authority: parse_pubkey(venue_authority, "--venue-upgrade-authority")?.to_bytes(),
     };

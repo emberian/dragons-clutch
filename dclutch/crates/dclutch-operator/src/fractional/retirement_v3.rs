@@ -39,7 +39,7 @@ use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
-    ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1, DeploymentObservationV1,
+    ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV2, DeploymentObservationV2,
 };
 use dclutch_versioned_message_operator::{
     Finality, Observation, ObservedAccount, VersionedMessagePlanV0,
@@ -684,8 +684,8 @@ fn authenticate_deployment(
 
 fn deployment_observation(
     deployment: &FractionalRetirementDeploymentV3,
-    release: ArtifactReleaseV1,
-) -> Result<DeploymentObservationV1> {
+    release: ArtifactReleaseV2,
+) -> Result<DeploymentObservationV2> {
     let program = &deployment.program;
     let programdata = &deployment.programdata;
     if release.loader_program().to_bytes() != bpf_loader_upgradeable::ID.to_bytes()
@@ -705,7 +705,7 @@ fn deployment_observation(
     if program_view.programdata() != programdata.key.to_bytes() || programdata.key != expected {
         return Err(Error::ChainArtifacts);
     }
-    DeploymentObservationV1::new(
+    DeploymentObservationV2::new(
         program.key.to_bytes(),
         program.owner.to_bytes(),
         program.executable,
@@ -715,7 +715,8 @@ fn deployment_observation(
         program_view.programdata(),
         bpf_loader_upgradeable::ID.to_bytes(),
         data.deployment_slot(),
-        hash(data.elf()).to_bytes(),
+        dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(data.elf())
+            .map_err(|_| Error::ChainArtifacts)?,
         data.upgrade_authority(),
     )
     .map_err(Error::Registry)

@@ -73,7 +73,7 @@ pub(crate) fn upgrade_authority() -> [u8; 32] {
     domain_bytes("venue-upgrade-authority")
 }
 
-/// The deterministic synthetic ELF tail and its digest.
+/// The deterministic synthetic ELF tail and its V2 commitment.
 pub(crate) fn synthetic_elf_tail() -> Vec<u8> {
     let mut tail = Vec::with_capacity(SYNTHETIC_ELF_TAIL_BYTES);
     let mut counter: u32 = 0;
@@ -88,8 +88,9 @@ pub(crate) fn synthetic_elf_tail() -> Vec<u8> {
     tail
 }
 
-pub(crate) fn synthetic_elf_digest() -> [u8; 32] {
-    Sha256::digest(synthetic_elf_tail()).into()
+pub(crate) fn synthetic_code_commitment() -> [u8; 32] {
+    dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(&synthetic_elf_tail())
+        .expect("nonempty synthetic ELF")
 }
 
 /// The 36-byte Loader V3 `Program` account body pointing at the ProgramData.

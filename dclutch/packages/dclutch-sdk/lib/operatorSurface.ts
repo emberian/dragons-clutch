@@ -23,11 +23,11 @@ import {
   REGISTRY_ACTIVATION_CACHE_ROLES_OFFSET,
   REGISTRY_ROLES,
   UPGRADEABLE_LOADER_ID,
-  decodeArtifactReleaseV1,
+  decodeArtifactReleaseV2,
   decodeExecutionReleaseSetV1,
   requireSlotPinnedReleaseV1,
   REGISTRY_ACTIVATION_PDA_SEED_V1,
-  type ArtifactReleaseV1,
+  type ArtifactReleaseV2,
   type RegistryRole,
 } from './releaseRegistry';
 import { SOLANA_DEVNET_GENESIS_HASH_V1 } from './rpc';
@@ -249,7 +249,7 @@ function same(left: Uint8Array, right: Uint8Array): boolean {
 
 type ActivatedExecutionV1 = Readonly<{
   releaseSetId: string;
-  artifacts: Readonly<Record<RegistryRole, ArtifactReleaseV1>>;
+  artifacts: Readonly<Record<RegistryRole, ArtifactReleaseV2>>;
 }>;
 
 /** Hostile-decode the complete cache without reading a single ELF byte. */
@@ -283,12 +283,12 @@ async function exactActivationCache(
   const releaseView = new DataView(releaseBytes.buffer);
   releaseView.setUint16(8, 1, true);
   releaseView.setUint16(10, 1, true);
-  const artifacts = {} as Record<RegistryRole, ArtifactReleaseV1>;
+  const artifacts = {} as Record<RegistryRole, ArtifactReleaseV2>;
   for (const [index, role] of REGISTRY_ROLES.entries()) {
     const offset = REGISTRY_ACTIVATION_CACHE_ROLES_OFFSET + index * REGISTRY_ACTIVATED_ROLE_BYTES;
     const artifactId = slice(bytes, offset, 32);
     requireNonzero(artifactId, `${role} activated artifact identity`);
-    const artifact = decodeArtifactReleaseV1(slice(bytes, offset + 32, ARTIFACT_RELEASE_BYTES));
+    const artifact = decodeArtifactReleaseV2(slice(bytes, offset + 32, ARTIFACT_RELEASE_BYTES));
     if (!same(await sha256(artifact.bytes), artifactId)) throw new Error(`${role} activated artifact bytes do not hash to their identity`);
     if (artifact.loader !== UPGRADEABLE_LOADER_ID) throw new Error(`${role} activated artifact does not bind Loader v3`);
     requireSlotPinnedReleaseV1(artifact, `${role} activated artifact release`);

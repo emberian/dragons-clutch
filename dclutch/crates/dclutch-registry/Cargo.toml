@@ -10,6 +10,7 @@ rust-version.workspace = true
 svm = ["dep:solana-program", "dep:solana-sdk-ids"]
 
 [dependencies]
+dclutch-sha256-adapter = { path = "../dclutch-sha256-adapter" }
 dclutch-core-contract = { path = "../dclutch-core-contract" }
 solana-program = { version = "=3.0.0", default-features = false, optional = true }
 solana-sdk-ids = { version = "=3.1.0", optional = true }

@@ -3,6 +3,11 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
+import { AGGREGATE_RETIREMENT_FINISH_MAGIC_V1 } from '@dclutch/sdk/generated/aggregateRetirementV1';
+import {
+  ARTIFACT_RELEASE_MAGIC_V2,
+  CHECKED_RELEASE_MAGIC_V2,
+} from '@dclutch/sdk/generated/protocolConstantsV1';
 
 import * as coverage from '../scripts/explorer-coverage.mjs';
 
@@ -55,6 +60,17 @@ const surveyDeclaredInstructionMagics = coverage.surveyDeclaredInstructionMagics
  * Run `npm run explorer:coverage` to read the table.
  */
 describe('explorer coverage', () => {
+  it('renders ArtifactReleaseV2 and classifies the two non-account magics accurately', () => {
+    const records = report().records;
+    expect(records.find((row) => row.magic === ARTIFACT_RELEASE_MAGIC_V2)?.state).toBe('rendered');
+    expect(records.find((row) => row.magic === AGGREGATE_RETIREMENT_FINISH_MAGIC_V1)).toMatchObject({
+      state: 'exempt', reason: expect.stringContaining('retirement-finish instruction magic'),
+    });
+    expect(records.find((row) => row.magic === CHECKED_RELEASE_MAGIC_V2)).toMatchObject({
+      state: 'exempt', reason: expect.stringContaining('offchain reproducible-build manifest'),
+    });
+  });
+
   it('renders every record magic the generated modules declare', () => {
     const missing = report()
       .records.filter((row) => row.state === 'unrendered')

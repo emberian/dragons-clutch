@@ -30,7 +30,7 @@ fn twin_venue_facts() -> RelayedVenueFactsV1 {
         program: twin::DBC_PROGRAM,
         programdata: twin::DBC_PROGRAMDATA,
         pool: twin::pool_address(),
-        elf_digest: twin::synthetic_elf_digest(),
+        code_commitment: twin::synthetic_code_commitment(),
         deployment_slot: twin::SYNTHETIC_DEPLOYMENT_SLOT,
         upgrade_authority: twin::upgrade_authority(),
     }

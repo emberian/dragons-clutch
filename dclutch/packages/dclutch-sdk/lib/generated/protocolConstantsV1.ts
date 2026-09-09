@@ -3,11 +3,11 @@
 
 // Record magics: each identifies a persisted record.
 export const ACTIVATION_CACHE_MAGIC_V1 = 'DCLTACT1' as const; // crates/dclutch-registry/src/activation.rs::ACTIVATED_EXECUTION_RELEASE_SET_MAGIC_V1
-export const ARTIFACT_RELEASE_MAGIC_V1 = 'DCLTARF1' as const; // crates/dclutch-registry/src/artifact.rs::ARTIFACT_RELEASE_MAGIC_V1
+export const ARTIFACT_RELEASE_MAGIC_V2 = 'DCLTARF2' as const; // crates/dclutch-registry/src/artifact.rs::ARTIFACT_RELEASE_MAGIC_V2
 export const CAPABILITY_SEAL_MAGIC_V1 = 'DCLTCSL1' as const; // crates/dclutch-vm/src/capability_seal/mod.rs::CAPABILITY_SEAL_MAGIC_V1
 export const CHECKED_INFRASTRUCTURE_MAGIC_V1 = 'DCLTIEV1' as const; // crates/dclutch-release-tool/src/infrastructure.rs::CHECKED_INFRASTRUCTURE_MAGIC_V1
 export const CHECKED_MULTIPROGRAM_MAGIC_V1 = 'DCLTMPR1' as const; // crates/dclutch-release-tool/src/multiprogram.rs::CHECKED_MULTIPROGRAM_MAGIC_V1
-export const CHECKED_RELEASE_MAGIC_V1 = 'DCLTREL1' as const; // crates/dclutch-release-tool/src/lib.rs::CHECKED_RELEASE_MAGIC_V1
+export const CHECKED_RELEASE_MAGIC_V2 = 'DCLTREL2' as const; // crates/dclutch-release-tool/src/lib.rs::CHECKED_RELEASE_MAGIC_V2
 export const EXECUTION_RELEASE_SET_MAGIC_V1 = 'DCLTRLS1' as const; // crates/dclutch-registry/src/release_set/mod.rs::EXECUTION_RELEASE_SET_MAGIC_V1
 export const PRODUCT_RUNTIME_DOMAIN_MAGIC_V2 = 'DCLTPRD2' as const; // crates/dclutch-product/src/generated.rs::DOMAIN_MAGIC
 export const PRODUCT_RUNTIME_PORTFOLIO_MAGIC_V2 = 'DCLTPRF2' as const; // crates/dclutch-product/src/generated.rs::PORTFOLIO_MAGIC
@@ -30,6 +30,8 @@ export const RELEASE_LINEAGE_PDA_DOMAIN_V1 = new TextEncoder().encode('dclutch:r
 
 // Digest domains, as the bytes a hash preimage is prefixed with.
 export const FAMILY_REQUEST_DIGEST_DOMAIN_V3 = new TextEncoder().encode('dclutch:shadow-family-request:v3'); // crates/dclutch-market/src/execution_strategy/shadow_digest_v3.rs::FAMILY_REQUEST_DIGEST_DOMAIN_V3
+export const CODE_COMMITMENT_INITIAL_DOMAIN_V2 = new TextEncoder().encode('dclutch/code-commitment-v2/initial'); // crates/dclutch-registry/src/artifact_code_commitment_v2.rs::INITIAL_DOMAIN
+export const CODE_COMMITMENT_CHUNK_DOMAIN_V2 = new TextEncoder().encode('dclutch/code-commitment-v2/chunk'); // crates/dclutch-registry/src/artifact_code_commitment_v2.rs::CHUNK_DOMAIN
 
 // Envelope kinds and formats, as the text a JSON document carries.
 export const DIRECT_TICKET_KIND_V1 = 'dclutch/direct-intent-ticket/v1' as const; // crates/dclutch-direct-ticket/src/envelope.rs::PORTABLE_DIRECT_TICKET_KIND_V1

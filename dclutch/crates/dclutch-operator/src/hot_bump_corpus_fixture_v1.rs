@@ -39,7 +39,7 @@ use dclutch_registry::release_set::{
 };
 use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1, ArtifactActivationInputV1,
-    ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1,
+    ArtifactReleaseV2, ArtifactUpgradePolicyV1, DeploymentObservationV2,
     activate_execution_role_into_v1, initialize_activation_cache_v1, put_activation_cache_bump_v1,
 };
 use solana_program::{hash::hash, pubkey::Pubkey};
@@ -89,7 +89,7 @@ fn identity(value: [u8; 32]) -> Identity {
 /// The one immutable execution release set every staged role resolves under.
 fn release_set() -> ([u8; 32], ExecutionReleaseSetV1) {
     let role = |program: [u8; 32], semantic: u8| {
-        ArtifactReleaseV1::new(
+        ArtifactReleaseV2::new(
             ProgramIdentityV1::new(program).expect("program identity"),
             ProgramIdentityV1::new(LOADER_PROGRAM).expect("loader identity"),
             [semantic.wrapping_add(0x80); 32],
@@ -105,7 +105,7 @@ fn release_set() -> ([u8; 32], ExecutionReleaseSetV1) {
     let claims = role(CLAIMS_PROGRAM, 0x12);
     let trading = role(trading_program().to_bytes(), 0x13);
     let custody = role(CUSTODY_PROGRAM, 0x14);
-    let binding = |value: ArtifactReleaseV1| {
+    let binding = |value: ArtifactReleaseV2| {
         ExecutionRoleBindingV1::new(
             value.program(),
             ArtifactReleaseIdV1::new(hash(&value.to_bytes()).to_bytes())
@@ -196,7 +196,7 @@ pub(crate) fn activation_cache_bytes() -> Vec<u8> {
     let mut cache = vec![0; ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1];
     initialize_activation_cache_v1(&mut cache, content).expect("activation cache");
     let role = |program: [u8; 32], semantic: u8| {
-        ArtifactReleaseV1::new(
+        ArtifactReleaseV2::new(
             ProgramIdentityV1::new(program).expect("program identity"),
             ProgramIdentityV1::new(LOADER_PROGRAM).expect("loader identity"),
             [semantic.wrapping_add(0x80); 32],
@@ -220,7 +220,7 @@ pub(crate) fn activation_cache_bytes() -> Vec<u8> {
             ArtifactReleaseIdV1::new(hash(&release.to_bytes()).to_bytes())
                 .expect("artifact identity"),
             release,
-            DeploymentObservationV1::new(
+            DeploymentObservationV2::new(
                 release.program().to_bytes(),
                 LOADER_PROGRAM,
                 true,
@@ -230,7 +230,7 @@ pub(crate) fn activation_cache_bytes() -> Vec<u8> {
                 release.programdata(),
                 LOADER_PROGRAM,
                 release.deployment_slot(),
-                release.elf_digest(),
+                release.code_commitment(),
                 release.upgrade_authority(),
             )
             .expect("current immutable deployment observation"),

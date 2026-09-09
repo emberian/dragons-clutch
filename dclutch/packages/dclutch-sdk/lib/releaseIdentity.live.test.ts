@@ -108,8 +108,8 @@ describe('live devnet release identity', () => {
    * check on it passes. Only its CONTENT is behind, and its pinned deployment
    * slots match nothing on chain.
    *
-   * That matters because `ArtifactReleaseV1::authenticate_deployment` pins the
-   * deployment slot and ELF digest on chain, so every route that reauthenticates
+   * That matters because `ArtifactReleaseV2::authenticate_deployment` pins the
+   * deployment slot and code commitment on chain, so every route that reauthenticates
    * a role against this cache must refuse — and `CORE_FOUND_ACCOUNT_LABELS_V3`
    * index 24 is the activation cache, so a client that trusted a stale constant
    * would pass this dead address straight into the 37-account Found frame.

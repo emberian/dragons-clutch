@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   checkedReleaseSetIdsV1,
   parseCheckedReleaseFragmentV1,
-  stageCheckedReleaseV1,
+  stageCheckedReleaseV2,
   PUBLIC_DEVNET_CUT_V1,
   parsePublicDevnetCutV1,
   publicCutExplorerHrefV1,
@@ -138,7 +138,7 @@ describe('public devnet cut staging', () => {
     });
 
     it('stages a fragment for the set the cut’s Market selects', () => {
-      const staged = stageCheckedReleaseV1(live, fragment(SELECTED), SELECTED);
+      const staged = stageCheckedReleaseV2(live, fragment(SELECTED), SELECTED);
       expect(staged.checkedReleases[SELECTED]).toEqual({ gateDigest: 'a'.repeat(64), sealedSet: 'b'.repeat(64) });
       expect(checkedReleaseSetIdsV1(staged)).toEqual([SELECTED]);
       // The shipped cut is untouched: staging returns a new cut and the caller
@@ -153,11 +153,11 @@ describe('public devnet cut staging', () => {
       const empty = parseCheckedReleaseFragmentV1({
         schema: 'dclutch-public-cut-checked-releases-fragment-v1', checkedReleases: {},
       });
-      expect(() => stageCheckedReleaseV1(live, empty, SELECTED)).toThrow(/seals nothing/);
+      expect(() => stageCheckedReleaseV2(live, empty, SELECTED)).toThrow(/seals nothing/);
     });
 
     it('refuses a fragment for a set this cut’s Market does not select, and names both', () => {
-      expect(() => stageCheckedReleaseV1(live, fragment(OTHER), SELECTED))
+      expect(() => stageCheckedReleaseV2(live, fragment(OTHER), SELECTED))
         .toThrow(new RegExp(`${OTHER}[\\s\\S]*${SELECTED}`));
       // Staging it anyway would put a row in this site's deployment record
       // that turns the trade spine's `release` wall off for a market the
@@ -166,14 +166,14 @@ describe('public devnet cut staging', () => {
     });
 
     it('refuses a second, different release for a set it already names', () => {
-      const staged = stageCheckedReleaseV1(live, fragment(SELECTED), SELECTED);
-      expect(() => stageCheckedReleaseV1(staged, parseCheckedReleaseFragmentV1({
+      const staged = stageCheckedReleaseV2(live, fragment(SELECTED), SELECTED);
+      expect(() => stageCheckedReleaseV2(staged, parseCheckedReleaseFragmentV1({
         schema: 'dclutch-public-cut-checked-releases-fragment-v1',
         checkedReleases: { [SELECTED]: { gateDigest: 'c'.repeat(64), sealedSet: 'd'.repeat(64) } },
       }), SELECTED)).toThrow(/already names a different checked release/);
       // Idempotent for the identical fragment: re-running the staging tool is
       // not a conflict.
-      expect(stageCheckedReleaseV1(staged, fragment(SELECTED), SELECTED).checkedReleases[SELECTED])
+      expect(stageCheckedReleaseV2(staged, fragment(SELECTED), SELECTED).checkedReleases[SELECTED])
         .toEqual({ gateDigest: 'a'.repeat(64), sealedSet: 'b'.repeat(64) });
     });
 

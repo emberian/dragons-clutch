@@ -57,8 +57,8 @@ use dclutch_registry::release_set::{
 };
 use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_registry::{
-    ARTIFACT_RELEASE_BYTES_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1,
-    DeploymentObservationV1, require_slot_pinned_release_v1,
+    ARTIFACT_RELEASE_BYTES_V2, ARTIFACT_RELEASE_SCHEMA_ID_V2, ArtifactReleaseV2,
+    DeploymentObservationV2, require_slot_pinned_release_v1,
 };
 use solana_program::{
     account_info::AccountInfo,
@@ -93,7 +93,7 @@ pub const RENT_CONSENT_ACCOUNT_V2: usize = 18;
 /// the superseded one.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PredecessorRecordObservationV1 {
-    /// Registry-owned headerless `ArtifactReleaseV1` record bytes.
+    /// Registry-owned headerless `ArtifactReleaseV2` record bytes.
     pub raw: ObservedAccount,
     /// The record's canonical staging cursor, vacant because it finalized.
     pub staging: ObservedAccount,
@@ -118,7 +118,7 @@ pub struct CoreInfrastructureSuccessionStateV1 {
     pub core_programdata: ObservedAccount,
     /// The key that ProgramData binds, which must sign.
     pub upgrade_authority: ObservedAccount,
-    /// Successor Registry `ArtifactReleaseV1` record bytes.
+    /// Successor Registry `ArtifactReleaseV2` record bytes.
     pub registry_artifact_raw: ObservedAccount,
     /// Successor Registry record's vacant staging cursor.
     pub registry_artifact_staging: ObservedAccount,
@@ -126,7 +126,7 @@ pub struct CoreInfrastructureSuccessionStateV1 {
     pub registry_program: ObservedAccount,
     /// Current Registry ProgramData account and complete ELF tail.
     pub registry_programdata: ObservedAccount,
-    /// Successor Rent `ArtifactReleaseV1` record bytes.
+    /// Successor Rent `ArtifactReleaseV2` record bytes.
     pub rent_artifact_raw: ObservedAccount,
     /// Successor Rent record's vacant staging cursor.
     pub rent_artifact_staging: ObservedAccount,
@@ -525,7 +525,7 @@ fn moved(
     successor_raw: &ObservedAccount,
     predecessor_binding: ExecutionRoleBindingV1,
 ) -> Result<bool, Error> {
-    if successor_raw.data.len() != ARTIFACT_RELEASE_BYTES_V1 {
+    if successor_raw.data.len() != ARTIFACT_RELEASE_BYTES_V2 {
         return Err(Error::InvalidSuccessorRecord);
     }
     let digest = ArtifactReleaseIdV1::new(hash(&successor_raw.data).to_bytes())
@@ -643,7 +643,7 @@ fn authenticate_successor_record(
     staging: &ObservedAccount,
     program: &ObservedAccount,
     programdata: &ObservedAccount,
-) -> Result<(ExecutionRoleBindingV1, ArtifactReleaseV1), Error> {
+) -> Result<(ExecutionRoleBindingV1, ArtifactReleaseV2), Error> {
     let (release, artifact) =
         authenticate_artifact_record(registry, raw, staging, Error::InvalidSuccessorRecord)?;
     if release.program().to_bytes() != program.key.to_bytes() {
@@ -669,15 +669,15 @@ fn authenticate_artifact_record(
     raw: &ObservedAccount,
     staging: &ObservedAccount,
     refusal: Error,
-) -> Result<(ArtifactReleaseV1, ArtifactReleaseIdV1), Error> {
-    if raw.data.len() != ARTIFACT_RELEASE_BYTES_V1 {
+) -> Result<(ArtifactReleaseV2, ArtifactReleaseIdV1), Error> {
+    if raw.data.len() != ARTIFACT_RELEASE_BYTES_V2 {
         return Err(refusal);
     }
     let digest = hash(&raw.data).to_bytes();
     let expected_raw = Pubkey::find_program_address(
         &[
             RAW_RECORD_PDA_SEED_V1,
-            &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            &ARTIFACT_RELEASE_SCHEMA_ID_V2,
             &digest,
         ],
         &registry,
@@ -686,7 +686,7 @@ fn authenticate_artifact_record(
     let expected_staging = Pubkey::find_program_address(
         &[
             STAGING_CURSOR_PDA_SEED_V1,
-            &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            &ARTIFACT_RELEASE_SCHEMA_ID_V2,
             &digest,
         ],
         &registry,
@@ -705,20 +705,21 @@ fn authenticate_artifact_record(
     {
         return Err(refusal);
     }
-    let release = ArtifactReleaseV1::decode(&raw.data).map_err(|_| refusal)?;
+    let release = ArtifactReleaseV2::decode(&raw.data).map_err(|_| refusal)?;
     let artifact = ArtifactReleaseIdV1::new(digest).map_err(|_| refusal)?;
     Ok((release, artifact))
 }
 
 /// The observed Loader V3 deployment, authenticated against its own record.
 ///
-/// The host hashes the complete observed ELF on both arms. On chain the
-/// unmoved binding rides V1's first admission and skips that hash to save
-/// compute; a host has no such budget to spend, and a snapshot whose ELF
-/// disagrees with the pin is one an operator wants named before it composes a
-/// ceremony around it.
+/// The host recomputes the V2 commitment from the complete observed ELF on
+/// both arms. On chain, Registry finalization already established that
+/// commitment, so the Core reuses it after checking the live Loader pin. A
+/// host has no transaction compute ceiling, and a snapshot whose bytes
+/// disagree with the release is one an operator wants named before composing
+/// a ceremony around it.
 fn authenticate_deployment(
-    release: ArtifactReleaseV1,
+    release: ArtifactReleaseV2,
     program: &ObservedAccount,
     programdata: &ObservedAccount,
 ) -> Result<(), Error> {
@@ -739,7 +740,7 @@ fn authenticate_deployment(
     if program_view.programdata() != programdata.key.to_bytes() || programdata.key != derived {
         return Err(Error::InvalidDeployment);
     }
-    let observation = DeploymentObservationV1::new(
+    let observation = DeploymentObservationV2::new(
         program.key.to_bytes(),
         program.owner.to_bytes(),
         program.executable,
@@ -749,7 +750,8 @@ fn authenticate_deployment(
         program_view.programdata(),
         bpf_loader_upgradeable::ID.to_bytes(),
         programdata_view.deployment_slot(),
-        hash(programdata_view.elf()).to_bytes(),
+        dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(programdata_view.elf())
+            .map_err(|_| Error::InvalidDeployment)?,
         programdata_view.upgrade_authority(),
     )
     .map_err(Error::Registry)?;
@@ -768,7 +770,7 @@ fn compose_arm(
     binding: InfrastructureBindingV1,
     registry: Pubkey,
     predecessor_binding: ExecutionRoleBindingV1,
-    successor_release: ArtifactReleaseV1,
+    successor_release: ArtifactReleaseV2,
     moved: bool,
     record: Option<&PredecessorRecordObservationV1>,
 ) -> Result<SuccessionArmV1, Error> {
@@ -1102,7 +1104,7 @@ mod tests {
     struct Deployment {
         program: ObservedAccount,
         programdata: ObservedAccount,
-        release: ArtifactReleaseV1,
+        release: ArtifactReleaseV2,
     }
 
     fn deployment(spec: ReleaseSpec) -> Deployment {
@@ -1111,12 +1113,13 @@ mod tests {
             Pubkey::find_program_address(&[program.as_ref()], &bpf_loader_upgradeable::ID).0;
         let elf = vec![spec.elf_seed; 96];
         let authority = spec.authority.map(seeded);
-        let release = ArtifactReleaseV1::new(
+        let release = ArtifactReleaseV2::new(
             ProgramIdentityV1::new(program.to_bytes()).expect("program"),
             ProgramIdentityV1::new(bpf_loader_upgradeable::ID.to_bytes()).expect("loader"),
             programdata.to_bytes(),
             ContentId::new([spec.elf_seed; 32]).expect("semantic release"),
-            hash(&elf).to_bytes(),
+            dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(&elf)
+                .expect("fixture code commitment"),
             spec.slot,
             match authority {
                 Some(_) => ArtifactUpgradePolicyV1::ExactAuthority,
@@ -1150,14 +1153,14 @@ mod tests {
         binding: ExecutionRoleBindingV1,
     }
 
-    fn record(registry: Pubkey, release: ArtifactReleaseV1, rent: &Rent) -> Record {
+    fn record(registry: Pubkey, release: ArtifactReleaseV2, rent: &Rent) -> Record {
         let data = release.to_bytes().to_vec();
         let width = data.len();
         let digest = hash(&data).to_bytes();
         let raw = Pubkey::find_program_address(
             &[
                 RAW_RECORD_PDA_SEED_V1,
-                &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+                &ARTIFACT_RELEASE_SCHEMA_ID_V2,
                 &digest,
             ],
             &registry,
@@ -1166,7 +1169,7 @@ mod tests {
         let staging = Pubkey::find_program_address(
             &[
                 STAGING_CURSOR_PDA_SEED_V1,
-                &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+                &ARTIFACT_RELEASE_SCHEMA_ID_V2,
                 &digest,
             ],
             &registry,

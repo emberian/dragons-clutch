@@ -3,16 +3,19 @@
 use core::convert::TryFrom;
 
 use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
+use dclutch_registry::activation_auth_v1::{
+    ActivationAuthErrorV1, cached_role_deployment_observation_v2,
+};
 use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, ExecutionRoleBindingV1, PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1,
     PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1,
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, ProtocolInfrastructureProfileV1,
     ProtocolInfrastructureProfileV2,
 };
-use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
+use dclutch_registry::svm::ProgramDataV3View;
 use dclutch_registry::{
-    ARTIFACT_RELEASE_BYTES_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1,
-    DeploymentObservationV1, require_slot_pinned_release_v1, slot_pinned_release_elf_digest_v1,
+    ARTIFACT_RELEASE_BYTES_V2, ARTIFACT_RELEASE_SCHEMA_ID_V2, ArtifactReleaseV2,
+    require_slot_pinned_release_v1,
 };
 use solana_program::{
     account_info::AccountInfo,
@@ -385,17 +388,15 @@ pub(crate) fn authenticate_current_core_upgrade_authority(
 
 /// Whether this observation is the artifact's first admission or a recurring read.
 ///
-/// The two differ by exactly one fact: whether the complete deployed ELF must
-/// be hashed to check the artifact record's *claimed* `elf_digest`.
+/// The two names preserve which lifecycle edge requested authentication. Both
+/// consume the finalized record's V2 code commitment and recheck the live
+/// Loader identity, link, slot, and authority without traversing the ELF.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ArtifactAdmissionV1 {
-    /// The claimed digest has never been checked against the deployed bytes.
-    ///
-    /// A finalized artifact-release record is an attacker-publishable
-    /// assertion until this happens, so the full ELF is hashed here and only
-    /// here. `process_initialize` is the sole site, it runs once per Core under
-    /// Core's own Loader upgrade authority, and it is what makes the immutable
-    /// profile's pinned record a truthful description of the deployed code.
+    /// The profile has not admitted this finalized release record before.
+    /// Registry finalization has already authenticated its chunked full-code
+    /// commitment; Core verifies that the live Loader deployment still has the
+    /// exact identity, link, slot, and authority recorded by the release.
     FirstAdmission,
     /// The profile already pinned this exact record.
     ///
@@ -405,15 +406,14 @@ pub(crate) enum ArtifactAdmissionV1 {
     /// widened that last step and this doc had not caught up — it read "the
     /// record admits `Immutable` with no upgrade authority and the observed
     /// ProgramData must currently carry none", which is one of the two admitted
-    /// shapes, not the rule. The rule is `slot_pinned_release_elf_digest_v1`:
+    /// shapes, not the rule. The V2 cached deployment observer proves that
     /// an `Immutable` release cannot move at all, and an `ExactAuthority`
     /// release cannot have moved while the observed deployment slot still
     /// equals the slot it bound, because Loader V3 writes the current slot on
-    /// every `Upgrade` and refuses one in the deployment's own slot. Either
-    /// way the digest checked at first admission is still exact, and re-hashing
-    /// a multi-hundred-kilobyte ELF on every Found recomputes an already
-    /// authenticated fact. The deployment slot, identity, link, ownership, and
-    /// authority are all still rechecked.
+    /// every `Upgrade` and refuses one in the deployment's own slot. The rule is
+    /// now expressed by the V2 cached deployment observer: the finalized code
+    /// commitment is reused while deployment slot, identity, link, ownership,
+    /// and authority are all rechecked.
     AlreadyPinned,
 }
 
@@ -444,11 +444,11 @@ pub(crate) fn authenticate_artifact_release(
     program: &AccountInfo<'_>,
     programdata: &AccountInfo<'_>,
     admission: ArtifactAdmissionV1,
-) -> Result<(ExecutionRoleBindingV1, ArtifactReleaseV1), CoreSbfError> {
+) -> Result<(ExecutionRoleBindingV1, ArtifactReleaseV2), CoreSbfError> {
     let bytes = raw
         .try_borrow_data()
         .map_err(|_| CoreSbfError::Infrastructure)?;
-    if bytes.len() != ARTIFACT_RELEASE_BYTES_V1 {
+    if bytes.len() != ARTIFACT_RELEASE_BYTES_V2 {
         return Err(CoreSbfError::Infrastructure);
     }
     let digest = hash(&bytes).to_bytes();
@@ -456,11 +456,11 @@ pub(crate) fn authenticate_artifact_release(
         registry,
         raw,
         staging,
-        ARTIFACT_RELEASE_SCHEMA_ID_V1,
+        ARTIFACT_RELEASE_SCHEMA_ID_V2,
         digest,
         &bytes,
     )?;
-    let release = ArtifactReleaseV1::decode(&bytes).map_err(|_| CoreSbfError::Infrastructure)?;
+    let release = ArtifactReleaseV2::decode(&bytes).map_err(|_| CoreSbfError::Infrastructure)?;
     if release.program().to_bytes() != program.key.to_bytes() {
         return Err(CoreSbfError::Infrastructure);
     }
@@ -480,70 +480,34 @@ pub(crate) fn authenticate_artifact_release(
     ))
 }
 
-/// Observe a pinned deployment whose ELF digest was already authenticated.
+/// Observe a deployment whose V2 code commitment was already authenticated.
 ///
-/// This is strictly stronger than the hashing path, never weaker.
-/// `slot_pinned_release_elf_digest_v1` refuses unless the release is one of the
-/// two canonical pinned shapes AND its pin still holds against this exact
-/// observation — for `Immutable`, that no authority was ever retained; for
-/// `ExactAuthority` (decision 0012), that the observed ProgramData still
-/// carries the exact bound authority and the exact bound deployment slot.
-/// Everything else `authenticate_deployment` checks is unchanged: program and
-/// ProgramData identity, the Loader link, both owners, executability, the exact
-/// deployment slot, and the upgrade authority. Only the recomputation of a
-/// digest that provably cannot have changed is dropped.
-///
-/// Callers must have an admission argument for the digest. Today those are the
-/// Registry activation cache and the Core infrastructure profile. First
-/// admission belongs to [`require_current_deployment`].
+/// The finalized artifact record above is the admission argument for reusing
+/// that commitment. The shared Registry reader still hostile-parses the live
+/// Loader accounts and proves program identity, ProgramData linkage, both
+/// owners, executable bits, deployment slot, and upgrade authority before it
+/// returns the release-bound commitment.
 fn require_pinned_deployment(
     program: &AccountInfo<'_>,
     programdata: &AccountInfo<'_>,
-    release: ArtifactReleaseV1,
+    release: ArtifactReleaseV2,
 ) -> Result<(), CoreSbfError> {
-    let linkage = require_loader_linkage(program, programdata, release)?;
-    let elf_digest = slot_pinned_release_elf_digest_v1(
-        release,
-        linkage.upgrade_authority,
-        linkage.deployment_slot,
-    )
-    .map_err(pinned_deployment_refusal)?;
-    let observation = DeploymentObservationV1::new(
-        program.key.to_bytes(),
-        program.owner.to_bytes(),
-        program.executable,
-        programdata.key.to_bytes(),
-        programdata.owner.to_bytes(),
-        programdata.executable,
-        linkage.programdata_link,
-        bpf_loader_upgradeable::ID.to_bytes(),
-        linkage.deployment_slot,
-        elf_digest,
-        linkage.upgrade_authority,
-    )
-    .map_err(|_| CoreSbfError::Infrastructure)?;
+    let observation = cached_role_deployment_observation_v2(program, programdata, release)
+        .map_err(cached_deployment_refusal)?;
     release
         .authenticate_deployment(observation)
         .map_err(pinned_deployment_refusal)
 }
 
+/// Name a cached deployment refusal while preserving the actionable upgrade case.
+const fn cached_deployment_refusal(error: ActivationAuthErrorV1) -> CoreSbfError {
+    match error {
+        ActivationAuthErrorV1::ReleaseSuperseded => CoreSbfError::ReleaseSuperseded,
+        _ => CoreSbfError::Infrastructure,
+    }
+}
+
 /// Name a pinned-deployment refusal, keeping the superseded case operator-legible.
-///
-/// Every other reason folds into `Infrastructure`, which is what an operator
-/// wants for "the profile and the chain disagree". A moved slot is different:
-/// it is the expected consequence of upgrading the substrate, and its remedy is
-/// a re-release rather than an investigation (decision 0012).
-///
-/// Which remedy, though, depends on WHICH account moved, and for eight cohorts
-/// this comment named one that did not exist here. Decision 0012's
-/// re-release-then-reactivate remedy belongs to the five cache-pinned roles,
-/// whose selection a later release set can rewrite. The infrastructure profile
-/// is write-once by vacancy with no second write route, so a Registry or Rent
-/// upgrade left every route reading it refusing with nothing to re-release INTO
-/// (P-008). The profile's actual remedy is the succession ceremony in
-/// `infrastructure_v2.rs`: a new profile version at its own domain, naming the
-/// records it succeeded. So an operator reading `ReleaseSuperseded` from a
-/// profile-backed route should reach for that ceremony, not for a re-release.
 const fn pinned_deployment_refusal(error: dclutch_registry::Error) -> CoreSbfError {
     match error {
         dclutch_registry::Error::ReleaseSupersededByUpgrade => CoreSbfError::ReleaseSuperseded,
@@ -551,113 +515,19 @@ const fn pinned_deployment_refusal(error: dclutch_registry::Error) -> CoreSbfErr
     }
 }
 
-/// Loader V3 facts observed without hashing the ELF.
-struct LoaderLinkageV1 {
-    /// ProgramData link recorded by the Program account itself.
-    programdata_link: [u8; 32],
-    /// Deployment slot recorded by the ProgramData account.
-    deployment_slot: u64,
-    /// Upgrade authority the ProgramData account currently carries.
-    upgrade_authority: Option<[u8; 32]>,
-}
-
-/// Hostile-check Loader V3 shape and linkage without hashing the ELF.
-fn require_loader_linkage(
-    program: &AccountInfo<'_>,
-    programdata: &AccountInfo<'_>,
-    release: ArtifactReleaseV1,
-) -> Result<LoaderLinkageV1, CoreSbfError> {
-    if release.loader_program().to_bytes() != bpf_loader_upgradeable::ID.to_bytes()
-        || program.key.to_bytes() != release.program().to_bytes()
-        || programdata.key.to_bytes() != release.programdata()
-        || program.owner != &bpf_loader_upgradeable::ID
-        || programdata.owner != &bpf_loader_upgradeable::ID
-        || !program.executable
-        || programdata.executable
-    {
-        return Err(CoreSbfError::Infrastructure);
-    }
-    let program_bytes = program
-        .try_borrow_data()
-        .map_err(|_| CoreSbfError::Infrastructure)?;
-    let program_view =
-        ProgramV3View::parse(&program_bytes).map_err(|_| CoreSbfError::Infrastructure)?;
-    let expected_programdata =
-        Pubkey::find_program_address(&[program.key.as_ref()], &bpf_loader_upgradeable::ID).0;
-    if program_view.programdata() != release.programdata()
-        || programdata.key != &expected_programdata
-    {
-        return Err(CoreSbfError::Infrastructure);
-    }
-    let link = program_view.programdata();
-    drop(program_bytes);
-    let programdata_bytes = programdata
-        .try_borrow_data()
-        .map_err(|_| CoreSbfError::Infrastructure)?;
-    let programdata_view =
-        ProgramDataV3View::parse(&programdata_bytes).map_err(|_| CoreSbfError::Infrastructure)?;
-    Ok(LoaderLinkageV1 {
-        programdata_link: link,
-        deployment_slot: programdata_view.deployment_slot(),
-        upgrade_authority: programdata_view.upgrade_authority(),
-    })
-}
-
-/// Observe a deployment by hashing its complete current ELF tail.
+/// First profile admission consumes a finalized V2 artifact record.
 ///
-/// This is first admission and the sole site that checks a finalized artifact
-/// record's *claimed* `elf_digest` against the bytes actually deployed. It must
-/// never be replaced by a pinned-digest fast path.
+/// Chunked Registry finalization already authenticated the complete Loader ELF
+/// into that record. Rehashing the whole tail here would construct a second
+/// on-chain commitment chain and restore the CU wall V2 removes. The same
+/// slot-and-authority proof used for cached roles is sufficient after the
+/// finalized record authentication above.
 fn require_current_deployment(
     program: &AccountInfo<'_>,
     programdata: &AccountInfo<'_>,
-    release: ArtifactReleaseV1,
+    release: ArtifactReleaseV2,
 ) -> Result<(), CoreSbfError> {
-    if release.loader_program().to_bytes() != bpf_loader_upgradeable::ID.to_bytes()
-        || program.key.to_bytes() != release.program().to_bytes()
-        || programdata.key.to_bytes() != release.programdata()
-        || program.owner != &bpf_loader_upgradeable::ID
-        || programdata.owner != &bpf_loader_upgradeable::ID
-        || !program.executable
-        || programdata.executable
-    {
-        return Err(CoreSbfError::Infrastructure);
-    }
-    let program_bytes = program
-        .try_borrow_data()
-        .map_err(|_| CoreSbfError::Infrastructure)?;
-    let program_view =
-        ProgramV3View::parse(&program_bytes).map_err(|_| CoreSbfError::Infrastructure)?;
-    let expected_programdata =
-        Pubkey::find_program_address(&[program.key.as_ref()], &bpf_loader_upgradeable::ID).0;
-    if program_view.programdata() != release.programdata()
-        || programdata.key != &expected_programdata
-    {
-        return Err(CoreSbfError::Infrastructure);
-    }
-    drop(program_bytes);
-    let programdata_bytes = programdata
-        .try_borrow_data()
-        .map_err(|_| CoreSbfError::Infrastructure)?;
-    let programdata_view =
-        ProgramDataV3View::parse(&programdata_bytes).map_err(|_| CoreSbfError::Infrastructure)?;
-    let observation = DeploymentObservationV1::new(
-        program.key.to_bytes(),
-        program.owner.to_bytes(),
-        program.executable,
-        programdata.key.to_bytes(),
-        programdata.owner.to_bytes(),
-        programdata.executable,
-        program_view.programdata(),
-        bpf_loader_upgradeable::ID.to_bytes(),
-        programdata_view.deployment_slot(),
-        hash(programdata_view.elf()).to_bytes(),
-        programdata_view.upgrade_authority(),
-    )
-    .map_err(|_| CoreSbfError::Infrastructure)?;
-    release
-        .authenticate_deployment(observation)
-        .map_err(pinned_deployment_refusal)
+    require_pinned_deployment(program, programdata, release)
 }
 
 fn create_profile(
@@ -827,11 +697,11 @@ mod tests {
         elf: &[u8],
         policy: ArtifactUpgradePolicyV1,
         recorded_authority: Option<[u8; 32]>,
-    ) -> (AccountInfo<'static>, ArtifactReleaseV1) {
+    ) -> (AccountInfo<'static>, ArtifactReleaseV2) {
         let program_key = Pubkey::new_from_array([11; 32]);
         let programdata_key =
             Pubkey::find_program_address(&[program_key.as_ref()], &bpf_loader_upgradeable::ID).0;
-        let release = ArtifactReleaseV1::new(
+        let release = ArtifactReleaseV2::new(
             dclutch_registry::release_set::ProgramIdentityV1::new(program_key.to_bytes())
                 .expect("program"),
             dclutch_registry::release_set::ProgramIdentityV1::new(
@@ -840,7 +710,8 @@ mod tests {
             .expect("loader"),
             programdata_key.to_bytes(),
             ContentId::new([3; 32]).expect("semantic"),
-            hash(elf).to_bytes(),
+            dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(elf)
+                .expect("fixture code commitment"),
             7,
             policy,
             recorded_authority,
@@ -856,7 +727,7 @@ mod tests {
     }
 
     fn programdata_account(
-        release: ArtifactReleaseV1,
+        release: ArtifactReleaseV2,
         slot: u64,
         authority: Option<[u8; 32]>,
         elf: &[u8],
@@ -879,7 +750,7 @@ mod tests {
     /// asserted against the code the adapter actually returns.
     ///
     /// The two non-canonical pairings are replayed at the release CONSTRUCTOR
-    /// rather than at the pin: `ArtifactReleaseV1::new` validates the pairing,
+    /// rather than at the pin: `ArtifactReleaseV2::new` validates the pairing,
     /// so Rust refuses those records a gate earlier than Lean's
     /// `canonicalReleaseShape` does. Same verdict, earlier gate, and the corpus
     /// says which.
@@ -909,7 +780,7 @@ mod tests {
             let programdata_key =
                 Pubkey::find_program_address(&[program_key.as_ref()], &bpf_loader_upgradeable::ID)
                     .0;
-            let built = ArtifactReleaseV1::new(
+            let built = ArtifactReleaseV2::new(
                 dclutch_registry::release_set::ProgramIdentityV1::new(program_key.to_bytes())
                     .expect("program"),
                 dclutch_registry::release_set::ProgramIdentityV1::new(
@@ -918,7 +789,8 @@ mod tests {
                 .expect("loader"),
                 programdata_key.to_bytes(),
                 ContentId::new([3; 32]).expect("semantic"),
-                hash(&elf).to_bytes(),
+                dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(&elf)
+                    .expect("fixture code commitment"),
                 vector.bound_slot,
                 policy,
                 bound_authority,
@@ -972,15 +844,9 @@ mod tests {
         );
     }
 
-    /// The pinned fast path is strictly stronger than hashing, never weaker.
-    ///
-    /// Both paths accept exactly the canonical deployment. Only first admission
-    /// checks the record's *claimed* digest against the deployed bytes, and it
-    /// must keep doing so. The pinned path additionally requires a canonical
-    /// pinned release shape and that the pin still holds against this exact
-    /// observation — neither of which the hashing path demanded on its own.
+    /// Both lifecycle edges use the same finalized commitment and live pin.
     #[test]
-    fn pinned_immutable_observation_is_stronger_than_hashing_and_agrees_on_the_canonical_case() {
+    fn first_and_cached_admission_agree_on_the_canonical_loader_observation() {
         let elf = [0xa5_u8; 96];
         let (program, release) = deployment(&elf, ArtifactUpgradePolicyV1::Immutable, None);
         let canonical = programdata_account(release, 7, None, &elf);
@@ -1090,7 +956,8 @@ mod tests {
             Err(CoreSbfError::Infrastructure)
         );
 
-        // First admission still hashes, and still agrees on the canonical case.
+        // First admission reuses the finalized commitment and still applies
+        // the same live slot-and-authority proof.
         assert_eq!(
             require_current_deployment(&program, &pinned, release),
             Ok(())
@@ -1101,25 +968,26 @@ mod tests {
         );
     }
 
-    /// First admission is the sole site that checks a claimed digest.
+    /// Registry finalization, not Core, authenticates the complete code bytes.
     ///
-    /// A finalized artifact-release record can claim any `elf_digest` until the
-    /// deployed bytes are hashed against it. `process_initialize` must keep
-    /// hashing, and this pins that it still refuses substituted bytes.
+    /// The Loader cannot replace bytes without updating its deployment slot.
+    /// This synthetic same-slot byte change therefore does not represent a
+    /// reachable chain state; Core deliberately reuses the finalized V2 code
+    /// commitment and avoids a second full-code traversal.
     #[test]
-    fn first_admission_still_refuses_substituted_deployed_bytes() {
+    fn first_admission_reuses_finalized_commitment_without_rehashing_elf() {
         let elf = [0xa5_u8; 96];
         let (program, release) = deployment(&elf, ArtifactUpgradePolicyV1::Immutable, None);
         let substituted = programdata_account(release, 7, None, &[0x5a_u8; 96]);
         assert_eq!(
             require_current_deployment(&program, &substituted, release),
-            Err(CoreSbfError::Infrastructure)
+            Ok(())
         );
     }
 
     #[test]
     fn immutable_policy_is_required_at_found() {
-        let immutable = ArtifactReleaseV1::new(
+        let immutable = ArtifactReleaseV2::new(
             dclutch_registry::release_set::ProgramIdentityV1::new([1; 32]).expect("program"),
             dclutch_registry::release_set::ProgramIdentityV1::new(
                 bpf_loader_upgradeable::ID.to_bytes(),
@@ -1133,12 +1001,12 @@ mod tests {
             None,
         )
         .expect("immutable");
-        let mutable = ArtifactReleaseV1::new(
+        let mutable = ArtifactReleaseV2::new(
             immutable.program(),
             immutable.loader_program(),
             immutable.programdata(),
             immutable.semantic_release_id(),
-            immutable.elf_digest(),
+            immutable.code_commitment(),
             immutable.deployment_slot(),
             ArtifactUpgradePolicyV1::ExactAuthority,
             Some([9; 32]),

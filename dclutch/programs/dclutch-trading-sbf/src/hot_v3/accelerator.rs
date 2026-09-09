@@ -95,7 +95,7 @@ impl AuthenticatedAcceleratorCallerV4 {
     pub(crate) fn binds_immutable_deployment(
         self,
         artifact_release: dclutch_registry::release_set::ArtifactReleaseIdV1,
-        release: ArtifactReleaseV1,
+        release: ArtifactReleaseV2,
         program: &AccountInfo<'_>,
         programdata: &AccountInfo<'_>,
     ) -> bool {

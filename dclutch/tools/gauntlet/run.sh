@@ -578,7 +578,7 @@ PY
         # ------------------------------------------------ deployment slots
         #
         # DEVNET_DEMO_DEPLOY.md section 7 blocker A: plan.rs used to build every
-        # ArtifactReleaseV1 with `deployment_slot` literal 0, which is correct
+        # ArtifactReleaseV2 with `deployment_slot` literal 0, which is correct
         # for a genesis install and wrong for every real deploy. It is
         # load-bearing on chain -- artifact.rs returns DeploymentSlotMismatch
         # when the observed slot differs -- and the value cannot be

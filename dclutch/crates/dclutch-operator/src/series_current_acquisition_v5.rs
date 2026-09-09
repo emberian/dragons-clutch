@@ -26,7 +26,7 @@ use dclutch_market::execution_strategy::{
     },
 };
 use dclutch_registry::release_set::{ArtifactReleaseIdV1, CallerAuthoritySeedsV1, ExecutionRoleV1};
-use dclutch_registry::{ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1};
+use dclutch_registry::{ARTIFACT_RELEASE_SCHEMA_ID_V2, ArtifactReleaseV2};
 use dclutch_trading::series::{
     SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3, SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
     SERIES_TICKET_SCHEMA_RELEASE_ID_V3,
@@ -683,7 +683,7 @@ fn resolve_role_keys(
 /// (`SERIES_SHADOW.md`, measured in `23eed7df`). RULING (BUILD-SERIES,
 /// provisional): the Series certificate binds the accelerator's source-derived
 /// `semantic_release_id` and never the ELF digest; the ELF digest is bound by
-/// the Registry `ArtifactReleaseV1` the activation cache names -- compared to
+/// the Registry `ArtifactReleaseV2` the activation cache names -- compared to
 /// the live ProgramData by `shadow_accelerator_auth::deployment` at callback
 /// time -- and by the checked release the caller holds. Two facts, one author
 /// each. A Release-bound certificate is still admitted: it is the AdmittedAot
@@ -695,7 +695,7 @@ fn resolve_role_keys(
 fn require_series_certificate_binding_v5(
     certificate: ExecutionStrategyCertificateV2,
     artifact_digest: [u8; 32],
-    artifact: &ArtifactReleaseV1,
+    artifact: &ArtifactReleaseV2,
 ) -> Result<(), SeriesCurrentAcquisitionErrorV5> {
     match certificate.artifact_binding() {
         CertificateArtifactBindingV2::Release(_) => {
@@ -783,10 +783,10 @@ fn assemble_strategy_accounts(
     authenticate_record(
         fixed.registry_program.key,
         shadow.artifact,
-        ARTIFACT_RELEASE_SCHEMA_ID_V1,
+        ARTIFACT_RELEASE_SCHEMA_ID_V2,
         artifact_digest,
     )?;
-    let artifact = ArtifactReleaseV1::decode(&shadow.artifact.raw.data)
+    let artifact = ArtifactReleaseV2::decode(&shadow.artifact.raw.data)
         .map_err(SeriesCurrentAcquisitionErrorV5::Registry)?;
     require_series_certificate_binding_v5(certificate, artifact_digest, &artifact)?;
     if shadow.accelerator_program.key != shadow.checked.accelerator_program
@@ -2098,7 +2098,7 @@ mod tests {
 
         let elf_digest = [0x41; 32];
         let semantic = content_id(0x42);
-        let artifact = ArtifactReleaseV1::new(
+        let artifact = ArtifactReleaseV2::new(
             ProgramIdentityV1::new([0x11; 32]).expect("program"),
             ProgramIdentityV1::new([0x12; 32]).expect("loader"),
             [0x13; 32],

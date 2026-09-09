@@ -315,7 +315,7 @@ fn generic_publication_selects_begin_append_finalize_and_complete() {
     let finalize =
         build_record_publication_step_v1(REGISTRY, content, staged_complete).expect("Finalize");
     assert_eq!(finalize.action, RecordPublicationActionV1::Finalize);
-    assert_eq!(finalize.cursor_refund, cursor_rent * 2);
+    assert_eq!(finalize.cursor_refund, Some(cursor_rent * 2));
 
     let finalized = state(
         observed(
@@ -487,5 +487,119 @@ fn compiled_product_graph_owns_schemas_digests_and_publication_order() {
             },
         ),
         Err(PublicationErrorV1::ObservationMismatch)
+    );
+}
+
+#[test]
+fn artifact_publication_resumes_native_code_cursor_and_never_claims_partial_refund() {
+    use dclutch_registry::artifact_code_commitment_v2::{
+        CODE_COMMITMENT_CHUNK_BYTES_V2, CODE_COMMITMENT_PROGRESS_BYTES_V2,
+        CodeCommitmentProgressV2, code_commitment_v2,
+    };
+    use dclutch_registry::record::staging_cursor_bytes_v1;
+    use dclutch_registry::release_set::ProgramIdentityV1;
+    use dclutch_registry::{
+        ARTIFACT_RELEASE_SCHEMA_ID_V2, ArtifactReleaseV2, ArtifactUpgradePolicyV1,
+    };
+    let elf = vec![0x5a; CODE_COMMITMENT_CHUNK_BYTES_V2 + 17];
+    let program = Pubkey::new_from_array([0x81; 32]);
+    let programdata = Pubkey::new_from_array([0x82; 32]);
+    let release = ArtifactReleaseV2::new(
+        ProgramIdentityV1::new(program.to_bytes()).expect("program identity"),
+        ProgramIdentityV1::new(solana_sdk_ids::bpf_loader_upgradeable::ID.to_bytes())
+            .expect("loader identity"),
+        programdata.to_bytes(),
+        dclutch_core_contract::ContentId::new([0x83; 32]).expect("semantic identity"),
+        code_commitment_v2(&elf).expect("exact ELF commitment"),
+        7,
+        ArtifactUpgradePolicyV1::Immutable,
+        None,
+    )
+    .expect("artifact release");
+    let body = release.to_bytes();
+    let content = RecordPublicationContentV1 {
+        schema_release_id: ARTIFACT_RELEASE_SCHEMA_ID_V2,
+        content: &body,
+    };
+    let (raw, cursor, _) =
+        derive_record_addresses_v1(REGISTRY, content).expect("artifact addresses");
+    let rent_bytes = rent_data();
+    let clock_bytes = clock_data();
+    let vacant = state(
+        observed(raw, system_program::ID, 0, &[]),
+        observed(cursor, system_program::ID, 0, &[]),
+        &rent_bytes,
+        &clock_bytes,
+    );
+    let begin =
+        build_record_publication_step_v1(REGISTRY, content, vacant).expect("artifact Begin");
+    let begin_wire = BeginRecordV1::decode(&begin.instruction.expect("Begin instruction").data)
+        .expect("Begin wire");
+    let width = staging_cursor_bytes_v1(begin_wire.key());
+    assert_eq!(
+        width,
+        STAGING_CURSOR_BYTES_V1 + CODE_COMMITMENT_PROGRESS_BYTES_V2
+    );
+    let cursor_rent = Rent::default().minimum_balance(width);
+    assert_eq!(
+        begin.sponsor_debit,
+        Rent::default().minimum_balance(body.len()) + 2 * cursor_rent
+    );
+    let prefix = cursor_from_begin(begin_wire, raw, cursor, cursor_rent);
+    let appended = prepare_append_page_v1(
+        prefix,
+        AccountId::new(raw.to_bytes()).expect("raw identity"),
+        AccountId::new(cursor.to_bytes()).expect("cursor identity"),
+        u64::try_from(body.len()).expect("body length"),
+        AppendPageV1::new(0, 0, &body).expect("one artifact page"),
+    )
+    .expect("artifact append")
+    .next_cursor();
+    let mut unstarted = appended.to_bytes().to_vec();
+    unstarted.resize(width, 0);
+    let raw_lamports = Rent::default().minimum_balance(body.len());
+    let active = |bytes: &[u8]| {
+        build_record_publication_step_v1(
+            REGISTRY,
+            content,
+            state(
+                observed(raw, REGISTRY, raw_lamports, &body),
+                observed(cursor, REGISTRY, 2 * cursor_rent, bytes),
+                &rent_bytes,
+                &clock_bytes,
+            ),
+        )
+    };
+    let first = active(&unstarted).expect("first bounded Finalize");
+    assert_eq!(first.action, RecordPublicationActionV1::Finalize);
+    assert_eq!(first.cursor_refund, None);
+    let instruction = first.instruction.expect("Finalize instruction");
+    assert_eq!(instruction.accounts.len(), 5);
+    assert_eq!(instruction.accounts[3].pubkey, program);
+    assert_eq!(instruction.accounts[4].pubkey, programdata);
+    let progress = CodeCommitmentProgressV2::new(u64::try_from(elf.len()).expect("ELF length"))
+        .expect("initial progress")
+        .advance(0, &elf[..CODE_COMMITMENT_CHUNK_BYTES_V2])
+        .expect("first code chunk");
+    let mut partial = unstarted.clone();
+    partial[STAGING_CURSOR_BYTES_V1..].copy_from_slice(&progress.to_bytes());
+    let resumed = active(&partial).expect("resume authenticated native progress");
+    assert_eq!(resumed.action, RecordPublicationActionV1::Finalize);
+    assert_eq!(resumed.cursor_refund, None);
+    assert_eq!(
+        active(&partial[..STAGING_CURSOR_BYTES_V1]),
+        Err(PublicationErrorV1::AccountAuthority)
+    );
+    let finalized = state(
+        observed(raw, REGISTRY, raw_lamports, &body),
+        observed(cursor, system_program::ID, 0, &[]),
+        &rent_bytes,
+        &clock_bytes,
+    );
+    assert_eq!(
+        build_record_publication_step_v1(REGISTRY, content, finalized)
+            .expect("absent cursor closes publication")
+            .action,
+        RecordPublicationActionV1::Complete
     );
 }

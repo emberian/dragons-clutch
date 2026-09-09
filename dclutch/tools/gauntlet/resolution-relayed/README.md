@@ -35,7 +35,7 @@ them together is how a reader ends up believing the strongest one.
 - **Loader-v3 / ProgramData / `SetAuthority`.** The tier does not depend on
   them. It installs immutable ProgramData bodies for Core and Resolution and
   never exercises an authority transition. The one deployment fact it *does*
-  test — P-B, the venue's pinned `ArtifactReleaseV1` — is authenticated against
+  test — P-B, the venue's pinned `ArtifactReleaseV2` — is authenticated against
   a deployment reconstructed from *attested* Loader V3 bodies, which is a
   decode-time comparison rather than a loader behaviour.
 - **Packet serialisation.** The tier does depend on it, so it measures rather

@@ -18,7 +18,7 @@ import {
  * therefore depends on this body decoding, and a fixture that hand-wrote the
  * Custody program instead would leave that dependence untested.
  *
- * Only the fields `decodeArtifactReleaseV1` actually reads are filled, and each
+ * Only the fields `decodeArtifactReleaseV2` actually reads are filled, and each
  * is a distinct nonzero fill derived from the role index so no two roles alias.
  */
 export function activationCacheFixtureV1(
@@ -39,12 +39,12 @@ export function activationCacheFixtureV1(
   return cache;
 }
 
-/** One `DCLTARF1` body whose five identities are distinct and nonzero. */
+/** One `DCLTARF2` body whose five identities are distinct and nonzero. */
 export function artifactReleaseFixtureV1(seed: number, program?: string): Uint8Array {
   const bytes = new Uint8Array(ARTIFACT_RELEASE_BYTES);
-  bytes.set(new TextEncoder().encode('DCLTARF1'), 0);
+  bytes.set(new TextEncoder().encode('DCLTARF2'), 0);
   const view = new DataView(bytes.buffer);
-  view.setUint16(8, 1, true);
+  view.setUint16(8, 2, true);
   view.setUint16(10, 1, true);
   // Upgrade policy 0 is `immutable`, whose authority field must stay zero.
   bytes[12] = 0;

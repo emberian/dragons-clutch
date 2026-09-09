@@ -8,11 +8,11 @@
 //!    and mixed-slot account sets are the observation bug this family most
 //!    needs to not have.
 //! 2. A Loader V3 `ProgramData` position carries a 45-byte inline prefix; its
-//!    tail digest covers ~2.3 MB, so it is cached under
+//!    V2 code commitment covers ~2.3 MB, so it is cached under
 //!    `(programdata_pubkey, deployment_slot)` and recomputed only when
 //!    `deployment_slot` — which sits in the prefix the batch already fetched —
 //!    changes.  A redeploy is always detected from the prefix, so a stale
-//!    cached digest is unreachable.
+//!    cached commitment is unreachable.
 //! 3. Build each body, verify `inline_len` against the pinned width, sign one
 //!    attestation per account and one seal per set.
 //!
@@ -48,7 +48,7 @@ use crate::rpc::{BatchRead, ObservedAccount, RpcClient};
 /// Hard ceiling on paged reads for one account body.
 const MAX_BODY_PAGES: u32 = 1024;
 
-/// Where one position's tail digest came from.
+/// Where one position's tail authenticator came from.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TailDigestSource {
     /// The body carries the account in full; the digest is over the empty tail.
@@ -60,7 +60,7 @@ pub enum TailDigestSource {
         /// How many tail bytes were hashed.
         bytes: u64,
     },
-    /// The tail digest was cached under `(pubkey, deployment_slot)`.
+    /// The ProgramData tail commitment was cached under `(pubkey, deployment_slot)`.
     Cached {
         /// The deployment slot the cache entry is keyed by.
         deployment_slot: u64,
@@ -95,7 +95,8 @@ pub struct ObservedPosition {
     pub inline: Vec<u8>,
     /// Executable flag as read.
     pub executable: bool,
-    /// SHA-256 over `data[inline_len..data_len]`.
+    /// Tail authenticator: flat SHA-256 generally, V2 code commitment for
+    /// Loader V3 ProgramData.
     pub tail_digest: [u8; ID_BYTES],
     /// How that digest was obtained.
     pub tail_digest_source: TailDigestSource,
@@ -502,7 +503,7 @@ impl SetWatcher {
                     Some(known) if known != slot => {
                         return Err(self.refuse(format!(
                             "position {set_index} ({}) was redeployed: deployment_slot moved from \
-                         {known} to {slot}. The pinned elf_digest no longer describes the \
+                         {known} to {slot}. The pinned code commitment no longer describes the \
                          program, so this set stops being attested (\u{a7}4.11); the market's \
                          funded failure path is the correct handling",
                             base58(&position.key)
@@ -515,6 +516,13 @@ impl SetWatcher {
             } else {
                 None
             };
+
+        if programdata_slot.is_some() && u64::from(position.inline_len) == account.data_len {
+            return Err(self.refuse(format!(
+                "position {set_index} ({}) is Loader V3 ProgramData with no ELF tail",
+                base58(&position.key)
+            )));
+        }
 
         if u64::from(position.inline_len) == account.data_len {
             // Fully inline: the tail is empty and its digest is the pinned
@@ -545,7 +553,14 @@ impl SetWatcher {
         }
 
         let (tail_digest, pages, bytes) = self
-            .page_tail_digest(rpc, position, &inline, account.data_len, observed_slot)
+            .page_tail_authenticator(
+                rpc,
+                position,
+                &inline,
+                account.data_len,
+                observed_slot,
+                programdata_slot.is_some(),
+            )
             .await?;
         if let Some(deployment_slot) = programdata_slot {
             self.tail_cache
@@ -560,24 +575,26 @@ impl SetWatcher {
         })
     }
 
-    /// Page one account body and hash its tail.
+    /// Page one account body and authenticate its tail under the pinned scheme.
     ///
     /// These `getAccountInfo` calls are not the observation and carry no slot
     /// into any signed message: the observation's slot came from the one batch
     /// call.  What makes the paging safe is that the first page must reproduce
     /// the pinned inline prefix **byte for byte** as the batch read it — a body
     /// that moved between calls fails that check instead of being folded in.
-    async fn page_tail_digest(
+    async fn page_tail_authenticator(
         &mut self,
         rpc: &RpcClient,
         position: &PositionConfig,
         expected_inline: &[u8],
         data_len: u64,
         observed_slot: u64,
+        code_commitment_v2: bool,
     ) -> Result<([u8; ID_BYTES], u32, u64)> {
         let page_bytes = u64::try_from(self.body_page_bytes).unwrap_or(u64::MAX);
         let inline_len = u64::from(position.inline_len);
         let mut hasher = TailHasher::new();
+        let mut code = code_commitment_v2.then(Vec::new);
         let mut offset = 0u64;
         let mut pages = 0u32;
 
@@ -631,20 +648,39 @@ impl SetWatcher {
             } else {
                 account.data.as_slice()
             };
-            hasher.absorb(tail);
+            if let Some(bytes) = code.as_mut() {
+                bytes.extend_from_slice(tail);
+            } else {
+                hasher.absorb(tail);
+            }
             offset = offset.saturating_add(length);
         }
 
         let expected_tail = data_len.saturating_sub(inline_len);
-        if hasher.absorbed() != expected_tail {
+        let absorbed = code.as_ref().map_or_else(
+            || hasher.absorbed(),
+            |bytes| u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+        );
+        if absorbed != expected_tail {
             return Err(self.refuse(format!(
                 "paging {} hashed {} tail bytes where {expected_tail} were expected",
                 base58(&position.key),
-                hasher.absorbed()
+                absorbed
             )));
         }
-        let absorbed = hasher.absorbed();
-        Ok((hasher.finish(), pages, absorbed))
+        let authenticator = if let Some(code) = code {
+            dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(&code).map_err(
+                |_| {
+                    self.refuse(format!(
+                        "{} has no canonical Loader ELF tail to commit",
+                        base58(&position.key)
+                    ))
+                },
+            )?
+        } else {
+            hasher.finish()
+        };
+        Ok((authenticator, pages, absorbed))
     }
 }
 
@@ -829,6 +865,34 @@ mod tests {
             .prepare_position(&rpc, 0, &position, &account, 45, 1)
             .await
             .expect_err("an inadmissible width must refuse");
+        assert!(
+            matches!(error, RelayerError::ObservationRefused { .. }),
+            "{error:?}"
+        );
+        assert!(watcher.stopped_reason().is_some());
+    }
+
+    #[tokio::test]
+    async fn loader_programdata_without_an_elf_tail_stops_before_signing() {
+        let rpc = RpcClient::new(
+            "http://127.0.0.1:1",
+            std::time::Duration::from_millis(1),
+            None,
+        )
+        .expect("client");
+        let mut watcher = watcher();
+        let position = watcher
+            .config()
+            .positions
+            .first()
+            .expect("position")
+            .clone();
+        let mut account = programdata_account(1);
+        account.data_len = 45;
+        let error = watcher
+            .prepare_position(&rpc, 0, &position, &account, 45, 1)
+            .await
+            .expect_err("empty Loader ELF");
         assert!(
             matches!(error, RelayerError::ObservationRefused { .. }),
             "{error:?}"

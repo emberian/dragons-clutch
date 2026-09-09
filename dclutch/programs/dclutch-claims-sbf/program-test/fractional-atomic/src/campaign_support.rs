@@ -56,7 +56,7 @@ use dclutch_registry::release_set::{
 };
 use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ActivatedExecutionReleaseSetV1,
-    ArtifactActivationInputV1, ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1,
+    ArtifactActivationInputV1, ArtifactReleaseV2, ArtifactUpgradePolicyV1, DeploymentObservationV2,
     activate_execution_role_into_v1, initialize_activation_cache_v1,
 };
 
@@ -172,13 +172,13 @@ pub fn add_upgradeable_program(
 
 /// One immutable artifact release for a program deployed at slot zero.
 #[must_use]
-pub fn release(program: Pubkey, semantic_seed: u8, elf: &[u8]) -> ArtifactReleaseV1 {
-    ArtifactReleaseV1::new(
+pub fn release(program: Pubkey, semantic_seed: u8, elf: &[u8]) -> ArtifactReleaseV2 {
+    ArtifactReleaseV2::new(
         identity(program),
         identity(bpf_loader_upgradeable::ID),
         programdata_address(program).to_bytes(),
         ContentId::new([semantic_seed; 32]).expect("semantic release"),
-        hash(elf).to_bytes(),
+        dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(elf).expect("exact fixture code commitment"),
         0,
         ArtifactUpgradePolicyV1::Immutable,
         None,
@@ -188,20 +188,20 @@ pub fn release(program: Pubkey, semantic_seed: u8, elf: &[u8]) -> ArtifactReleas
 
 /// The content id one artifact release hashes to.
 #[must_use]
-pub fn artifact_id(value: ArtifactReleaseV1) -> ArtifactReleaseIdV1 {
+pub fn artifact_id(value: ArtifactReleaseV2) -> ArtifactReleaseIdV1 {
     ArtifactReleaseIdV1::new(hash(&value.to_bytes()).to_bytes()).expect("artifact ID")
 }
 
 /// Bind one release to its execution role.
 #[must_use]
-pub fn binding(value: ArtifactReleaseV1) -> ExecutionRoleBindingV1 {
+pub fn binding(value: ArtifactReleaseV2) -> ExecutionRoleBindingV1 {
     ExecutionRoleBindingV1::new(value.program(), artifact_id(value))
 }
 
 /// The deployment observation a Registry activation checks a release against.
 #[must_use]
-pub fn activation_input(value: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
-    let observation = DeploymentObservationV1::new(
+pub fn activation_input(value: ArtifactReleaseV2) -> ArtifactActivationInputV1 {
+    let observation = DeploymentObservationV2::new(
         value.program().to_bytes(),
         bpf_loader_upgradeable::ID.to_bytes(),
         true,
@@ -211,7 +211,7 @@ pub fn activation_input(value: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
         value.programdata(),
         bpf_loader_upgradeable::ID.to_bytes(),
         value.deployment_slot(),
-        value.elf_digest(),
+        value.code_commitment(),
         value.upgrade_authority(),
     )
     .expect("deployment observation");

@@ -486,7 +486,7 @@ mod receipt_tests {
     use crate::Observation;
     use dclutch_core_contract::ContentId;
     use dclutch_registry::release_set::ProgramIdentityV1;
-    use dclutch_registry::{ArtifactReleaseV1, ArtifactUpgradePolicyV1};
+    use dclutch_registry::{ArtifactReleaseV2, ArtifactUpgradePolicyV1};
     use solana_sdk_ids::bpf_loader_upgradeable;
 
     fn receipt() -> PreMarketFundingReceiptV2 {
@@ -642,7 +642,7 @@ mod receipt_tests {
         );
     }
 
-    fn deployment_fixture() -> (ArtifactReleaseV1, ObservedAccount, ObservedAccount) {
+    fn deployment_fixture() -> (ArtifactReleaseV2, ObservedAccount, ObservedAccount) {
         let observation = Observation {
             slot: 1,
             unix_timestamp: 1,
@@ -653,12 +653,12 @@ mod receipt_tests {
             Pubkey::find_program_address(&[program_key.as_ref()], &bpf_loader_upgradeable::ID).0;
         let authority = [22; 32];
         let elf = [23; 64];
-        let release = ArtifactReleaseV1::new(
+        let release = ArtifactReleaseV2::new(
             ProgramIdentityV1::new(program_key.to_bytes()).expect("program identity"),
             ProgramIdentityV1::new(bpf_loader_upgradeable::ID.to_bytes()).expect("loader identity"),
             programdata_key.to_bytes(),
             ContentId::new([24; 32]).expect("semantic release"),
-            hash(&elf).to_bytes(),
+            dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(&elf).expect("exact fixture code commitment"),
             25,
             ArtifactUpgradePolicyV1::ExactAuthority,
             Some(authority),

@@ -89,6 +89,19 @@ import {
   MARKET_OPENING_READINESS_MAGIC_V1,
 } from '@dclutch/sdk/generated/capabilityManifestV1';
 import {
+  ARTIFACT_RELEASE_BYTES_V2,
+  ARTIFACT_RELEASE_CODE_COMMITMENT_OFFSET_V2,
+  ARTIFACT_RELEASE_DEPLOYMENT_SLOT_OFFSET_V2,
+  ARTIFACT_RELEASE_HEADER_RESERVED_OFFSET_V2,
+  ARTIFACT_RELEASE_LOADER_OFFSET_V2,
+  ARTIFACT_RELEASE_PROFILE_OFFSET_V2,
+  ARTIFACT_RELEASE_PROGRAMDATA_OFFSET_V2,
+  ARTIFACT_RELEASE_PROGRAM_OFFSET_V2,
+  ARTIFACT_RELEASE_SCHEMA_OFFSET_V2,
+  ARTIFACT_RELEASE_SEMANTIC_RELEASE_OFFSET_V2,
+  ARTIFACT_RELEASE_UPGRADE_AUTHORITY_OFFSET_V2,
+  ARTIFACT_RELEASE_UPGRADE_POLICY_OFFSET_V2,
+  ARTIFACT_RELEASE_UPGRADE_POLICY_TAGS_V2,
   CORE_PHASE_FOUNDING_TAG,
   CORE_PHASE_OPEN_TAG,
   CORE_PHASE_RETIRED_TAG,
@@ -164,6 +177,7 @@ import {
   WINDOW_SPEC_MAGIC,
   WINDOW_SPEC_START_UNIX_SECONDS_OFFSET_V1,
 } from '@dclutch/sdk/generated/coreFound';
+import { ARTIFACT_RELEASE_MAGIC_V2 } from '@dclutch/sdk/generated/protocolConstantsV1';
 import {
   ACCOUNT_PROFILE_HEADER_BYTES_V2,
   ACCOUNT_PROFILE_MAGIC_V2,
@@ -1387,6 +1401,27 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
       field('Adapter release identity', REALM_ADAPTER_RELEASE_ID_OFFSET_V1, 'identity'),
     ],
     note: null,
+  },
+  {
+    magic: ARTIFACT_RELEASE_MAGIC_V2,
+    name: 'Artifact release',
+    family: 'Release',
+    summary: 'The onchain identity of one admitted program deployment and the code and authority it binds.',
+    width: { kind: 'fixed', bytes: ARTIFACT_RELEASE_BYTES_V2 },
+    fields: [
+      version(ARTIFACT_RELEASE_SCHEMA_OFFSET_V2),
+      field('Artifact profile', ARTIFACT_RELEASE_PROFILE_OFFSET_V2, 'u16'),
+      field('Upgrade policy', ARTIFACT_RELEASE_UPGRADE_POLICY_OFFSET_V2, 'enum', { tags: ARTIFACT_RELEASE_UPGRADE_POLICY_TAGS_V2 }),
+      field('Reserved', ARTIFACT_RELEASE_HEADER_RESERVED_OFFSET_V2, 'reserved'),
+      field('Program', ARTIFACT_RELEASE_PROGRAM_OFFSET_V2, 'pubkey'),
+      field('Loader program', ARTIFACT_RELEASE_LOADER_OFFSET_V2, 'pubkey'),
+      field('ProgramData', ARTIFACT_RELEASE_PROGRAMDATA_OFFSET_V2, 'pubkey'),
+      field('Semantic release identity', ARTIFACT_RELEASE_SEMANTIC_RELEASE_OFFSET_V2, 'identity'),
+      field('Code commitment', ARTIFACT_RELEASE_CODE_COMMITMENT_OFFSET_V2, 'identity'),
+      field('Deployment slot', ARTIFACT_RELEASE_DEPLOYMENT_SLOT_OFFSET_V2, 'u64'),
+      field('Upgrade authority (zero means absent)', ARTIFACT_RELEASE_UPGRADE_AUTHORITY_OFFSET_V2, 'pubkey'),
+    ],
+    note: 'This is an untrusted field projection. The SDK decoder owns canonical validation. An all-zero upgrade authority means absent and is canonical only with the Immutable policy.',
   },
   {
     magic: PROTOCOL_INFRASTRUCTURE_PROFILE_MAGIC_V1,

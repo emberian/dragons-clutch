@@ -15,24 +15,24 @@
 //! and the signing key is generated inside the test.
 //!
 //! What it proves that the unit tests do not: the batch read, the pinned-prefix
-//! truncation, the paged tail digest, the fold, the attestation encode/sign
+//! truncation, the paged tail authenticator, the fold, the attestation encode/sign
 //! round trip through the wire crate's own decoder, the seal, the artifact
 //! directory and the publication log all agree end to end.
 
 use std::path::Path;
 use std::time::Duration;
 
-use dclutch_source::relay::wire::{AttestationMessageV1, ObservationSetSealV1};
-use dclutch_source::relay::{RELAYED_SEAL_BYTES, SHA256_EMPTY_DIGEST};
 use dclutch_relayer::artifacts::ArtifactWriter;
 use dclutch_relayer::chain::LOADER_V3_PROGRAM_ID;
 use dclutch_relayer::config::{AccountSetConfig, PositionConfig};
-use dclutch_relayer::derive::{SetDigestFold, derive_account_set_id, sha256};
+use dclutch_relayer::derive::{SetDigestFold, derive_account_set_id};
 use dclutch_relayer::id32::base58;
 use dclutch_relayer::keys::{AttestationSigner, generate_keypair_file};
 use dclutch_relayer::observe::{SetWatcher, TailDigestSource};
 use dclutch_relayer::publog::{MessageKind, PublicationLog};
 use dclutch_relayer::rpc::RpcClient;
+use dclutch_source::relay::wire::{AttestationMessageV1, ObservationSetSealV1};
+use dclutch_source::relay::{RELAYED_SEAL_BYTES, SHA256_EMPTY_DIGEST};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -297,7 +297,8 @@ async fn one_cycle_observes_signs_folds_and_writes_verifiable_artifacts() {
     assert_eq!(pool.tail_digest, SHA256_EMPTY_DIGEST);
     assert_eq!(pool.tail_digest_source, TailDigestSource::FullyInline);
 
-    // Position 1 is a Loader V3 ProgramData: 45 bytes inline, the rest digested.
+    // Position 1 is a Loader V3 ProgramData: 45 bytes inline, with the
+    // canonical V2 commitment over the complete ELF tail.
     let programdata = cycle.positions.get(1).expect("programdata");
     let full = programdata_bytes();
     assert_eq!(programdata.inline, full.get(..45).expect("prefix").to_vec());
@@ -307,15 +308,18 @@ async fn one_cycle_observes_signs_folds_and_writes_verifiable_artifacts() {
     );
     assert_eq!(
         programdata.tail_digest,
-        sha256(full.get(45..).expect("tail")),
-        "the tail digest must be SHA-256 over data[45..]"
+        dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(
+            full.get(45..).expect("tail"),
+        )
+        .expect("code commitment"),
+        "the ProgramData authenticator must be the V2 commitment over data[45..]"
     );
     match programdata.tail_digest_source {
         TailDigestSource::Paged { pages, bytes } => {
             assert_eq!(pages, 3, "1045 bytes at 448 per page is three pages");
             assert_eq!(bytes, (PROGRAMDATA_LEN - 45) as u64);
         }
-        other => panic!("expected a paged tail digest, got {other:?}"),
+        other => panic!("expected a paged tail authenticator, got {other:?}"),
     }
 
     // Every attestation decodes back through the wire crate's own decoder and
@@ -454,7 +458,7 @@ async fn a_cluster_that_is_not_the_pinned_cluster_refuses_before_anything_is_sig
 /// `SetWatcher::seed_deployment_slot` existed for exactly this and had no
 /// caller, so a restarted daemon began with an empty map, read the upgraded
 /// `deployment_slot` as the first one it had ever seen, and attested a program
-/// whose pinned `elf_digest` it had already refused. The negative control is
+/// whose pinned code commitment it had already refused. The negative control is
 /// the load-bearing half: the same fresh watcher, against the same upgraded
 /// cluster, ACCEPTS when it is not seeded -- so the refusal below is the seed's
 /// doing and not something the fixture would have produced anyway.

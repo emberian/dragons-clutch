@@ -21,6 +21,8 @@ const sources = Object.freeze({
   releaseSet: readFileSync(new URL('crates/dclutch-registry/src/release_set/mod.rs', root), 'utf8'),
   releaseSetAbi: readFileSync(new URL('crates/dclutch-registry/src/release_set/generated_capability_execution.rs', root), 'utf8'),
   registry: readFileSync(new URL('crates/dclutch-registry/src/artifact.rs', root), 'utf8'),
+  codeCommitment: readFileSync(new URL('crates/dclutch-registry/src/artifact_code_commitment_v2.rs', root), 'utf8'),
+  checkedRelease: readFileSync(new URL('crates/dclutch-release-tool/src/lib.rs', root), 'utf8'),
   rent: readFileSync(new URL('crates/dclutch-market/src/rent/mod.rs', root), 'utf8'),
   lifecycleRent: readFileSync(new URL('crates/dclutch-market/src/rent/generated_lifecycle_v2.rs', root), 'utf8'),
   operator: readFileSync(new URL('crates/dclutch-product-runtime-v2-operator/src/found.rs', root), 'utf8'),
@@ -67,8 +69,8 @@ function note(source, name) {
 
 function scalar(source, name) {
   note(source, name);
-  const literal = sources[source].match(new RegExp(`(?:pub )?const ${name}: [^=]+ = ([0-9]+);`));
-  if (literal) return Number(literal[1]);
+  const literal = sources[source].match(new RegExp(`(?:pub )?const ${name}: [^=]+ = ([0-9][0-9_]*);`));
+  if (literal) return Number(literal[1].replaceAll('_', ''));
   const additive = sources[source].match(new RegExp(`(?:pub )?const ${name}: [^=]+ = ([A-Z][A-Z0-9_]+) \\+ ([0-9]+);`));
   if (additive) return scalar(source, additive[1]) + Number(additive[2]);
   const alias = sources[source].match(new RegExp(`(?:pub )?const ${name}: [^=]+ = ([A-Z][A-Z0-9_]+);`));
@@ -268,6 +270,30 @@ output += `export const CORE_FOUND_PRICE_GATE_ACCOUNT_LABELS_V3 = Object.freeze(
 output += `export const CORE_FOUND_PRICE_GATE_ACCOUNT_ROLES_V3 = Object.freeze(${JSON.stringify(extendedAccountMetas.map(({ signer, writable }) => ({ signer, writable })))}) as ReadonlyArray<Readonly<{ signer: boolean; writable: boolean }>>;\n`;
 output += `export const SPLINE_PRODUCT_AUTHORING_COMMAND_V1 = '${stringConstant('splineAuthoring', 'COMMAND_V1')}' as const;\n`;
 output += `export const SPLINE_PRODUCT_AUTHORING_REPORT_SCHEMA_V1 = '${stringConstant('splineAuthoring', 'REPORT_SCHEMA_V1')}' as const;\n`;
+for (const [source, name] of [
+  ['registry', 'ARTIFACT_RELEASE_BYTES_V2'],
+  ['registry', 'ARTIFACT_RELEASE_SCHEMA_VERSION_V2'],
+  ['registry', 'ARTIFACT_RELEASE_PROFILE_V2'],
+  ['codeCommitment', 'CODE_COMMITMENT_CHUNK_BYTES_V2'],
+  ['checkedRelease', 'CHECKED_RELEASE_FIXED_BYTES_V2'],
+  ['checkedRelease', 'CHECKED_RELEASE_SCHEMA_V2'],
+  ['checkedRelease', 'CHECKED_RELEASE_CODE_COMMITMENT_OFFSET_V2'],
+]) output += `export const ${name} = ${scalar(source, name)} as const;\n`;
+for (const [sourceName, emittedName] of [
+  ['SCHEMA_OFFSET', 'ARTIFACT_RELEASE_SCHEMA_OFFSET_V2'],
+  ['PROFILE_OFFSET', 'ARTIFACT_RELEASE_PROFILE_OFFSET_V2'],
+  ['UPGRADE_POLICY_OFFSET', 'ARTIFACT_RELEASE_UPGRADE_POLICY_OFFSET_V2'],
+  ['HEADER_RESERVED_OFFSET', 'ARTIFACT_RELEASE_HEADER_RESERVED_OFFSET_V2'],
+  ['HEADER_RESERVED_BYTES', 'ARTIFACT_RELEASE_HEADER_RESERVED_BYTES_V2'],
+  ['PROGRAM_OFFSET', 'ARTIFACT_RELEASE_PROGRAM_OFFSET_V2'],
+  ['LOADER_OFFSET', 'ARTIFACT_RELEASE_LOADER_OFFSET_V2'],
+  ['PROGRAMDATA_OFFSET', 'ARTIFACT_RELEASE_PROGRAMDATA_OFFSET_V2'],
+  ['SEMANTIC_RELEASE_OFFSET', 'ARTIFACT_RELEASE_SEMANTIC_RELEASE_OFFSET_V2'],
+  ['CODE_COMMITMENT_OFFSET', 'ARTIFACT_RELEASE_CODE_COMMITMENT_OFFSET_V2'],
+  ['DEPLOYMENT_SLOT_OFFSET', 'ARTIFACT_RELEASE_DEPLOYMENT_SLOT_OFFSET_V2'],
+  ['UPGRADE_AUTHORITY_OFFSET', 'ARTIFACT_RELEASE_UPGRADE_AUTHORITY_OFFSET_V2'],
+]) output += `export const ${emittedName} = ${scalar('registry', sourceName)} as const;\n`;
+output += tagTable('ARTIFACT_RELEASE_UPGRADE_POLICY_TAGS_V2', enumTags('registry', 'ArtifactUpgradePolicyV1'));
 output += array('CORE_REQUEST_MAGIC', bytes('core', 'CORE_REQUEST_MAGIC'));
 output += array('MARKET_CORE_STATE_PDA_DOMAIN_V2', bytes('physical', 'MARKET_CORE_STATE_PDA_DOMAIN_V2'));
 for (const [source, name] of [
@@ -280,7 +306,7 @@ for (const [source, name] of [
   ['payoff', 'PRICE_GATE_RECORD_SCHEMA_ID_V1'],
   ['capabilityAbi', 'CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1'],
   ['releaseSetAbi', 'EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1'],
-  ['registry', 'ARTIFACT_RELEASE_SCHEMA_ID_V1'],
+  ['registry', 'ARTIFACT_RELEASE_SCHEMA_ID_V2'],
 ]) output += array(name, bytes(source, name));
 
 // ---------------------------------------- where a parent names its children

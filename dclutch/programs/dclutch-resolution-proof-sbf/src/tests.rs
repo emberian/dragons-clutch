@@ -26,7 +26,7 @@ use dclutch_registry::release_set::{
 use dclutch_registry::svm::LOADER_V3_PROGRAMDATA_METADATA_BYTES;
 use dclutch_registry::{
     ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1, ArtifactActivationInputV1,
-    ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1,
+    ArtifactReleaseV2, ArtifactUpgradePolicyV1, DeploymentObservationV2,
     ExecutionReleaseActivationInputsV1, activate_execution_release_set_v1,
 };
 use dclutch_source::pyth::{
@@ -263,13 +263,13 @@ fn artifact(
     semantic_release_id: [u8; 32],
     elf: &[u8],
     slot: u64,
-) -> ArtifactReleaseV1 {
-    ArtifactReleaseV1::new(
+) -> ArtifactReleaseV2 {
+    ArtifactReleaseV2::new(
         program_identity(program),
         program_identity(bpf_loader_upgradeable::ID),
         programdata.to_bytes(),
         core_id(semantic_release_id),
-        hash(elf).to_bytes(),
+        dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(elf).expect("exact fixture code commitment"),
         slot,
         ArtifactUpgradePolicyV1::Immutable,
         None,
@@ -284,13 +284,13 @@ fn exact_authority_artifact(
     elf: &[u8],
     slot: u64,
     authority: [u8; 32],
-) -> ArtifactReleaseV1 {
-    ArtifactReleaseV1::new(
+) -> ArtifactReleaseV2 {
+    ArtifactReleaseV2::new(
         program_identity(program),
         program_identity(bpf_loader_upgradeable::ID),
         programdata.to_bytes(),
         core_id(semantic_release_id),
-        hash(elf).to_bytes(),
+        dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(elf).expect("exact fixture code commitment"),
         slot,
         ArtifactUpgradePolicyV1::ExactAuthority,
         Some(authority),
@@ -298,12 +298,12 @@ fn exact_authority_artifact(
     .expect("valid exact-authority artifact")
 }
 
-fn artifact_id(release: ArtifactReleaseV1) -> ArtifactReleaseIdV1 {
+fn artifact_id(release: ArtifactReleaseV2) -> ArtifactReleaseIdV1 {
     ArtifactReleaseIdV1::new(hash(&release.to_bytes()).to_bytes()).expect("artifact identity")
 }
 
-fn activation_input(release: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
-    let observation = DeploymentObservationV1::new(
+fn activation_input(release: ArtifactReleaseV2) -> ArtifactActivationInputV1 {
+    let observation = DeploymentObservationV2::new(
         release.program().to_bytes(),
         release.loader_program().to_bytes(),
         true,
@@ -313,14 +313,14 @@ fn activation_input(release: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
         release.programdata(),
         release.loader_program().to_bytes(),
         release.deployment_slot(),
-        release.elf_digest(),
+        release.code_commitment(),
         None,
     )
     .expect("complete deployment observation");
     ArtifactActivationInputV1::new(artifact_id(release), release, observation)
 }
 
-fn binding(release: ArtifactReleaseV1) -> ExecutionRoleBindingV1 {
+fn binding(release: ArtifactReleaseV2) -> ExecutionRoleBindingV1 {
     ExecutionRoleBindingV1::new(release.program(), artifact_id(release))
 }
 
@@ -371,7 +371,7 @@ fn cached_observation_accepts_the_exact_release_projected_by_the_activation_cach
     let observation =
         cached_deployment_observation(&program_account, &programdata_account, cached_release)
             .expect("activation-pinned deployment");
-    let expected = DeploymentObservationV1::new(
+    let expected = DeploymentObservationV2::new(
         program.to_bytes(),
         bpf_loader_upgradeable::ID.to_bytes(),
         true,
@@ -381,7 +381,7 @@ fn cached_observation_accepts_the_exact_release_projected_by_the_activation_cach
         programdata.to_bytes(),
         bpf_loader_upgradeable::ID.to_bytes(),
         91,
-        release.elf_digest(),
+        release.code_commitment(),
         None,
     )
     .expect("expected observation");
@@ -389,8 +389,8 @@ fn cached_observation_accepts_the_exact_release_projected_by_the_activation_cach
 
     let mut hostile_cache = cache;
     let digest_offset = hostile_cache
-        .windows(release.elf_digest().len())
-        .position(|window| window == release.elf_digest())
+        .windows(release.code_commitment().len())
+        .position(|window| window == release.code_commitment())
         .expect("embedded release digest");
     hostile_cache[digest_offset] ^= 1;
     assert!(

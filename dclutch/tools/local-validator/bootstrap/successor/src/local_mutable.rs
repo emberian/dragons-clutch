@@ -19,7 +19,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use dclutch_registry::release_set::{SourceSemanticRoleV1, source_semantic_release_preimage_v1};
 use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_release_tool::{
-    CHECKED_MULTIPROGRAM_BYTES_V1, CheckedReleaseV1, RedeployedReleaseEvidenceV1,
+    CHECKED_MULTIPROGRAM_BYTES_V1, CheckedReleaseV2, RedeployedReleaseEvidenceV1,
     SemanticPreimageKindV1, artifact_release_from_checked, build_checked_execution_release_set,
     build_redeployed_checked_release, derive_execution_release_set,
     verify_checked_execution_release_set,
@@ -222,10 +222,10 @@ fn build_local_checked_release_v1(
     source_revision: &str,
     validated: &crate::upgrade::CheckedLocalGateRoleV1,
     build_mode: LocalMutableBuildModeV1,
-) -> Result<(CheckedReleaseV1, Vec<u8>)> {
-    let basis = CheckedReleaseV1::decode(&validated.checked_build_manifest).map_err(|error| {
+) -> Result<(CheckedReleaseV2, Vec<u8>)> {
+    let basis = CheckedReleaseV2::decode(&validated.checked_build_manifest).map_err(|error| {
         Error::new(format!(
-            "checked local {role} build basis is not CheckedReleaseV1: {error:?}"
+            "checked local {role} build basis is not CheckedReleaseV2: {error:?}"
         ))
     })?;
     let expected_manifest_suffix = Path::new("evidence").join(role).join("checked.bin");
@@ -258,6 +258,7 @@ fn build_local_checked_release_v1(
     let elf = fs::read(&pin.checked_candidate_elf_path)?;
     if hex(&Sha256::digest(&elf)) != pin.checked_candidate_elf_sha256
         || pin.checked_candidate_elf_sha256 != validated.raw_elf_sha256
+        || basis.code_commitment() != crate::plan::code_commitment_v2(&elf)?
     {
         return Err(Error::new(format!(
             "checked local {role} ELF changed after gate authentication"
@@ -319,7 +320,7 @@ fn build_local_checked_release_v1(
 
 fn build_local_execution_release_set_pin_v1(
     expected_execution_release_set_id: &str,
-    checked: &BTreeMap<&str, (CheckedReleaseV1, Vec<u8>)>,
+    checked: &BTreeMap<&str, (CheckedReleaseV2, Vec<u8>)>,
 ) -> Result<CheckedLocalExecutionReleaseSetPinV1> {
     let get = |role| {
         checked
@@ -348,7 +349,7 @@ fn build_local_execution_release_set_pin_v1(
         .into_iter()
         .map(|role| {
             let (_, encoded) = get(role)?;
-            let release = CheckedReleaseV1::decode(encoded).map_err(release_error)?;
+            let release = CheckedReleaseV2::decode(encoded).map_err(release_error)?;
             Ok(CheckedLocalExecutionReleaseRolePinV1 {
                 role: role.into(),
                 checked_release_id: hex(release
@@ -415,7 +416,7 @@ fn authenticate_persisted_execution_release_set_v1(
                 role.role
             )));
         }
-        let checked = CheckedReleaseV1::decode(&manifest).map_err(release_error)?;
+        let checked = CheckedReleaseV2::decode(&manifest).map_err(release_error)?;
         if hex(checked
             .checked_release_id()
             .map_err(release_error)?
@@ -488,7 +489,7 @@ fn checked_accelerator_semantic_release_id_v1(
     checked_manifest: &[u8],
     raw_elf_sha256: &str,
 ) -> Result<String> {
-    let checked = CheckedReleaseV1::decode(checked_manifest).map_err(release_error)?;
+    let checked = CheckedReleaseV2::decode(checked_manifest).map_err(release_error)?;
     if hex(&checked.artifact_digest()) != raw_elf_sha256 {
         return Err(Error::new(
             "checked accelerator manifest artifact digest differs from its gate ELF",
@@ -540,9 +541,9 @@ fn authenticated_gate_build_mode_v1(
         "trading",
         Path::new(&trading.checked_candidate_elf_path),
     )?;
-    let basis = CheckedReleaseV1::decode(&validated.checked_build_manifest).map_err(|error| {
+    let basis = CheckedReleaseV2::decode(&validated.checked_build_manifest).map_err(|error| {
         Error::new(format!(
-            "checked local Trading build basis is not CheckedReleaseV1: {error:?}"
+            "checked local Trading build basis is not CheckedReleaseV2: {error:?}"
         ))
     })?;
     let ordinary = checked_build_command_v1("trading", LocalMutableBuildModeV1::Ordinary)?;
@@ -2400,7 +2401,7 @@ mod tests {
             .into_iter()
             .zip(manifests)
             .map(|(role, manifest)| {
-                let checked = CheckedReleaseV1::decode(&manifest).expect("decode checked role");
+                let checked = CheckedReleaseV2::decode(&manifest).expect("decode checked role");
                 CheckedLocalExecutionReleaseRolePinV1 {
                     role: role.into(),
                     checked_release_id: hex(checked

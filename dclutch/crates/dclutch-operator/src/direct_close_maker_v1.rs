@@ -86,7 +86,7 @@ use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
-    ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1, DeploymentObservationV1,
+    ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV2, DeploymentObservationV2,
 };
 use dclutch_source::relay::{SOLANA_DEVNET_GENESIS_HASH_V1, SOLANA_MAINNET_GENESIS_HASH_V1};
 use dclutch_trading::{
@@ -1022,8 +1022,8 @@ fn authenticate_role_deployment(
 fn deployment_observation(
     program: &ObservedAccount,
     programdata: &ObservedAccount,
-    release: ArtifactReleaseV1,
-) -> Result<DeploymentObservationV1, DirectCloseMakerPlanErrorV1> {
+    release: ArtifactReleaseV2,
+) -> Result<DeploymentObservationV2, DirectCloseMakerPlanErrorV1> {
     if release.loader_program().to_bytes() != bpf_loader_upgradeable::ID.to_bytes()
         || program.key.to_bytes() != release.program().to_bytes()
         || programdata.key.to_bytes() != release.programdata()
@@ -1045,7 +1045,7 @@ fn deployment_observation(
     }
     let data = ProgramDataV3View::parse(&programdata.data)
         .map_err(DirectCloseMakerPlanErrorV1::RegistrySvm)?;
-    DeploymentObservationV1::new(
+    DeploymentObservationV2::new(
         program.key.to_bytes(),
         program.owner.to_bytes(),
         program.executable,
@@ -1055,7 +1055,8 @@ fn deployment_observation(
         program_view.programdata(),
         bpf_loader_upgradeable::ID.to_bytes(),
         data.deployment_slot(),
-        hash(data.elf()).to_bytes(),
+        dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(data.elf())
+            .map_err(|_| DirectCloseMakerPlanErrorV1::InvalidRelease)?,
         data.upgrade_authority(),
     )
     .map_err(DirectCloseMakerPlanErrorV1::Registry)

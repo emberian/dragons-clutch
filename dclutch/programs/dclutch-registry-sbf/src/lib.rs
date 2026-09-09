@@ -26,7 +26,7 @@ use core::convert::TryFrom;
 use dclutch_core_contract::ContentId;
 use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
 use dclutch_registry::activation_auth_v1::{
-    authenticate_activated_role_in_cache_v1, cached_role_deployment_observation_v1,
+    authenticate_activated_role_in_cache_v1, cached_role_deployment_observation_v2,
     require_readonly_frame,
 };
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
@@ -36,9 +36,9 @@ use dclutch_registry::release_set::{
 };
 use dclutch_registry::svm::{REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1, RegistryInstructionV1};
 use dclutch_registry::{
-    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_BYTES_V1,
-    ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetViewV1, ArtifactActivationInputV1,
-    ArtifactReleaseV1, DeploymentObservationV1, activate_execution_role_into_v1,
+    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_BYTES_V2,
+    ARTIFACT_RELEASE_SCHEMA_ID_V2, ActivatedExecutionReleaseSetViewV1, ArtifactActivationInputV1,
+    ArtifactReleaseV2, DeploymentObservationV2, activate_execution_role_into_v1,
     initialize_activation_cache_v1, put_activation_cache_bump_v1,
 };
 use solana_program::{
@@ -60,7 +60,7 @@ mod continuation_v1;
 ///
 /// Emitted by `formal/dclutch-semantics/EmitArtifactReleaseFinalizationCorpusRust.lean`
 /// and replayed in `record_v1`'s tests through the real
-/// `ArtifactReleaseV1::authenticate_deployment` and this program's three-way
+/// `ArtifactReleaseV2::authenticate_deployment` and this program's three-way
 /// refusal partition. Byte-gated by
 /// `tests/release_finalization_corpus_generator_fresh.rs`.
 #[cfg(test)]
@@ -162,7 +162,7 @@ pub enum RegistryError {
     /// `elf_digest` is a chain-observed fact about that exact address, and the
     /// slot pin carries it forward for free.
     ///
-    /// `ArtifactReleaseV1::authenticate_deployment` owns the seven conjuncts;
+    /// `ArtifactReleaseV2::authenticate_deployment` owns the seven conjuncts;
     /// the Lean corpus in `ProtocolInfrastructure.lean` decides which
     /// observations this admits and which it names.
     ArtifactReleaseNotDeployed = 0x1014,
@@ -181,7 +181,7 @@ pub enum RegistryError {
     /// moved the substrate forward. `ProtocolInfrastructure.lean`'s
     /// `ReleaseObservation.outcome` decides which of the three an observation
     /// draws, and the corpus replays every one of them through this program.
-    ArtifactReleaseElfMismatch = 0x1015,
+    ArtifactReleaseCodeCommitmentMismatch = 0x1015,
 }
 
 dclutch_refusal_registry::pin_refusal_band!(
@@ -209,7 +209,7 @@ dclutch_refusal_registry::pin_refusal_band!(
         ReleaseLineageNotForward,
         ArtifactReleaseDeploymentFrame,
         ArtifactReleaseNotDeployed,
-        ArtifactReleaseElfMismatch
+        ArtifactReleaseCodeCommitmentMismatch
     ]
 );
 
@@ -458,7 +458,7 @@ fn authenticate_artifact_role(
         .artifact_record
         .try_borrow_data()
         .map_err(|_| RegistryError::Borrow)?;
-    if data.len() != ARTIFACT_RELEASE_BYTES_V1
+    if data.len() != ARTIFACT_RELEASE_BYTES_V2
         || hash(&data).to_bytes() != expected.artifact_release().to_bytes()
     {
         return Err(RegistryError::FinalizedRecord.into());
@@ -467,11 +467,11 @@ fn authenticate_artifact_role(
         program_id,
         frame.artifact_record,
         frame.artifact_staging,
-        ARTIFACT_RELEASE_SCHEMA_ID_V1,
+        ARTIFACT_RELEASE_SCHEMA_ID_V2,
         expected.artifact_release().to_bytes(),
         &data,
     )?;
-    let release = ArtifactReleaseV1::decode(&data).map_err(|_| RegistryError::Release)?;
+    let release = ArtifactReleaseV2::decode(&data).map_err(|_| RegistryError::Release)?;
     if release.program() != expected.program() {
         return Err(RegistryError::Release.into());
     }
@@ -494,15 +494,15 @@ fn authenticate_artifact_role(
 /// `record_v1` compares the complete live ELF before finalizing that record.
 /// The shared reader rechecks Loader ownership, executability, the Program to
 /// ProgramData link, deployment slot and authority, then calls the canonical
-/// `slot_pinned_release_elf_digest_v1` owner. Both initial activation and later
+/// `slot_pinned_release_code_commitment_v2` owner. Both initial activation and later
 /// reauthentication consume that same admitted fact; neither adds a second
 /// full-ELF admission hash. See decision 0012 and the native Loader slot tests.
 fn cached_role_deployment_observation(
     program: &AccountInfo<'_>,
     programdata: &AccountInfo<'_>,
-    release: ArtifactReleaseV1,
-) -> Result<DeploymentObservationV1, ProgramError> {
-    cached_role_deployment_observation_v1(program, programdata, release)
+    release: ArtifactReleaseV2,
+) -> Result<DeploymentObservationV2, ProgramError> {
+    cached_role_deployment_observation_v2(program, programdata, release)
         .map_err(|error| RegistryError::from(error).into())
 }
 

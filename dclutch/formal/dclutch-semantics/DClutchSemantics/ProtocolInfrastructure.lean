@@ -80,7 +80,7 @@ theorem valid_profile_infrastructure_is_distinct
 
 The single admission argument every infrastructure artifact reader shares,
 modelling `dclutch_registry_contract::require_slot_pinned_release_v1`,
-`slot_pinned_release_elf_digest_v1`, and `ArtifactReleaseV1::slot_pin_refusal`.
+`slot_pinned_release_code_commitment_v2`, and `ArtifactReleaseV2::slot_pin_refusal`.
 -/
 
 /-- The upgrade policy an `ArtifactRelease` record admits. -/
@@ -96,7 +96,7 @@ inductive UpgradePolicy where
 `bound*` are read out of the finalized, content-addressed `ArtifactRelease`
 record whose complete ELF the Registry hashed against the live deployment
 before it would finalize the record -- see `ReleaseFinalization` below, which
-is the moment that makes `boundElfDigest` a chain-observed fact rather than a
+is the moment that makes `boundCodeCommitment` a chain-observed fact rather than a
 claim, and therefore the moment the whole slot-pin argument stands on.
 `observed*` are read
 out of the live ProgramData account in this very invocation.  Passing a
@@ -140,7 +140,7 @@ inductive PinRefusal where
   | deploymentSlotMismatch
   deriving DecidableEq, Repr
 
-/-- Name a slot disagreement, mirroring `ArtifactReleaseV1::slot_pin_refusal`.
+/-- Name a slot disagreement, mirroring `ArtifactReleaseV2::slot_pin_refusal`.
 
 Only a strictly *later* observed slot on an `ExactAuthority` release is an
 upgrade: Loader V3 refuses an `Upgrade` in ProgramData's own recorded slot and
@@ -423,7 +423,7 @@ theorem pin_vector_count_is_exact : pinVectors.length = 10 := by
 /-! ## Release finalization: where the bound ELF digest becomes a fact
 
 Decision 0012's slot pin proves that an *observed* slot equal to a *bound* slot
-means the bound ELF digest is the digest of the deployed bytes.  It proves that
+means the bound code commitment describes the deployed bytes.  It proves that
 about a bound digest somebody checked.  Until release finalization checked one,
 only role ACTIVATION did, and every other reader of an `ArtifactRelease` -- a
 certificate-pinned accelerator above all -- hashed the complete observed ELF on
@@ -433,7 +433,13 @@ Measured on real ELFs 2026-09-02: **370,983 CU** of a 1,399,700 budget, on
 744,840 bytes, per action, forever.
 
 So the comparison moves to finalization, where it is paid once per release.
-This section is that comparison: `ArtifactReleaseV1::authenticate_deployment`,
+ArtifactRelease V2 verifies its ordered code commitment in bounded chunks
+under the existing Registry staging cursor. Each step rechecks the Loader
+envelope, slot, authority and length; finalization requires complete coverage.
+This section decides the final comparison of those supplied observations; it
+does not model SHA-256 or prove the staging implementation.
+
+This section is that comparison: `ArtifactReleaseV2::authenticate_deployment`,
 in the adapter's own conjunct order, because the ORDER is what decides which
 name an operator reads back.
 -/
@@ -448,14 +454,14 @@ structure ReleaseObservation where
   boundUpgradePolicy : UpgradePolicy
   boundUpgradeAuthority : Option Identity
   boundDeploymentSlot : Slot
-  boundElfDigest : Identity
+  boundCodeCommitment : Identity
   observedIdentityMatches : Bool
   observedProgramDataLinkMatches : Bool
   observedLoaderOwnsBoth : Bool
   observedProgramExecutable : Bool
   observedProgramDataExecutable : Bool
   observedDeploymentSlot : Slot
-  observedElfDigest : Identity
+  observedCodeCommitment : Identity
   observedUpgradeAuthority : Option Identity
   deriving DecidableEq, Repr
 
@@ -468,7 +474,7 @@ def ReleaseObservation.deploymentPresent (o : ReleaseObservation) : Bool :=
 /-- The bytes group: the deployment exists, but is it THESE bytes. -/
 def ReleaseObservation.bytesAgree (o : ReleaseObservation) : Bool :=
   o.observedDeploymentSlot == o.boundDeploymentSlot &&
-    o.observedElfDigest == o.boundElfDigest &&
+    o.observedCodeCommitment == o.boundCodeCommitment &&
     o.observedUpgradeAuthority == o.boundUpgradeAuthority
 
 /-- The slot pin this observation induces, for naming a slot disagreement. -/
@@ -485,14 +491,14 @@ inductive FinalizationOutcome where
   /-- The named authority moved the substrate forward; re-release. -/
   | refuseSuperseded
   /-- A deployment is there and it is not these bytes. -/
-  | refuseElfMismatch
+  | refuseCodeCommitmentMismatch
   deriving DecidableEq, Repr
 
 def FinalizationOutcome.tag : FinalizationOutcome → Nat
   | .admit => 0
   | .refuseNotDeployed => 1
   | .refuseSuperseded => 2
-  | .refuseElfMismatch => 3
+  | .refuseCodeCommitmentMismatch => 3
 
 /-- The outcome, in the adapter's conjunct order.
 
@@ -511,7 +517,7 @@ def ReleaseObservation.outcome (o : ReleaseObservation) : FinalizationOutcome :=
       && o.pin.slotRefusal == PinRefusal.releaseSupersededByUpgrade then
     FinalizationOutcome.refuseSuperseded
   else
-    FinalizationOutcome.refuseElfMismatch
+    FinalizationOutcome.refuseCodeCommitmentMismatch
 
 /-- One named finalization decision case. -/
 structure FinalizationVector where
@@ -544,7 +550,7 @@ def finalizationVectors : List FinalizationVector := [
   { name := "release_over_executable_programdata_refuses",
     observation := ⟨.immutable, none, boundSlot, digest,
       true, true, true, true, true, boundSlot, digest, none⟩ },
-  { name := "release_whose_elf_digest_differs_refuses",
+  { name := "release_whose_code_commitment_differs_refuses",
     observation := ⟨.immutable, none, boundSlot, digest,
       true, true, true, true, false, boundSlot, otherDigest, none⟩ },
   { name := "upgradeable_release_already_moved_forward_refuses_superseded",
@@ -565,7 +571,10 @@ def finalizationVectors : List FinalizationVector := [
 
 /-- Admission is exactly "the deployment is there and it is these bytes".
 This is the property the whole hot path now rests on: after a finalization
-admits, `boundElfDigest` is the digest of the bytes at that address. -/
+admits, the observed code commitment equals `boundCodeCommitment`.
+The model treats commitments as identities. Correct chunk hashing, complete
+coverage, and Loader continuity during staging are runtime adapter obligations,
+not cryptographic theorems proved by this decision corpus. -/
 theorem finalization_admits_iff_present_and_agreeing (o : ReleaseObservation) :
     o.outcome = FinalizationOutcome.admit <->
       (o.deploymentPresent = true /\ o.bytesAgree = true) := by
@@ -582,7 +591,7 @@ theorem finalization_refusal_is_always_named (o : ReleaseObservation) :
     o.outcome = FinalizationOutcome.admit \/
       o.outcome = FinalizationOutcome.refuseNotDeployed \/
       o.outcome = FinalizationOutcome.refuseSuperseded \/
-      o.outcome = FinalizationOutcome.refuseElfMismatch := by
+      o.outcome = FinalizationOutcome.refuseCodeCommitmentMismatch := by
   cases outcome : o.outcome <;> simp
 
 /-- Supersession is claimed only where the slot pin itself would claim it, so
@@ -609,7 +618,7 @@ theorem finalization_vectors_cover_every_outcome :
       finalizationVectors.any (fun v =>
         v.observation.outcome == FinalizationOutcome.refuseSuperseded) &&
       finalizationVectors.any (fun v =>
-        v.observation.outcome == FinalizationOutcome.refuseElfMismatch) := by
+        v.observation.outcome == FinalizationOutcome.refuseCodeCommitmentMismatch) := by
   native_decide
 
 /-- The exact expected outcome of every vector, pinned in order. -/

@@ -456,7 +456,7 @@ fn transport_profile(
 /// this enum exists to make impossible.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CertificateArtifactBindingV2 {
-    /// Exact `ArtifactReleaseV1` content identity, which carries an `elf_digest`.
+    /// Exact `ArtifactReleaseV2` content identity, which carries an `elf_digest`.
     ///
     /// This is the only binding an admitted-AOT chain accepts: admission is a
     /// statement about one exact built artifact, and a source-derived identity
@@ -469,7 +469,7 @@ pub enum CertificateArtifactBindingV2 {
     /// the source-derived identity instead closes no loop, and leaves the
     /// end-to-end guarantee as two facts with one author each: the certificate
     /// names the semantic release, and the separately authenticated
-    /// `ArtifactReleaseV1` record binds that release to the live ELF.
+    /// `ArtifactReleaseV2` record binds that release to the live ELF.
     Semantic(ContentId),
 }
 
@@ -540,7 +540,7 @@ impl ExecutionStrategyCertificateV2 {
     /// Construct one typed Certificate binding a source-derived semantic release.
     ///
     /// The sibling of [`Self::new`] for the profile that names a
-    /// `semantic_release_id` rather than an exact `ArtifactReleaseV1`. It is a
+    /// `semantic_release_id` rather than an exact `ArtifactReleaseV2`. It is a
     /// separate constructor, not a flag, so no producer can select the binding
     /// by accident.
     #[allow(clippy::too_many_arguments)]
@@ -733,7 +733,7 @@ impl ExecutionStrategyCertificateV2 {
 
     /// Require the separately authenticated source-derived semantic release.
     ///
-    /// The caller supplies the `semantic_release_id` of an `ArtifactReleaseV1`
+    /// The caller supplies the `semantic_release_id` of an `ArtifactReleaseV2`
     /// it authenticated by some other author -- on chain, the finalized record
     /// whose `elf_digest` was compared against the live programdata. This
     /// certificate never sees the ELF, and that separation is the point.

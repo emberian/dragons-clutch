@@ -993,7 +993,7 @@ pub(crate) fn authenticate_devnet_direct_session_source_v1(
         let programdata = pubkey(&pin.programdata_id)?;
         if artifact.program().to_bytes() != program.to_bytes()
             || artifact.programdata() != programdata.to_bytes()
-            || artifact.elf_digest() != hex32(&pin.live_elf_sha256, "Direct live ELF digest")?
+            || artifact.code_commitment() != hex32(&pin.live_elf_sha256, "Direct live ELF digest")?
             || artifact.semantic_release_id().to_bytes()
                 != hex32(&pin.semantic_release_id, "Direct semantic release")?
             || artifact.deployment_slot() != pin.deployment_slot

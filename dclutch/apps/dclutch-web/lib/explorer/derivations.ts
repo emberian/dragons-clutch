@@ -24,7 +24,7 @@ import { PublicKey } from '@solana/web3.js';
 
 import { sha256 } from '@dclutch/sdk/bytes';
 import {
-  ARTIFACT_RELEASE_SCHEMA_ID_V1,
+  ARTIFACT_RELEASE_SCHEMA_ID_V2,
   CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
   EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1,
   LIABILITY_BASIS_MARKET_SEED_V2,
@@ -152,7 +152,7 @@ const SCHEMA_IDS: ReadonlyArray<Readonly<{ name: string; id: Uint8Array }>> = Ob
   { name: 'Source material', id: SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3 },
   { name: 'Capability manifest', id: CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1 },
   { name: 'Execution release set', id: EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1 },
-  { name: 'Artifact release', id: ARTIFACT_RELEASE_SCHEMA_ID_V1 },
+  { name: 'Artifact release', id: ARTIFACT_RELEASE_SCHEMA_ID_V2 },
   { name: 'Graded basis', id: GRADED_BASIS_RECORD_SCHEMA_ID_V3 },
   { name: 'Direct execution request', id: DIRECT_EXECUTION_REQUEST_SCHEMA_ID_V3 },
   { name: 'Direct execution config', id: DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1 },

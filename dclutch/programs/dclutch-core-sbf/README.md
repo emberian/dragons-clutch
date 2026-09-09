@@ -28,7 +28,7 @@ Before an accepted Found, the current Core deployment creates one immutable
 `[b"dclutch:infrastructure:v1"]`. Its one-time 16-byte initialization is
 authorized by the exact upgrade-authority signer observed in the current Core
 ProgramData. The initializer independently authenticates finalized Registry
-and Rent `ArtifactReleaseV1` records and their current Loader deployments; both
+and Rent `ArtifactReleaseV2` records and their current Loader envelopes; both
 artifacts must already be immutable and both ProgramData accounts must have no
 upgrade authority. The profile stores only the exact Registry and Rent
 `(program, ArtifactReleaseId)` bindings. It has no update or close route.

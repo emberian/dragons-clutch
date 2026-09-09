@@ -110,7 +110,7 @@ authored current status and is checked separately from transaction evidence.
 | `scoring-dealer-local-validator` | local-validator | yes | 4 | 0 | `tools/gauntlet/scoring-dealer/run.sh` | `tools/gauntlet/scoring-dealer/bindings.json` / `1f8145f98bbdf96b` |
 | `source-abort-programtest` | program-test | yes | 7 | 5 | `tools/gauntlet/source-abort/run-source-abort.sh` | `tools/gauntlet/source-abort/bindings.json` / `eedde83f5554eea7` |
 | `structured-v2-programtest` | program-test | yes | 0 | 2 | `tools/gauntlet/structured/run-structured.sh` | `tools/gauntlet/structured/bindings.json` / `98937647cc92d70f` |
-| `tier1` | local-validator | yes | 36 | 12 | `tools/gauntlet/run.sh` | `tools/gauntlet/tier1/bindings.json` / `e0fb1577786cf31f` |
+| `tier1` | local-validator | yes | 36 | 12 | `tools/gauntlet/run.sh` | `tools/gauntlet/tier1/bindings.json` / `951bd3584e015ff4` |
 | `tier4-series-occurrence-programtest` | program-test | yes | 1 | 1 | `tools/gauntlet/tier4/run-campaign.sh` | `tools/gauntlet/tier4/bindings.json` / `eccd05c0e5ba3d38` |
 
 ## Binding-only routes whose campaign does not reproduce

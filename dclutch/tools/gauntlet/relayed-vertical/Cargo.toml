@@ -17,6 +17,7 @@ dclutch-claims = { path = "../../../crates/dclutch-claims" }
 dclutch-chain-bundle-builder = { path = "../../../programs/dclutch-trading-sbf/program-test/bundle-builder" }
 dclutch-custody = { path = "../../../crates/dclutch-custody" }
 dclutch-trading = { path = "../../../crates/dclutch-trading" }
+dclutch-trading-sbf = { path = "../../../programs/dclutch-trading-sbf", default-features = false, features = ["no-entrypoint", "series-family"] }
 dclutch-vm = { path = "../../../crates/dclutch-vm" }
 dclutch-market-retirement-v1-operator = { path = "../../../crates/dclutch-market-retirement-v1-operator" }
 dclutch-operator = { path = "../../../crates/dclutch-operator" }

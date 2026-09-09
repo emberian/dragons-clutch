@@ -187,7 +187,7 @@ fn accelerator_caller_token_binds_request_context_and_immutable_deployment() {
         .expect("slot")
         .copy_from_slice(&deployment_slot.to_le_bytes());
     let metadata = ProgramDataMetadataV3View::parse(&metadata_bytes).expect("metadata");
-    let release = ArtifactReleaseV1::new(
+    let release = ArtifactReleaseV2::new(
         dclutch_registry::release_set::ProgramIdentityV1::new(accelerator_program.to_bytes())
             .expect("program"),
         dclutch_registry::release_set::ProgramIdentityV1::new(loader_program.to_bytes())

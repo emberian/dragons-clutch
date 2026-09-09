@@ -67,9 +67,9 @@ async function artifact(program: string, slot: string, authority: string, seed: 
   programData: string;
 }>> {
   const bytes = new Uint8Array(ARTIFACT_RELEASE_BYTES);
-  bytes.set(new TextEncoder().encode('DCLTARF1'));
+  bytes.set(new TextEncoder().encode('DCLTARF2'));
   const view = new DataView(bytes.buffer);
-  view.setUint16(8, 1, true);
+  view.setUint16(8, 2, true);
   view.setUint16(10, 1, true);
   bytes[12] = 1;
   const programData = programDataAddress(program);

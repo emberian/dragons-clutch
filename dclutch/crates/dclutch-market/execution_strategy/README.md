@@ -23,8 +23,11 @@ digest), but never points back to its descriptor or Strategy. The minimal
 Registry admission authorizes only one exact Certificate for admitted AOT.
 Finalized Certificate bytes alone remain insufficient.
 
-Program, ProgramData, ELF, deployment slot, and upgrade policy remain solely in
-the referenced `ArtifactReleaseV1`. An accelerator is stateless: it receives an
+Program, ProgramData, deployment slot, code commitment, and upgrade policy
+remain solely in the referenced `ArtifactReleaseV2`. Its onchain code identity
+is the ordered Loader-payload commitment verified once during Registry
+finalization; the flat ELF SHA-256 remains separate offline provenance. An
+accelerator is stateless: it receives an
 authenticated runtime-width bank and returns candidate bytes or refusal.
 Trading still interprets or validates the selected result, projects the one
 common EffectProgram, and is the sole root, FundingState, effect, and scratch

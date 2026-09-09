@@ -20,8 +20,9 @@ pub(crate) struct RunProgramInput {
     pub(crate) observed_programdata: Option<String>,
     /// SHA-256 of the complete live ELF tail inside `observed_programdata`,
     /// including any Loader allocation padding. Required exactly when an
-    /// observed ProgramData account is supplied. `elf_sha256` remains the
-    /// checked raw build-candidate digest.
+    /// observed ProgramData account is supplied. This is operator-side
+    /// observation provenance; Registry finalization owns the distinct V2 code
+    /// commitment. `elf_sha256` remains the checked raw build-candidate digest.
     #[serde(default)]
     pub(crate) observed_elf_sha256: Option<String>,
     /// Additive and optional, and **local rehearsal only**. The slot written
@@ -552,9 +553,9 @@ pub(crate) struct ProgramPin {
     pub(crate) checked_candidate_elf_path: String,
     /// SHA-256 of the exact raw build candidate.
     pub(crate) checked_candidate_elf_sha256: String,
-    /// SHA-256 of the complete live ProgramData ELF tail. This is the digest
-    /// bound by `ArtifactReleaseV1` and may differ from the raw candidate only
-    /// because of an all-zero allocation suffix.
+    /// Flat SHA-256 provenance of the complete live ProgramData ELF tail,
+    /// including its proven zero allocation suffix. ArtifactReleaseV2 binds
+    /// the independently computed native code commitment of these same bytes.
     pub(crate) live_elf_sha256: String,
     /// Number of proven all-zero bytes after the checked candidate in the live
     /// ProgramData ELF tail.
@@ -562,7 +563,7 @@ pub(crate) struct ProgramPin {
     pub(crate) semantic_release_id: String,
     pub(crate) artifact_release_id: String,
     pub(crate) upgrade_authority: Option<String>,
-    /// The slot this role's `ArtifactReleaseV1` binds, hostile-decoded out of a
+    /// The slot this role's `ArtifactReleaseV2` binds, hostile-decoded out of a
     /// Loader V3 `ProgramData` account image by the same reader the on-chain
     /// `authenticate_deployment` uses. Never a caller-supplied number.
     pub(crate) deployment_slot: u64,
@@ -784,7 +785,7 @@ pub(crate) struct CheckedUpgradeRolePinV1 {
     pub(crate) deployment_slot: u64,
     pub(crate) programdata_account_sha256: String,
     pub(crate) semantic_release_id: String,
-    /// Exact existing `ArtifactReleaseV1` body/id for CarryForward; absent for
+    /// Exact existing `ArtifactReleaseV2` body/id for CarryForward; absent for
     /// an Upgrade, whose new body is derived by checked prepare.
     pub(crate) artifact_release_body_hex: Option<String>,
     pub(crate) artifact_release_id: Option<String>,
@@ -890,7 +891,7 @@ pub(crate) struct CheckedLocalMutableRolePinV1 {
     pub(crate) semantic_release_id: String,
 }
 
-/// One complete deployment-bound `CheckedReleaseV1` in canonical execution
+/// One complete deployment-bound `CheckedReleaseV2` in canonical execution
 /// role order. The manifest bytes are retained because the compact
 /// multiprogram envelope carries only their content identities.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1049,6 +1050,20 @@ pub(crate) struct TransactionEvidence {
     /// `program_id` is the native program address that received it.
     #[serde(default)]
     pub(crate) instructions: Vec<InstructionEvidence>,
+    /// Finalized record/cursor read after this publication transaction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) publication_poststate: Option<PublicationPoststateV2>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(crate) struct PublicationPoststateV2 {
+    pub(crate) observed_slot: u64,
+    pub(crate) raw_record: AccountEvidence,
+    pub(crate) raw_record_data_hex: String,
+    pub(crate) staging_cursor: Option<AccountEvidence>,
+    pub(crate) staging_cursor_data_hex: Option<String>,
+    pub(crate) code_total_length: Option<u64>,
+    pub(crate) code_next_offset: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -1169,6 +1184,7 @@ mod refusal_pin_tests {
             compute_units_consumed: Some(1234),
             error,
             logs: Vec::new(),
+            publication_poststate: None,
             instructions: Vec::new(),
         }
     }

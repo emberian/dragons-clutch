@@ -59,6 +59,9 @@ the tail; the pre-2026-09-01 ledger starts at line 289), and before it
 
 | when | delta | ledger | store |
 | --- | --- | --- | --- |
+| 2026-09-09 | Existing Pages renders Scoring Dealer redeem/close and the current Core retirement handler; the established workflow deploys the exact publication cut | — | [explorer publication](docs/evidence/PAGES_SCORING_EXPLORER_2026_09_09.md) |
+| 2026-09-09 | Local Structured genesis authenticates the captured external Token code with an explicitly immutable Loader account, correcting the native CLI helper counterexample | — | [Token genesis fidelity](docs/evidence/STRUCTURED_TOKEN_GENESIS_FIDELITY_2026_09_09.md) |
+| 2026-09-09 | Registry verifies a 4 MiB Loader payload in four bounded SBF transactions, rejects changed commitments and Loader extensions, and refunds aborted staging; exact-cohort execution remains owed | — | [chunked code verification](docs/evidence/REGISTRY_ARTIFACT_V2_CHUNKED_FINALIZATION_2026_09_09.md) |
 | 2026-09-08 | source-derived native selectors corroborate the accepted WholeUnwrap child action; the shared terminal handler remains uncredited | — | [Claims selector evidence](docs/evidence/claims-fractional-selector-corroboration-2026-09-08/ADDENDUM.md) |
 | 2026-09-08 | Ember requests an active whole-protocol completion goal: complete implementation and exact-source validator lifecycles, followed by fresh devnet, simulator and existing-site delivery | — | [completion scope and active repairs](docs/design/DEVELOPMENT_WAVE_2026_09_07.md) |
 | 2026-09-08 | Fractional Wrap, transfer to an independent holder and WholeUnwrap finalize with exact reserve backing; the native census credits the corroborated parent route | — | [fractional validator evidence](docs/evidence/claims-fractional-validator-2026-09-08/README.md) |

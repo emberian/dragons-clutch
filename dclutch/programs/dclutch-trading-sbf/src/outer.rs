@@ -1069,7 +1069,7 @@ fn require_close_selection(
 /// registry.key` had no meaning without a CPI; `receipt.role() == role` and
 /// `receipt.program() == role_program.key` are now CONSTRUCTIONS of the local
 /// receipt rather than assertions about a returned one -- and the second is
-/// required in any case by `cached_role_deployment_observation_v1` before it
+/// required in any case by `cached_role_deployment_observation_v2` before it
 /// observes a deployment at all.
 ///
 /// # `inline(never)` here is prophylactic, and the prophylaxis was earned

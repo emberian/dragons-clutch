@@ -18,14 +18,14 @@ use std::{
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry::{
-    ARTIFACT_RELEASE_BYTES_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1,
-    DeploymentObservationV1, require_slot_pinned_release_v1,
-};
-use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_registry::release_set::{
     PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1,
     ProtocolInfrastructureProfileV1,
+};
+use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
+use dclutch_registry::{
+    ARTIFACT_RELEASE_BYTES_V2, ARTIFACT_RELEASE_SCHEMA_ID_V2, ArtifactReleaseV2,
+    DeploymentObservationV2, require_slot_pinned_release_v1,
 };
 use serde::Serialize;
 use sha2::{Digest as _, Sha256};
@@ -981,7 +981,7 @@ fn authenticate_artifact_release(
         // Both artifact records live in Registry, including Rent's record.
         record_owner,
         false,
-        Some(ARTIFACT_RELEASE_BYTES_V1),
+        Some(ARTIFACT_RELEASE_BYTES_V2),
     )?;
     if digest_bytes(&raw_account.data) != expected_artifact_id {
         return Err(Error::new(format!(
@@ -989,13 +989,13 @@ fn authenticate_artifact_release(
         )));
     }
     require_funded_rent_persists(&format!("{label} artifact raw"), raw_account)?;
-    let release = ArtifactReleaseV1::decode(&raw_account.data)
+    let release = ArtifactReleaseV2::decode(&raw_account.data)
         .map_err(|error| Error::new(format!("{label} artifact release decode: {error:?}")))?;
     require_slot_pinned_release_v1(release)
         .map_err(|error| Error::new(format!("{label} artifact release policy: {error:?}")))?;
     let program_view = ProgramV3View::parse(&program_account.data)
         .map_err(|error| Error::new(format!("{label} Program decode: {error:?}")))?;
-    let observation = DeploymentObservationV1::new(
+    let observation = DeploymentObservationV2::new(
         program.to_bytes(),
         program_account.owner.to_bytes(),
         program_account.executable,
@@ -1005,7 +1005,13 @@ fn authenticate_artifact_release(
         program_view.programdata(),
         bpf_loader_upgradeable::ID.to_bytes(),
         facts.deployment_slot,
-        hex32(&facts.live_elf_sha256)?,
+        crate::plan::code_commitment_v2(
+            ProgramDataV3View::parse(&programdata_account.data)
+                .map_err(|error| {
+                    Error::new(format!("{label} code commitment ProgramData: {error:?}"))
+                })?
+                .elf(),
+        )?,
         Some(authority.to_bytes()),
     )
     .map_err(|error| Error::new(format!("{label} deployment observation: {error:?}")))?;
@@ -1481,7 +1487,7 @@ fn raw_record(registry: Pubkey, artifact_id: [u8; 32]) -> Pubkey {
     Pubkey::find_program_address(
         &[
             RAW_RECORD_PDA_SEED_V1,
-            &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            &ARTIFACT_RELEASE_SCHEMA_ID_V2,
             &artifact_id,
         ],
         &registry,
@@ -1493,7 +1499,7 @@ fn staging_record(registry: Pubkey, artifact_id: [u8; 32]) -> Pubkey {
     Pubkey::find_program_address(
         &[
             STAGING_CURSOR_PDA_SEED_V1,
-            &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            &ARTIFACT_RELEASE_SCHEMA_ID_V2,
             &artifact_id,
         ],
         &registry,
@@ -2000,12 +2006,12 @@ mod tests {
         let elf = vec![elf_fill; 96];
         let (program_account, programdata_account) =
             loader_accounts(program, authority, deployment_slot, &elf);
-        let release = ArtifactReleaseV1::new(
+        let release = ArtifactReleaseV2::new(
             ProgramIdentityV1::new(program.to_bytes()).expect("Program identity"),
             ProgramIdentityV1::new(bpf_loader_upgradeable::ID.to_bytes()).expect("Loader identity"),
             programdata(program).to_bytes(),
             ContentId::new([semantic_fill; 32]).expect("semantic release"),
-            digest_bytes(&elf),
+            crate::plan::code_commitment_v2(&elf).expect("fixture ELF commitment"),
             deployment_slot,
             ArtifactUpgradePolicyV1::ExactAuthority,
             Some(authority.to_bytes()),

@@ -7,6 +7,10 @@
 //! request release coordinate, submitted lifecycle release set, and caller PDA
 //! required by that new ELF. All Source, provider, Product, economic, and other
 //! writable prestates remain captured.
+//!
+//! Current execution requires a fresh V2 capture with native code commitments for
+//! every activated role. The historical bf06/V1 archive runs only with its pinned
+//! pre-V2 harness revision; it is not accepted as current-cohort evidence.
 
 use std::{env, fs, path::PathBuf, str::FromStr};
 
@@ -21,7 +25,7 @@ use dclutch_registry::release_set::{
 use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetV1, ActivatedExecutionReleaseSetViewV1, ArtifactActivationInputV1,
-    ArtifactReleaseV1, DeploymentObservationV1, activate_execution_role_into_v1,
+    ArtifactReleaseV2, DeploymentObservationV2, activate_execution_role_into_v1,
     initialize_activation_cache_v1,
 };
 use dclutch_source::resolution::{
@@ -118,7 +122,8 @@ fn captured() -> Captured {
     let document: Value = serde_json::from_slice(&bytes).expect("captured account JSON");
     assert_eq!(
         document["schema"].as_str(),
-        Some("dclutch-core-execute-provider-regression-prestate-v1")
+        Some("dclutch-core-execute-provider-regression-prestate-v2"),
+        "fresh ArtifactReleaseV2 capture required; replay historical V1 archives at their pinned pre-V2 revision"
     );
     let checkpoint: Value = serde_json::from_slice(
         &fs::read(root.join("checkpoint.json")).expect("captured checkpoint"),
@@ -199,7 +204,7 @@ fn captured() -> Captured {
     }
 }
 
-fn artifact_id(release: ArtifactReleaseV1) -> ArtifactReleaseIdV1 {
+fn artifact_id(release: ArtifactReleaseV2) -> ArtifactReleaseIdV1 {
     ArtifactReleaseIdV1::new(hash(&release.to_bytes()).to_bytes()).expect("artifact identity")
 }
 
@@ -207,15 +212,15 @@ fn hex32(value: [u8; 32]) -> String {
     value.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn binding(release: ArtifactReleaseV1) -> ExecutionRoleBindingV1 {
+fn binding(release: ArtifactReleaseV2) -> ExecutionRoleBindingV1 {
     ExecutionRoleBindingV1::new(release.program(), artifact_id(release))
 }
 
-fn activation_input(release: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
+fn activation_input(release: ArtifactReleaseV2) -> ArtifactActivationInputV1 {
     ArtifactActivationInputV1::new(
         artifact_id(release),
         release,
-        DeploymentObservationV1::new(
+        DeploymentObservationV2::new(
             release.program().to_bytes(),
             release.loader_program().to_bytes(),
             true,
@@ -225,7 +230,7 @@ fn activation_input(release: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
             release.programdata(),
             release.loader_program().to_bytes(),
             release.deployment_slot(),
-            release.elf_digest(),
+            release.code_commitment(),
             release.upgrade_authority(),
         )
         .expect("deployment observation"),
@@ -246,17 +251,22 @@ fn reauthor_for_new_core(captured: &mut Captured, core_elf: &[u8]) {
         .role(ExecutionRoleV1::Core)
         .expect("Core activation")
         .release();
-    assert_ne!(old_core.elf_digest(), hash(core_elf).to_bytes());
+    assert_ne!(
+        old_core.code_commitment(),
+        dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(core_elf)
+            .expect("Core code commitment"),
+    );
     let new_slot = old_core
         .deployment_slot()
         .checked_add(1)
         .expect("bounded deployment slot");
-    let new_core = ArtifactReleaseV1::new(
+    let new_core = ArtifactReleaseV2::new(
         old_core.program(),
         old_core.loader_program(),
         old_core.programdata(),
         old_core.semantic_release_id(),
-        hash(core_elf).to_bytes(),
+        dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(core_elf)
+            .expect("Core code commitment"),
         new_slot,
         old_core.upgrade_policy(),
         old_core.upgrade_authority(),

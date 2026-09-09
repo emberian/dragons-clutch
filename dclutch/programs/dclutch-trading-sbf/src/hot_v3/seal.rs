@@ -301,7 +301,7 @@ pub const CLOSE_SEAL_ACCOUNT_COUNT_V1: usize = 7;
 /// `root.trading_semantic_release`, which is the semantic release of the
 /// Trading role in an activation cache that authenticates against THIS
 /// deployed Program (`HotFrameV3::parse` requires
-/// `trading_program.key == program_id`; `cached_role_deployment_observation_v1`
+/// `trading_program.key == program_id`; `cached_role_deployment_observation_v2`
 /// requires the release's pinned deployment slot to equal what ProgramData
 /// currently reports). So the writer can only ever reach addresses whose
 /// release seed is a live one — and this route refuses to close any seal whose

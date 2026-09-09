@@ -13,7 +13,7 @@ use dclutch_registry::svm::{
 };
 use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
-    ActivatedExecutionReleaseSetV1, ArtifactReleaseV1, ArtifactUpgradePolicyV1,
+    ActivatedExecutionReleaseSetV1, ArtifactReleaseV2, ArtifactUpgradePolicyV1,
     initialize_activation_cache_v1,
 };
 use solana_program::{
@@ -172,7 +172,7 @@ struct Fixture {
     registry: Pubkey,
     core: Pubkey,
     rent: Rent,
-    release: ArtifactReleaseV1,
+    release: ArtifactReleaseV2,
     artifact_id: ArtifactReleaseIdV1,
     release_set: ExecutionReleaseSetV1,
     release_set_id: ContentId,
@@ -193,12 +193,12 @@ impl Fixture {
             Pubkey::find_program_address(&[core.as_ref()], &bpf_loader_upgradeable::ID).0;
         let elf = [0xa5_u8; 96];
         let slot = 77;
-        let release = ArtifactReleaseV1::new(
+        let release = ArtifactReleaseV2::new(
             ProgramIdentityV1::new(core.to_bytes()).expect("program"),
             ProgramIdentityV1::new(bpf_loader_upgradeable::ID.to_bytes()).expect("loader"),
             programdata_key.to_bytes(),
             content(9),
-            hash(&elf).to_bytes(),
+            dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(&elf).expect("code commitment"),
             slot,
             ArtifactUpgradePolicyV1::Immutable,
             None,
@@ -206,7 +206,7 @@ impl Fixture {
         .expect("artifact release");
         let (artifact_raw, artifact_staging, artifact_digest) = finalized_record(
             registry,
-            dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V2,
             release.to_bytes().to_vec(),
             &rent,
         );
@@ -991,12 +991,12 @@ fn immutable_role_activation_reuses_the_finalized_digest() {
 fn upgradeable_activation_fixture() -> Fixture {
     let mut fixture = Fixture::new();
     let authority = bytes(0x44);
-    let release = ArtifactReleaseV1::new(
+    let release = ArtifactReleaseV2::new(
         fixture.release.program(),
         fixture.release.loader_program(),
         fixture.release.programdata(),
         fixture.release.semantic_release_id(),
-        fixture.release.elf_digest(),
+        fixture.release.code_commitment(),
         fixture.release.deployment_slot(),
         ArtifactUpgradePolicyV1::ExactAuthority,
         Some(authority),
@@ -1004,7 +1004,7 @@ fn upgradeable_activation_fixture() -> Fixture {
     .expect("upgradeable artifact release");
     let (artifact_raw, artifact_staging, artifact_digest) = finalized_record(
         fixture.registry,
-        dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V1,
+        dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V2,
         release.to_bytes().to_vec(),
         &fixture.rent,
     );
@@ -1193,7 +1193,7 @@ const LINEAGE_CACHE_ROLES_OFFSET: usize = 48;
 #[derive(Clone, Copy)]
 struct LineageRole {
     artifact_id: ArtifactReleaseIdV1,
-    release: ArtifactReleaseV1,
+    release: ArtifactReleaseV2,
 }
 
 /// Build the exact bytes the Registry would have written for one cache.
@@ -1264,7 +1264,7 @@ fn lineage_role(
     };
     LineageRole {
         artifact_id: ArtifactReleaseIdV1::new(bytes(artifact_seed)).expect("artifact id"),
-        release: ArtifactReleaseV1::new(
+        release: ArtifactReleaseV2::new(
             ProgramIdentityV1::new(program.to_bytes()).expect("program"),
             ProgramIdentityV1::new(bpf_loader_upgradeable::ID.to_bytes()).expect("loader"),
             programdata.to_bytes(),

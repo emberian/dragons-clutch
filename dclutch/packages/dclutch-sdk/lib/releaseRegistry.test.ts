@@ -1,12 +1,16 @@
 import { PublicKey } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
-import { sha256 } from './bytes';
+import nativeCodeCommitments from '../fixtures/codeCommitmentV2.native.json';
+import { hex, sha256 } from './bytes';
+import { codeCommitmentV2 } from './codeCommitmentV2';
+import { CODE_COMMITMENT_CHUNK_BYTES_V2 } from './generated/coreFound';
 import {
   ACTIVATION_CACHE_BYTES,
   ARTIFACT_RELEASE_BYTES,
-  ARTIFACT_RELEASE_SCHEMA_ID_V1,
+  ARTIFACT_RELEASE_SCHEMA_ID_V2,
   CHECKED_MULTIPROGRAM_BYTES,
+  CHECKED_RELEASE_FIXED_BYTES,
   EXECUTION_RELEASE_SET_BYTES,
   EXECUTION_RELEASE_SET_SCHEMA_ID_V1,
   REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT,
@@ -22,7 +26,8 @@ import {
   compileRegistryReauthenticationTransaction,
   compileRegistryRoleActivationTransaction,
   decodeCheckedMultiprogramV1,
-  decodeCheckedReleaseV1,
+  decodeArtifactReleaseV2,
+  decodeCheckedReleaseV2,
   deriveFinalizedRecordAddressesV1,
   prepareRegistryActivation,
   prepareRegistryReauthentication,
@@ -63,33 +68,35 @@ type RoleFixture = Readonly<{
 
 /// One role's complete checked release plus the exact Loader-v3 accounts it
 /// claims, all derived from one seed so no two roles share a program, a
-/// ProgramData, or an ELF digest.
+/// ProgramData, or a code commitment.
 async function roleFixture(seed: number, revoked = false): Promise<RoleFixture> {
   const loader = new PublicKey(UPGRADEABLE_LOADER_ID); const programKey = new PublicKey(publicKey(seed));
   const programData = PublicKey.findProgramAddressSync([programKey.toBytes()], loader)[0];
   const programBytes = new Uint8Array(36); new DataView(programBytes.buffer).setUint32(0, 2, true); programBytes.set(programData.toBytes(), 4);
-  const programDataBytes = new Uint8Array(109); new DataView(programDataBytes.buffer).setUint32(0, 3, true); putU64(programDataBytes, 4, 81n);
+  const programDataBytes = new Uint8Array(125); new DataView(programDataBytes.buffer).setUint32(0, 3, true); putU64(programDataBytes, 4, 81n);
   // A REVOKED program is not a program with a cleared authority field. Loader
   // V3 serializes `ProgramData { slot, None }` as thirteen bytes over a
   // forty-five byte header, so the old key stays inert at 13..45 behind a zero
   // tag. Modelling revocation as all-zero authority bytes is what let the
   // browser call every real revoked program noncanonical.
-  programDataBytes[12] = revoked ? 0 : 1; programDataBytes.set(new PublicKey(publicKey(93)).toBytes(), 13); programDataBytes.fill(seed, 45);
+  programDataBytes[12] = revoked ? 0 : 1; programDataBytes.set(new PublicKey(publicKey(93)).toBytes(), 13); programDataBytes.fill(seed, 45, 109);
   const elf = programDataBytes.slice(45);
+  const artifactElf = programDataBytes.slice(45, 109);
   const metadata = ['revision-1', 'rustc 1', 'solana 1', 'cargo-build-sbf 1', 'sbf-solana-solana', 'cargo build-sbf', 'offline-check'].map(text);
-  const manifestLength = 388 + metadata.reduce((sum, value) => sum + value.length, 0);
-  const checked = new Uint8Array(manifestLength); checked.set(new TextEncoder().encode('DCLTREL1')); const view = new DataView(checked.buffer);
+  const manifestLength = CHECKED_RELEASE_FIXED_BYTES + metadata.reduce((sum, value) => sum + value.length, 0);
+  const checked = new Uint8Array(manifestLength); checked.set(new TextEncoder().encode('DCLTREL2')); const view = new DataView(checked.buffer);
   // Semantic kind 2 is `unowned`: no first-party contract decodes a role-program
   // release preimage, so it is the ONLY honest kind for these seven programs and
   // the only one the release pipeline emits for them.
-  view.setUint16(8, 1, true); checked[10] = 2; checked[11] = 1; checked[12] = revoked ? 0 : 1; checked[13] = 1; view.setUint32(16, manifestLength, true);
-  putU64(checked, 20, 16n); putU64(checked, 28, 64n); putU64(checked, 36, 36n); putU64(checked, 44, 109n); putU64(checked, 52, 81n); putU64(checked, 60, 45n);
-  checked.set(await sha256(elf), 68); checked.fill(seed + 100, 100, 132); checked.set(await sha256(programBytes), 132); checked.set(await sha256(programDataBytes), 164);
+  view.setUint16(8, 2, true); checked[10] = 2; checked[11] = 1; checked[12] = revoked ? 0 : 1; checked[13] = 1; view.setUint32(16, manifestLength, true);
+  putU64(checked, 20, 16n); putU64(checked, 28, 64n); putU64(checked, 36, 36n); putU64(checked, 44, 125n); putU64(checked, 52, 81n); putU64(checked, 60, 45n);
+  checked.set(await sha256(artifactElf), 68); checked.fill(seed + 100, 100, 132); checked.set(await sha256(programBytes), 132); checked.set(await sha256(programDataBytes), 164);
   checked.set(programKey.toBytes(), 196); checked.set(programData.toBytes(), 228); checked.set(loader.toBytes(), 260);
   if (!revoked) checked.set(new PublicKey(publicKey(93)).toBytes(), 292);
   checked.fill(8, 324, 356); checked.fill(9, 356, 388);
-  let offset = 388; for (const value of metadata) { checked.set(value, offset); offset += value.length; }
-  const decoded = await decodeCheckedReleaseV1(checked);
+  checked.set(await codeCommitmentV2(elf), 388);
+  let offset = CHECKED_RELEASE_FIXED_BYTES; for (const value of metadata) { checked.set(value, offset); offset += value.length; }
+  const decoded = await decodeCheckedReleaseV2(checked);
   return Object.freeze({
     program: programKey.toBase58(), programData: programData.toBase58(), checked, artifact: decoded.artifact.bytes,
     artifactId: await sha256(decoded.artifact.bytes), checkedId: await sha256(checked),
@@ -158,7 +165,7 @@ async function sevenProgramFixture(): Promise<Fixture> {
   const releasePdas = deriveFinalizedRecordAddressesV1(registry, EXECUTION_RELEASE_SET_SCHEMA_ID_V1, releaseSetId);
   accounts.set(releasePdas.record, account(registry, false, releaseSet));
   for (const role of REGISTRY_ROLES) {
-    const pdas = deriveFinalizedRecordAddressesV1(registry, ARTIFACT_RELEASE_SCHEMA_ID_V1, roles[role].artifactId);
+    const pdas = deriveFinalizedRecordAddressesV1(registry, ARTIFACT_RELEASE_SCHEMA_ID_V2, roles[role].artifactId);
     accounts.set(pdas.record, account(registry, false, roles[role].artifact));
     accounts.set(roles[role].program, roles[role].programAccount);
     accounts.set(roles[role].programData, roles[role].programDataAccount);
@@ -193,12 +200,12 @@ describe('the four things a real chain refuted', () => {
 
   it('accepts the `unowned` semantic kind the seven role programs must use', async () => {
     const fixture = await sevenProgramFixture();
-    const decoded = await decodeCheckedReleaseV1(fixture.roles.trading.checked);
+    const decoded = await decodeCheckedReleaseV2(fixture.roles.trading.checked);
     expect(decoded.semanticKind).toBe('unowned');
     const capability = new Uint8Array(fixture.roles.trading.checked); capability[10] = 0;
-    expect((await decodeCheckedReleaseV1(capability)).semanticKind).toBe('capability');
+    expect((await decodeCheckedReleaseV2(capability)).semanticKind).toBe('capability');
     const undefinedKind = new Uint8Array(fixture.roles.trading.checked); undefinedKind[10] = 3;
-    await expect(decodeCheckedReleaseV1(undefinedKind)).rejects.toThrow(/unsupported semantic, Loader, or authority kind/);
+    await expect(decodeCheckedReleaseV2(undefinedKind)).rejects.toThrow(/unsupported semantic, Loader, or authority kind/);
   });
 
   it('pins every runtime address as a real 32-byte key', () => {
@@ -282,6 +289,57 @@ describe('the four things a real chain refuted', () => {
 });
 
 describe('checked Registry release workspace', () => {
+  it('matches every native ordered code-commitment vector', async () => {
+    expect(nativeCodeCommitments.schema).toBe('dclutch-code-commitment-native-vectors-v2');
+    expect(nativeCodeCommitments.generator).toBe('crates/dclutch-release-tool/examples/code_commitment_vectors.rs');
+    expect(nativeCodeCommitments.chunk_bytes).toBe(CODE_COMMITMENT_CHUNK_BYTES_V2);
+    for (const vector of nativeCodeCommitments.vectors) {
+      const bytes = Uint8Array.from({ length: vector.length }, (_, index) => index % 251);
+      expect(hex(await codeCommitmentV2(bytes)), `${vector.length} native bytes`).toBe(vector.code_commitment);
+    }
+  });
+
+  it('refuses both legacy V1 release encodings', async () => {
+    const fixture = await roleFixture(41);
+    const oldChecked = new Uint8Array(fixture.checked);
+    oldChecked.set(new TextEncoder().encode('DCLTREL1'));
+    new DataView(oldChecked.buffer).setUint16(8, 1, true);
+    await expect(decodeCheckedReleaseV2(oldChecked)).rejects.toThrow('wrong fixed header');
+
+    const oldArtifact = new Uint8Array(fixture.artifact);
+    oldArtifact.set(new TextEncoder().encode('DCLTARF1'));
+    new DataView(oldArtifact.buffer).setUint16(8, 1, true);
+    expect(() => decodeArtifactReleaseV2(oldArtifact)).toThrow('wrong exact width, magic, schema, or profile');
+  });
+
+  it('commits to ordered complete Loader bytes, including zero padding', async () => {
+    const fixture = await roleFixture(42);
+    const checked = await decodeCheckedReleaseV2(fixture.checked);
+    const completeTail = fixture.programDataAccount.data.slice(45);
+    const artifactBytes = completeTail.slice(0, Number(checked.elfBytes));
+
+    expect(completeTail.slice(artifactBytes.length).every((byte) => byte === 0)).toBe(true);
+    expect(hex(await codeCommitmentV2(completeTail))).toBe(checked.artifact.codeCommitment);
+    expect(hex(await codeCommitmentV2(artifactBytes))).not.toBe(checked.artifact.codeCommitment);
+    expect(hex(await sha256(artifactBytes))).toBe(checked.artifactDigest);
+    expect(checked.artifact.codeCommitment).not.toBe(checked.artifactDigest);
+  });
+
+  it('separates alteration, chunk reordering, and truncation', async () => {
+    const original = Uint8Array.from(
+      { length: CODE_COMMITMENT_CHUNK_BYTES_V2 * 2 + 17 },
+      (_, index) => (index * 29 + Math.floor(index / CODE_COMMITMENT_CHUNK_BYTES_V2) * 71) & 0xff,
+    );
+    const altered = new Uint8Array(original); altered[CODE_COMMITMENT_CHUNK_BYTES_V2 + 3] ^= 1;
+    const reordered = new Uint8Array(original.length);
+    reordered.set(original.subarray(CODE_COMMITMENT_CHUNK_BYTES_V2, CODE_COMMITMENT_CHUNK_BYTES_V2 * 2), 0);
+    reordered.set(original.subarray(0, CODE_COMMITMENT_CHUNK_BYTES_V2), CODE_COMMITMENT_CHUNK_BYTES_V2);
+    reordered.set(original.subarray(CODE_COMMITMENT_CHUNK_BYTES_V2 * 2), CODE_COMMITMENT_CHUNK_BYTES_V2 * 2);
+    const truncated = original.subarray(0, original.length - 1);
+    const commitments = await Promise.all([original, altered, reordered, truncated].map(codeCommitmentV2));
+    expect(new Set(commitments.map(hex)).size).toBe(4);
+  });
+
   it('joins five full manifests over seven distinct programs, with Core not the Registry', async () => {
     const fixture = await sevenProgramFixture();
     const decoded = await decodeCheckedMultiprogramV1(fixture.multiprogram, fixture.checked);
@@ -324,14 +382,14 @@ describe('checked Registry release workspace', () => {
     expect(plan.cache).toBe(fixture.cache);
     expect(plan.packets).toHaveLength(REGISTRY_ROLES.length);
     expect(plan.roles.core.program).not.toBe(fixture.registry);
-    expect(plan.totalElfBytesHashed).toBe(64 * REGISTRY_ROLES.length);
+    expect(plan.totalCodeBytesVerifiedOffchain).toBe(80 * REGISTRY_ROLES.length);
 
     // Each packet is exactly one role's ten-account instruction, and names that
     // role in the wire bytes: action 0, role index in canonical order.
     plan.packets.forEach((packet, index) => {
       expect(packet.role).toBe(REGISTRY_ROLES[index]);
       expect(packet.alreadyActivated).toBe(false);
-      expect(packet.elfBytesHashed).toBe(64);
+      expect(packet.codeBytesVerifiedOffchain).toBe(80);
       expect(packet.addresses.program).toBe(fixture.roles[packet.role].program);
       expect(packet.requiredSigners).toEqual([fixture.payer]);
       const instruction = packet.transaction.message.compiledInstructions[1];

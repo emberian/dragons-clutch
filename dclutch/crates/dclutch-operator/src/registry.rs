@@ -19,9 +19,9 @@ use dclutch_registry::svm::{
 };
 use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_CACHE_BUMP_OFFSET_V1,
-    ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetV1,
-    ActivatedExecutionReleaseSetViewV1, ArtifactActivationInputV1, ArtifactReleaseV1,
-    DeploymentObservationV1, ExecutionReleaseActivationInputsV1, activate_execution_release_set_v1,
+    ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_SCHEMA_ID_V2, ActivatedExecutionReleaseSetV1,
+    ActivatedExecutionReleaseSetViewV1, ArtifactActivationInputV1, ArtifactReleaseV2,
+    DeploymentObservationV2, ExecutionReleaseActivationInputsV1, activate_execution_release_set_v1,
     activation_cache_progress_v1,
 };
 use solana_compute_budget_interface::ComputeBudgetInstruction;
@@ -77,8 +77,8 @@ pub const TRANSACTION_COMPUTE_UNIT_LIMIT_V1: u32 = 1_400_000;
 /// is roughly 130,780 bytes -- a Registry artifact a day into its life, against
 /// today's 240,440. Decision 0012 landed at `0e34c0365` (2026-08-27) and replaced
 /// that hash with a slot-and-authority equality over an account the frame already
-/// carries: see `slot_pinned_release_elf_digest_v1`, whose own doc says "no
-/// sysvar, no extra account, no hash", and whose decision record measures the pin
+/// carries: the V2 cached deployment observer uses no sysvar, extra account,
+/// or full-code hash, and the decision record measures the pin
 /// at 73 CU. The route stopped hashing 3,214 commits ago and the number never
 /// moved, so it stood at 5.8x the truth with no provenance recorded anywhere in
 /// the tree -- not a test, not an evidence document, not the commit that wrote it.
@@ -88,11 +88,11 @@ pub const TRANSACTION_COMPUTE_UNIT_LIMIT_V1: u32 = 1_400_000;
 /// `tools/gauntlet/tier1/witnesses.json`'s
 /// `reauthentication-does-not-rehash-the-role-elf` asserts, from two numbers the
 /// chain produced in one campaign, that twenty reauthentications fit inside one
-/// activation -- activation being the route that does hash the artifact. Measured
-/// 2026-09-04 the factor is twenty-eight: 11,337 against a cheapest activation of
-/// 328,016. So this number is a measurement of the REGISTRY'S OWN CODE, not of
-/// the role being reauthenticated, and it must be re-measured when the Registry
-/// moves rather than when a role does.
+/// activation. That 2026-09-04 activation still hashed the artifact; V2 moved
+/// the traversal into bounded record-finalization steps. The then-measured
+/// factor was twenty-eight: 11,337 against 328,016. This constant measures the
+/// Registry's own reauthentication code and must be re-measured when the
+/// Registry moves.
 ///
 /// That is why there is no ELF-digest gate on it any more. There was one --
 /// `MEASURED_REGISTRY_ELF_DIGEST_V1`, `fd7ddc66…` -- and it was compared against
@@ -115,7 +115,7 @@ pub struct RegistryFinalizedRecordState {
 /// One role's finalized release authority and current Loader V3 deployment.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RegistryRoleState {
-    /// Finalized canonical `ArtifactReleaseV1` authority.
+    /// Finalized canonical `ArtifactReleaseV2` authority.
     pub artifact_release: RegistryFinalizedRecordState,
     /// Current executable Loader V3 Program account.
     pub program: ObservedAccount,
@@ -187,31 +187,29 @@ pub enum RegistryActivationModeV1 {
     Repeat,
 }
 
-/// Compute-relevant evidence derived from authenticated deployment state.
+/// Deployment evidence derived from the host's authenticated chain snapshot.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RegistryComputeEvidenceV1 {
-    /// Complete ELF-tail bytes the route reads for this exact instruction.
+    /// Complete ELF-tail bytes authenticated by the host planner.
     ///
-    /// **It is bytes HASHED only on the activation path.** Activation admits an
-    /// artifact by digesting its whole ProgramData, so there the figure is the
-    /// route's dominant cost. Reauthentication reads the same span to report its
-    /// width and does NOT hash it -- decision 0012 replaced that hash with a slot
-    /// equality -- so there the figure is a description of the deployment and
-    /// says nothing about what the transaction costs. The name is the activation
-    /// path's and is left alone rather than renamed across a public API; see
-    /// [`MEASURED_REAUTHENTICATION_CU_V1`] for the same era's other residue.
-    pub elf_bytes_hashed: usize,
+    /// The host independently traverses these bytes to recompute the V2 code
+    /// commitment before it returns a plan. Registry finalization established
+    /// the same commitment on chain in bounded chunks. Activation and
+    /// reauthentication reuse that finalized fact after checking the live
+    /// Loader pin, so this byte count is evidence coverage rather than a claim
+    /// about transaction compute.
+    pub elf_bytes_authenticated: usize,
     /// Measured cost of this route, when one has been taken.
     ///
     /// `None` is an honest absence of a measurement, not a zero-cost claim, and
-    /// it is what the activation report carries: activation's cost is a function
-    /// of the artifact it hashes, so there is no one number to give. Callers must
-    /// still select an explicit transaction compute limit; a `Some` here is a
-    /// FLOOR under it, enforced by `compile_registry_packet_v0`.
+    /// it is what the V2 activation report carries until that route is measured
+    /// on an accepted V2 deployment. Callers must still select an explicit
+    /// transaction compute limit; a `Some` here is a FLOOR under it, enforced
+    /// by `compile_registry_packet_v0`.
     pub matching_measured_compute_units: Option<u32>,
 }
 
-/// One role's unsigned activation instruction and its exact hash load.
+/// One role's unsigned activation instruction and host-authenticated code span.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RegistryRoleActivationPlanV1 {
     /// Semantic role admitted by this one transaction.
@@ -220,10 +218,10 @@ pub struct RegistryRoleActivationPlanV1 {
     pub instruction: Instruction,
     /// Whether this role was already admitted by an earlier transaction.
     ///
-    /// A repeat is idempotent on chain and still costs its full ELF hash, so a
-    /// caller that wants the cheapest walk-up skips it.
+    /// A repeat is idempotent on chain. A caller can skip it because the exact
+    /// role bytes are already present, without implying a repeated ELF hash.
     pub already_activated: bool,
-    /// Compute-relevant evidence for this one transaction.
+    /// Host authentication coverage and any matching chain measurement.
     pub compute: RegistryComputeEvidenceV1,
 }
 
@@ -232,9 +230,9 @@ pub struct RegistryRoleActivationPlanV1 {
 pub struct RegistryActivationReport {
     /// Five ordered per-role instructions, one transaction each.
     ///
-    /// This is deliberately not one instruction. Whole-ELF hashing costs about
-    /// one compute unit per two bytes, so admitting the real seven-artifact
-    /// release set in one transaction exceeds the chain maximum outright.
+    /// Each role is independently replayable and makes partial progress
+    /// explicit. Complete-code verification happened earlier through bounded
+    /// Registry finalization transactions.
     pub roles: [RegistryRoleActivationPlanV1; 5],
     /// Shared finalized observation selecting every input.
     pub observation: Observation,
@@ -248,11 +246,8 @@ pub struct RegistryActivationReport {
     pub cache_rent_debit_lamports: u64,
     /// Complete semantic cache derived from the sole finalized authorities.
     pub expected_cache: ActivatedExecutionReleaseSetV1,
-    /// Total ELF bytes hashed across all five transactions.
-    ///
-    /// This is a walk-up total, never one transaction's cost. The per-role
-    /// figures in [`RegistryActivationReport::roles`] are what a single
-    /// transaction must fit under the compute maximum.
+    /// Total ELF bytes the host independently authenticated for all five roles.
+    /// This is evidence coverage, not transaction compute consumption.
     pub compute: RegistryComputeEvidenceV1,
 }
 
@@ -470,7 +465,7 @@ pub fn build_registry_activation_v1(
             },
             already_activated: progress.is_some_and(|progress| progress.is_written(role)),
             compute: RegistryComputeEvidenceV1 {
-                elf_bytes_hashed: elf_bytes,
+                elf_bytes_authenticated: elf_bytes,
                 // Five-role activation measurements do not transfer to a
                 // per-role transaction, and no per-role measurement has been
                 // taken for this profile yet. `None` is an honest absence.
@@ -480,7 +475,7 @@ pub fn build_registry_activation_v1(
     }
     let roles: [RegistryRoleActivationPlanV1; 5] = roles.try_into().map_err(|_| Error::Encoding)?;
 
-    let elf_bytes_hashed = authenticated
+    let elf_bytes_authenticated = authenticated
         .iter()
         .try_fold(0_usize, |total, authenticated| {
             total.checked_add(authenticated.elf_bytes)
@@ -495,7 +490,7 @@ pub fn build_registry_activation_v1(
         cache_rent_debit_lamports,
         expected_cache,
         compute: RegistryComputeEvidenceV1 {
-            elf_bytes_hashed,
+            elf_bytes_authenticated,
             matching_measured_compute_units: None,
         },
     })
@@ -530,7 +525,7 @@ pub fn build_registry_reauthentication_v1(
     let execution_release_set_id = activated
         .execution_release_set_id()
         .map_err(Error::Registry)?;
-    let elf_bytes_hashed = ProgramDataV3View::parse(&state.role_programdata.data)
+    let elf_bytes_authenticated = ProgramDataV3View::parse(&state.role_programdata.data)
         .map_err(Error::RegistrySvm)?
         .elf()
         .len();
@@ -554,7 +549,7 @@ pub fn build_registry_reauthentication_v1(
         artifact_release_id: activated_role.artifact_release_id(),
         semantic_release_id: release.semantic_release_id(),
         compute: RegistryComputeEvidenceV1 {
-            elf_bytes_hashed,
+            elf_bytes_authenticated,
             // Unconditional, because the cost is not a function of this release:
             // the route authenticates the cached deployment by a slot-and-authority
             // equality and does not hash the artifact. See
@@ -629,12 +624,12 @@ fn authenticate_role(
     let expected_digest = expected.artifact_release().to_bytes();
     authenticate_finalized_record(
         registry_program,
-        ARTIFACT_RELEASE_SCHEMA_ID_V1,
+        ARTIFACT_RELEASE_SCHEMA_ID_V2,
         Some(expected_digest),
         &state.artifact_release,
     )?;
     let release =
-        ArtifactReleaseV1::decode(&state.artifact_release.record.data).map_err(Error::Registry)?;
+        ArtifactReleaseV2::decode(&state.artifact_release.record.data).map_err(Error::Registry)?;
     if release.program() != expected.program() {
         return Err(Error::InvalidArtifactRelease);
     }
@@ -693,8 +688,8 @@ fn authenticate_finalized_record(
 fn deployment_observation(
     program: &ObservedAccount,
     programdata: &ObservedAccount,
-    release: ArtifactReleaseV1,
-) -> Result<DeploymentObservationV1, Error> {
+    release: ArtifactReleaseV2,
+) -> Result<DeploymentObservationV2, Error> {
     if release.loader_program().to_bytes() != bpf_loader_upgradeable::ID.to_bytes()
         || program.key.to_bytes() != release.program().to_bytes()
         || programdata.key.to_bytes() != release.programdata()
@@ -713,7 +708,7 @@ fn deployment_observation(
     }
     let programdata_view =
         ProgramDataV3View::parse(&programdata.data).map_err(Error::RegistrySvm)?;
-    DeploymentObservationV1::new(
+    DeploymentObservationV2::new(
         program.key.to_bytes(),
         program.owner.to_bytes(),
         program.executable,
@@ -723,7 +718,8 @@ fn deployment_observation(
         program_view.programdata(),
         bpf_loader_upgradeable::ID.to_bytes(),
         programdata_view.deployment_slot(),
-        hash(programdata_view.elf()).to_bytes(),
+        dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(programdata_view.elf())
+            .map_err(|_| Error::InvalidDeployment)?,
         programdata_view.upgrade_authority(),
     )
     .map_err(Error::Registry)

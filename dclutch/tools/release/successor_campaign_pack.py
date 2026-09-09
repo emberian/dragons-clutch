@@ -1009,7 +1009,7 @@ def emit(arguments: argparse.Namespace) -> None:
             repeatable=frozenset({"assumption"}),
         )
         for key, expected in {
-            "format": "dclutch-checked-release-v1",
+            "format": "dclutch-checked-release-v2",
             "artifact_sha256": elf["sha256"],
             "artifact_bytes": str(elf["bytes"]),
             "checked_release_id": manifest["sha256"],

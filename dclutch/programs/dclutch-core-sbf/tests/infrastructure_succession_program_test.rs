@@ -68,7 +68,7 @@ use dclutch_registry::release_set::{
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2,
     ProgramIdentityV1, ProtocolInfrastructureProfileV1, ProtocolInfrastructureProfileV2,
 };
-use dclutch_registry::{ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1, ArtifactUpgradePolicyV1};
+use dclutch_registry::{ARTIFACT_RELEASE_SCHEMA_ID_V2, ArtifactReleaseV2, ArtifactUpgradePolicyV1};
 use solana_account::Account;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_program::{
@@ -330,16 +330,16 @@ fn identity(program: Pubkey) -> ProgramIdentityV1 {
 /// there.
 fn artifact_release(
     program: Pubkey,
-    elf_digest: [u8; 32],
+    code_commitment: [u8; 32],
     semantic: u8,
     deployment_slot: u64,
-) -> ArtifactReleaseV1 {
-    ArtifactReleaseV1::new(
+) -> ArtifactReleaseV2 {
+    ArtifactReleaseV2::new(
         identity(program),
         identity(bpf_loader_upgradeable::ID),
         programdata_address(program).to_bytes(),
         ContentId::new([semantic; 32]).expect("semantic release"),
-        elf_digest,
+        code_commitment,
         deployment_slot,
         ArtifactUpgradePolicyV1::ExactAuthority,
         Some(consent_authority().pubkey().to_bytes()),
@@ -357,13 +357,13 @@ struct Record {
 }
 
 /// Plant one Registry-owned finalized record and its vacant staging cursor.
-fn add_artifact_record(test: &mut ProgramTest, release: ArtifactReleaseV1) -> Record {
+fn add_artifact_record(test: &mut ProgramTest, release: ArtifactReleaseV2) -> Record {
     let data = release.to_bytes().to_vec();
     let digest = hash(&data).to_bytes();
     let raw = Pubkey::find_program_address(
         &[
             RAW_RECORD_PDA_SEED_V1,
-            &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            &ARTIFACT_RELEASE_SCHEMA_ID_V2,
             &digest,
         ],
         &REGISTRY_PROGRAM_ID,
@@ -372,7 +372,7 @@ fn add_artifact_record(test: &mut ProgramTest, release: ArtifactReleaseV1) -> Re
     let staging = Pubkey::find_program_address(
         &[
             STAGING_CURSOR_PDA_SEED_V1,
-            &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            &ARTIFACT_RELEASE_SCHEMA_ID_V2,
             &digest,
         ],
         &REGISTRY_PROGRAM_ID,
@@ -576,7 +576,7 @@ impl Fixture {
             &mut test,
             artifact_release(
                 REGISTRY_PROGRAM_ID,
-                hash(&artifacts.registry).to_bytes(),
+                dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(&artifacts.registry).expect("actual Registry code commitment"),
                 0xa1,
                 SUCCESSOR_DEPLOYMENT_SLOT,
             ),
@@ -585,7 +585,7 @@ impl Fixture {
             &mut test,
             artifact_release(
                 RENT_PROGRAM_ID,
-                hash(&artifacts.rent).to_bytes(),
+                dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(&artifacts.rent).expect("actual Rent code commitment"),
                 0xa2,
                 SUCCESSOR_DEPLOYMENT_SLOT,
             ),
@@ -631,7 +631,7 @@ impl Fixture {
             &mut test,
             artifact_release(
                 REGISTRY_PROGRAM_ID,
-                hash(&artifacts.registry).to_bytes(),
+                dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(&artifacts.registry).expect("actual Registry code commitment"),
                 0xb4,
                 GENESIS_DEPLOYMENT_SLOT,
             ),
@@ -641,7 +641,7 @@ impl Fixture {
             &mut test,
             artifact_release(
                 RENT_PROGRAM_ID,
-                hash(&artifacts.rent).to_bytes(),
+                dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(&artifacts.rent).expect("actual Rent code commitment"),
                 0xb6,
                 GENESIS_DEPLOYMENT_SLOT,
             ),
@@ -655,7 +655,7 @@ impl Fixture {
             &mut test,
             artifact_release(
                 REGISTRY_PROGRAM_ID,
-                hash(&artifacts.registry).to_bytes(),
+                dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(&artifacts.registry).expect("actual Registry code commitment"),
                 0xb5,
                 UPGRADED_DEPLOYMENT_SLOT,
             ),

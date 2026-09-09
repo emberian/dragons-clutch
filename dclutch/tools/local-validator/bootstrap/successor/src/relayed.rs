@@ -36,7 +36,7 @@ use dclutch_product::{portfolio_record_bytes, result_domain_record_bytes};
 use dclutch_product_runtime_v2_operator::ProductCompilationInputV2;
 use dclutch_product_runtime_v2_operator::compile_product_records_v2;
 use dclutch_registry::release_set::ProgramIdentityV1;
-use dclutch_registry::{ArtifactReleaseV1, ArtifactUpgradePolicyV1};
+use dclutch_registry::{ArtifactReleaseV2, ArtifactUpgradePolicyV1};
 use dclutch_source::relay::{
     FEATURE_PROGRAM_ID_V1, OBSERVED_SYSVAR_OWNER_V1, RELAYED_FAMILY_RELEASE_ID_V1,
     RELAYED_RECORD_TRANSPORT_PROFILE_ID_V1, SOLANA_MAINNET_GENESIS_HASH_V1,
@@ -89,7 +89,7 @@ struct RelayedRowFactsV1 {
     ///
     /// A native row's state account is owned by a program the validator itself
     /// implements: there is no ELF, no upgrade authority and no deployment to
-    /// name, so there is no `ArtifactReleaseV1` to give a semantic identity to.
+    /// name, so there is no `ArtifactReleaseV2` to give a semantic identity to.
     /// Carrying `Some("")` or a placeholder there would seed a Source's
     /// `venue_release_id` with a body describing a deployment that does not
     /// exist.
@@ -179,8 +179,8 @@ pub(crate) struct RelayedVenueFactsV1 {
     pub(crate) programdata: [u8; 32],
     /// The watched `VirtualPool` account.
     pub(crate) pool: [u8; 32],
-    /// SHA-256 of the venue ProgramData's ELF tail (bytes 45..).
-    pub(crate) elf_digest: [u8; 32],
+    /// Native commitment of the exact venue ProgramData ELF tail (bytes 45..).
+    pub(crate) code_commitment: [u8; 32],
     pub(crate) deployment_slot: u64,
     pub(crate) upgrade_authority: [u8; 32],
 }
@@ -449,7 +449,7 @@ pub(crate) fn relayed_market_input(
              yet found a native-venue relayed market: market.rs \
              authenticate_source_publication_v1 carries a single RelayedObservationRecord arm, \
              which publishes the source spec's adapter configuration under \
-             ARTIFACT_RELEASE_SCHEMA_ID_V1 -- the venue's ArtifactReleaseV1 -- and a row with no \
+             ARTIFACT_RELEASE_SCHEMA_ID_V2 -- the venue's ArtifactReleaseV2 -- and a row with no \
              venue program has no such body to publish. The missing arm is the native-venue \
              branch of that match."
         )));
@@ -507,10 +507,10 @@ pub(crate) fn relayed_market_input(
     let venue_semantic_release = row.venue_semantic_release.ok_or_else(|| {
         Error::new(format!(
             "relayed row {observable:?} names no venue semantic release, so no venue \
-             ArtifactReleaseV1 identity exists for its Source to pin"
+             ArtifactReleaseV2 identity exists for its Source to pin"
         ))
     })?;
-    let venue_release = ArtifactReleaseV1::new(
+    let venue_release = ArtifactReleaseV2::new(
         ProgramIdentityV1::new(venue.program)
             .map_err(|error| Error::new(format!("venue program: {error:?}")))?,
         ProgramIdentityV1::new(LOADER_V3_PROGRAM_ID)
@@ -518,7 +518,7 @@ pub(crate) fn relayed_market_input(
         venue.programdata,
         dclutch_core_contract::ContentId::new(demo_id(venue_semantic_release, &[]))
             .map_err(|error| Error::new(format!("venue semantic release: {error:?}")))?,
-        venue.elf_digest,
+        venue.code_commitment,
         venue.deployment_slot,
         ArtifactUpgradePolicyV1::ExactAuthority,
         Some(venue.upgrade_authority),
@@ -574,7 +574,7 @@ pub(crate) fn relayed_market_input(
     // not fall as the coin's liquidity thins). Its identity is the digest of
     // its own body, like every other record in this graph, and its venue
     // binding is the adapter_config_id the Source itself names — for the
-    // relayed family, the venue's ArtifactReleaseV1 (§12.4). The collateral
+    // relayed family, the venue's ArtifactReleaseV2 (§12.4). The collateral
     // unit is the rehearsal Realm's native-lamport stand-in: one collateral
     // atom represents one lamport, which is the unit the curve floor is
     // denominated in.
@@ -824,7 +824,7 @@ pub(crate) fn relayed_market_input(
         statistic_spec_hex: hex(&statistic_bytes),
         provider_release_hex: hex(&provider_release_bytes),
         // For the relayed family the spec's adapter_config_id names the
-        // VENUE's ArtifactReleaseV1 (§12.4); the producer publishes it under
+        // VENUE's ArtifactReleaseV2 (§12.4); the producer publishes it under
         // the artifact-release schema by reading the provider release's own
         // extension.
         pyth_adapter_config_hex: hex(&venue_release_bytes),
@@ -960,7 +960,8 @@ mod tests {
                 program: [0x51; 32],
                 programdata: [0x52; 32],
                 pool: [0x53; 32],
-                elf_digest: [0x54; 32],
+                code_commitment: crate::plan::code_commitment_v2(&[0x54; 32])
+                    .expect("venue fixture commitment"),
                 deployment_slot: 99,
                 upgrade_authority: [0x55; 32],
             },
@@ -1035,7 +1036,8 @@ mod the_founding_path {
             program: [0x51; 32],
             programdata: [0x52; 32],
             pool: [0x53; 32],
-            elf_digest: [0x54; 32],
+            code_commitment: crate::plan::code_commitment_v2(&[0x54; 32])
+                .expect("venue fixture commitment"),
             deployment_slot: 99,
             upgrade_authority: [0x55; 32],
         }
@@ -1094,7 +1096,7 @@ mod the_founding_path {
 
     /// The native rows compile a Product shape but cannot yet be FOUNDED: the
     /// devnet publisher lands a relayed market's records through one arm that
-    /// publishes the venue's `ArtifactReleaseV1`, and a native row has none.
+    /// publishes the venue's `ArtifactReleaseV2`, and a native row has none.
     /// The refusal names that arm so the lane that writes it knows where.
     #[test]
     fn a_native_row_refuses_out_of_the_producer_naming_the_missing_publisher_arm() {

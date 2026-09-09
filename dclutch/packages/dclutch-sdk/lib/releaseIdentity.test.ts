@@ -2,6 +2,7 @@ import { PublicKey } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
 import { hex, sha256 } from './bytes';
+import { codeCommitmentV2 } from './codeCommitmentV2';
 import {
   KNOWN_ABI_RELEASES_V1,
   authenticateReleaseCurrencyV1,
@@ -49,15 +50,15 @@ async function roleBytes(spec: RoleSpec): Promise<Readonly<{
   const programData = PublicKey.findProgramAddressSync([program.toBytes()], loader)[0];
   const elf = Uint8Array.from({ length: 64 }, (_, index) => (spec.slot + index) & 0xff);
   const bytes = new Uint8Array(ARTIFACT_RELEASE_BYTES);
-  bytes.set(new TextEncoder().encode('DCLTARF1'));
+  bytes.set(new TextEncoder().encode('DCLTARF2'));
   const view = new DataView(bytes.buffer);
-  view.setUint16(8, 1, true);
+  view.setUint16(8, 2, true);
   view.setUint16(10, 1, true);
   bytes.set(program.toBytes(), 16);
   bytes.set(loader.toBytes(), 48);
   bytes.set(programData.toBytes(), 80);
   bytes.fill(spec.semanticSeed, 112, 144);
-  bytes.set(await sha256(elf), 144);
+  bytes.set(await codeCommitmentV2(elf), 144);
   view.setBigUint64(176, BigInt(spec.slot), true);
   const programDataBytes = new Uint8Array(45 + elf.length);
   new DataView(programDataBytes.buffer).setUint32(0, 3, true);

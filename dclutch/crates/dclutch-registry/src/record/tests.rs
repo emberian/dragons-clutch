@@ -622,3 +622,58 @@ fn u64_geometry_has_no_fixed_total_artifact_cap() {
     .expect("begin has no total cap");
     assert!(transition.cursor().page_count() > u64::from(u32::MAX));
 }
+
+#[test]
+fn artifact_verification_cursor_requires_schema_width_and_complete_upload() {
+    use crate::artifact_code_commitment_v2::{
+        CODE_COMMITMENT_CHUNK_BYTES_V2, CodeCommitmentProgressV2,
+    };
+    let mut raw = GOOD_CONTENT;
+    let ordinary = complete(&mut raw);
+    let mut cursor = ordinary;
+    cursor.key = RecordKeyV1::new(
+        SchemaReleaseId::new(crate::ARTIFACT_RELEASE_SCHEMA_ID_V2).expect("artifact schema"),
+        digest(2),
+    );
+    let mut bytes = vec![0; ARTIFACT_STAGING_CURSOR_BYTES_V2];
+    bytes[..STAGING_CURSOR_BYTES_V1].copy_from_slice(&cursor.to_bytes());
+    assert_eq!(StagingCursorV1::decode(&bytes), Ok(cursor));
+    assert_eq!(artifact_verification_progress_v2(&bytes), Ok(None));
+    assert_eq!(
+        StagingCursorV1::decode(&cursor.to_bytes()),
+        Err(Error::InvalidLength)
+    );
+    let chunk = vec![7; CODE_COMMITMENT_CHUNK_BYTES_V2];
+    let initial =
+        CodeCommitmentProgressV2::new(CODE_COMMITMENT_CHUNK_BYTES_V2 as u64 + 1).expect("initial");
+    let partial = initial.advance(0, &chunk).expect("first chunk");
+    bytes[STAGING_CURSOR_BYTES_V1..].copy_from_slice(&partial.to_bytes());
+    assert_eq!(artifact_verification_progress_v2(&bytes), Ok(Some(partial)));
+    let mut uploading = begin();
+    uploading.key = cursor.key;
+    bytes[..STAGING_CURSOR_BYTES_V1].copy_from_slice(&uploading.to_bytes());
+    assert_eq!(
+        StagingCursorV1::decode(&bytes),
+        Err(Error::GeometryMismatch)
+    );
+    bytes[..STAGING_CURSOR_BYTES_V1].copy_from_slice(&cursor.to_bytes());
+    bytes[STAGING_CURSOR_BYTES_V1..].copy_from_slice(&initial.to_bytes());
+    assert_eq!(
+        StagingCursorV1::decode(&bytes),
+        Err(Error::ArtifactVerificationProgress(
+            crate::artifact_code_commitment_v2::CodeCommitmentErrorV2::Encoding
+        ))
+    );
+    let complete = partial
+        .advance(partial.next_offset(), &[7])
+        .expect("last byte");
+    bytes[STAGING_CURSOR_BYTES_V1..].copy_from_slice(&complete.to_bytes());
+    assert_eq!(
+        StagingCursorV1::decode(&bytes),
+        Err(Error::ArtifactVerificationProgress(
+            crate::artifact_code_commitment_v2::CodeCommitmentErrorV2::Encoding
+        ))
+    );
+    bytes[..STAGING_CURSOR_BYTES_V1].copy_from_slice(&ordinary.to_bytes());
+    assert_eq!(StagingCursorV1::decode(&bytes), Err(Error::InvalidLength));
+}

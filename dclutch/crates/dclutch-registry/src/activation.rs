@@ -7,12 +7,12 @@ use crate::release_set::{
 use dclutch_core_contract::ContentId;
 
 use crate::{
-    ARTIFACT_RELEASE_BYTES_V1, ArtifactReleaseV1, DeploymentObservationV1, Error, IDENTITY_BYTES,
+    ARTIFACT_RELEASE_BYTES_V2, ArtifactReleaseV2, DeploymentObservationV2, Error, IDENTITY_BYTES,
     Result, copy_infallible, put_u16, read_array, read_u16, require_zero, subslice,
 };
 
 /// Bytes in one activated role projection.
-pub const ACTIVATED_ROLE_BYTES_V1: usize = IDENTITY_BYTES + ARTIFACT_RELEASE_BYTES_V1;
+pub const ACTIVATED_ROLE_BYTES_V1: usize = IDENTITY_BYTES + ARTIFACT_RELEASE_BYTES_V2;
 /// First PDA seed for the sole Registry-owned activation cache.
 ///
 /// The adapter must derive the cache under the Registry program
@@ -70,16 +70,16 @@ const ALL_ROLES: [ExecutionRoleV1; EXECUTION_ROLE_COUNT_V1] = EXECUTION_ROLE_ORD
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ArtifactActivationInputV1 {
     finalized_artifact_release_id: ArtifactReleaseIdV1,
-    release: ArtifactReleaseV1,
-    deployment: DeploymentObservationV1,
+    release: ArtifactReleaseV2,
+    deployment: DeploymentObservationV2,
 }
 
 impl ArtifactActivationInputV1 {
     /// Construct one typed activation input.
     pub const fn new(
         finalized_artifact_release_id: ArtifactReleaseIdV1,
-        release: ArtifactReleaseV1,
-        deployment: DeploymentObservationV1,
+        release: ArtifactReleaseV2,
+        deployment: DeploymentObservationV2,
     ) -> Self {
         Self {
             finalized_artifact_release_id,
@@ -132,7 +132,7 @@ impl ExecutionReleaseActivationInputsV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ActivatedRoleV1 {
     artifact_release_id: ArtifactReleaseIdV1,
-    release: ArtifactReleaseV1,
+    release: ArtifactReleaseV2,
 }
 
 impl ActivatedRoleV1 {
@@ -142,14 +142,14 @@ impl ActivatedRoleV1 {
     }
 
     /// Return the exact activated artifact release.
-    pub const fn release(self) -> ArtifactReleaseV1 {
+    pub const fn release(self) -> ArtifactReleaseV2 {
         self.release
     }
 
     /// Reauthenticate the current deployment before lending role authority.
     pub fn authenticate_current_deployment(
         self,
-        observation: DeploymentObservationV1,
+        observation: DeploymentObservationV2,
     ) -> Result<()> {
         self.release.authenticate_deployment(observation)
     }
@@ -226,7 +226,7 @@ impl<'a> ActivatedExecutionReleaseSetViewV1<'a> {
     /// This scan used to call `self.role(..)` twenty-five times over an account
     /// that holds five roles: five in `release_set_projection`, then two more
     /// inside each of the ten pair iterations, every one of them re-running
-    /// `ArtifactReleaseIdV1::decode` and `ArtifactReleaseV1::decode` over bytes
+    /// `ArtifactReleaseIdV1::decode` and `ArtifactReleaseV2::decode` over bytes
     /// a previous iteration had already decoded and accepted. Measured
     /// 2026-09-03 on real Custody ELFs, `decode` was **21,984 CU** of the
     /// 23,694 the Dealer partial equity Remove spends on its activation-cache
@@ -649,10 +649,10 @@ fn decode_role(bytes: &[u8], role: ExecutionRoleV1) -> Result<ActivatedRoleV1> {
     let offset = role_offset(role);
     Ok(ActivatedRoleV1 {
         artifact_release_id: ArtifactReleaseIdV1::decode(subslice(bytes, offset, IDENTITY_BYTES)?)?,
-        release: ArtifactReleaseV1::decode(subslice(
+        release: ArtifactReleaseV2::decode(subslice(
             bytes,
             offset + IDENTITY_BYTES,
-            ARTIFACT_RELEASE_BYTES_V1,
+            ARTIFACT_RELEASE_BYTES_V2,
         )?)?,
     })
 }

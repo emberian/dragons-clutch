@@ -101,7 +101,7 @@ use dclutch_registry::release_set::{
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, ProtocolInfrastructureProfileV2,
 };
 use dclutch_registry::{
-    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1,
+    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ARTIFACT_RELEASE_SCHEMA_ID_V2, ArtifactReleaseV2,
 };
 use dclutch_vm::account_profile::{v2::AccountPrestateV2, v3::AccountProfileV3};
 /// Occurrence count of the Template this chain stages: exactly one.
@@ -1383,13 +1383,13 @@ fn build_core_infrastructure_corpus_v1(
         substrate,
     );
     let rent_artifact = release_v2(input.rent_program, 0x35, &input.elves.registry, substrate);
-    let artifact_id = |release: ArtifactReleaseV1| {
+    let artifact_id = |release: ArtifactReleaseV2| {
         ArtifactReleaseIdV1::new(hash(&release.to_bytes()).to_bytes())
             .map_err(|_| SeriesPremarketExpiryChainErrorV1::Record)
     };
     let registry_id = artifact_id(registry_artifact)?;
     let rent_id = artifact_id(rent_artifact)?;
-    let binding = |release: ArtifactReleaseV1, id: ArtifactReleaseIdV1| {
+    let binding = |release: ArtifactReleaseV2, id: ArtifactReleaseIdV1| {
         ExecutionRoleBindingV1::new(release.program(), id)
     };
     let profile_value = ProtocolInfrastructureProfileV2::new(
@@ -1412,12 +1412,12 @@ fn build_core_infrastructure_corpus_v1(
     );
     let registry_release = derive_record(
         input.registry_program,
-        ARTIFACT_RELEASE_SCHEMA_ID_V1,
+        ARTIFACT_RELEASE_SCHEMA_ID_V2,
         &registry_artifact.to_bytes(),
     );
     let rent_release = derive_record(
         input.registry_program,
-        ARTIFACT_RELEASE_SCHEMA_ID_V1,
+        ARTIFACT_RELEASE_SCHEMA_ID_V2,
         &rent_artifact.to_bytes(),
     );
     let registry_programdata_key = programdata(input.registry_program);

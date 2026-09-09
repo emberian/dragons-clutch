@@ -28,8 +28,8 @@ bootstrap root for Registry and Rent. It is a Core-owned per-program PDA,
 initialized once by the exact signer named in the current Core ProgramData
 upgrade-authority field. Its fixed Registry and Rent `(program, artifact
 release)` bindings are not a sixth Registry-owned release-set role. Runtime
-adapters must still authenticate both selected `ArtifactReleaseV1` bodies and
-their current Loader deployments before trusting Registry records or a
+adapters must still authenticate both selected `ArtifactReleaseV2` bodies and
+their current Loader envelopes before trusting Registry records or a
 RentCredit owner.
 
 `CapabilityExecutionSelectionV1` is the Lean-owned, generated-layout projection

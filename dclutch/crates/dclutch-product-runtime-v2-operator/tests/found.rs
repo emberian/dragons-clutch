@@ -51,8 +51,8 @@ use dclutch_registry::release_set::{
 };
 use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
-    ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactActivationInputV1, ArtifactReleaseV1,
-    ArtifactUpgradePolicyV1, DeploymentObservationV1, activate_execution_role_into_v1,
+    ARTIFACT_RELEASE_SCHEMA_ID_V2, ArtifactActivationInputV1, ArtifactReleaseV2,
+    ArtifactUpgradePolicyV1, DeploymentObservationV2, activate_execution_role_into_v1,
     initialize_activation_cache_v1,
 };
 use dclutch_source::parent_reference_v1::{
@@ -277,13 +277,14 @@ fn program_identity(program: Pubkey) -> ProgramIdentityV1 {
     ProgramIdentityV1::new(program.to_bytes()).expect("program identity")
 }
 
-fn artifact_release(program: Pubkey, programdata: Pubkey, elf: &[u8]) -> ArtifactReleaseV1 {
-    ArtifactReleaseV1::new(
+fn artifact_release(program: Pubkey, programdata: Pubkey, elf: &[u8]) -> ArtifactReleaseV2 {
+    ArtifactReleaseV2::new(
         program_identity(program),
         program_identity(bpf_loader_upgradeable::ID),
         programdata.to_bytes(),
         CoreContentId::new([0xb1; 32]).expect("semantic release"),
-        hash(elf).to_bytes(),
+        dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(elf)
+            .expect("code commitment"),
         71,
         ArtifactUpgradePolicyV1::Immutable,
         None,
@@ -291,11 +292,11 @@ fn artifact_release(program: Pubkey, programdata: Pubkey, elf: &[u8]) -> Artifac
     .expect("artifact release")
 }
 
-fn artifact_id(release: ArtifactReleaseV1) -> ArtifactReleaseIdV1 {
+fn artifact_id(release: ArtifactReleaseV2) -> ArtifactReleaseIdV1 {
     ArtifactReleaseIdV1::new(hash(&release.to_bytes()).to_bytes()).expect("artifact identity")
 }
 
-fn activation(release: ArtifactReleaseV1) -> (ExecutionReleaseSetV1, Pubkey, Vec<u8>) {
+fn activation(release: ArtifactReleaseV2) -> (ExecutionReleaseSetV1, Pubkey, Vec<u8>) {
     let binding = ExecutionRoleBindingV1::new(release.program(), artifact_id(release));
     let release_set = ExecutionReleaseSetV1::new(binding, binding, binding, binding, binding)
         .expect("release set");
@@ -303,7 +304,7 @@ fn activation(release: ArtifactReleaseV1) -> (ExecutionReleaseSetV1, Pubkey, Vec
     let release_set_id = CoreContentId::new(release_set_digest).expect("release-set identity");
     let mut bytes = vec![0_u8; ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1];
     initialize_activation_cache_v1(&mut bytes, release_set_id).expect("activation cache");
-    let observation = DeploymentObservationV1::new(
+    let observation = DeploymentObservationV2::new(
         release.program().to_bytes(),
         bpf_loader_upgradeable::ID.to_bytes(),
         true,
@@ -313,7 +314,7 @@ fn activation(release: ArtifactReleaseV1) -> (ExecutionReleaseSetV1, Pubkey, Vec
         release.programdata(),
         bpf_loader_upgradeable::ID.to_bytes(),
         release.deployment_slot(),
-        release.elf_digest(),
+        release.code_commitment(),
         release.upgrade_authority(),
     )
     .expect("deployment observation");
@@ -465,7 +466,7 @@ impl Fixture {
         let registry_elf = b"dclutch-registry-v1-fixture";
         let registry_release = artifact_release(REGISTRY, registry_programdata, registry_elf);
         let registry_artifact = RecordBacking::new(
-            ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            ARTIFACT_RELEASE_SCHEMA_ID_V2,
             registry_release.to_bytes().to_vec(),
         );
         let rent_programdata =
@@ -473,7 +474,7 @@ impl Fixture {
         let rent_elf = b"dclutch-rent-v1-fixture";
         let rent_release = artifact_release(RENT_PROGRAM, rent_programdata, rent_elf);
         let rent_artifact = RecordBacking::new(
-            ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            ARTIFACT_RELEASE_SCHEMA_ID_V2,
             rent_release.to_bytes().to_vec(),
         );
         // Registry moved across the succession and Rent did not: the
@@ -1217,19 +1218,22 @@ fn substituted_profile_and_mutable_infrastructure_refuse() {
         Err(Error::CrossRecordMismatch)
     );
 
-    let mutable_release = ArtifactReleaseV1::new(
+    let mutable_release = ArtifactReleaseV2::new(
         program_identity(REGISTRY),
         program_identity(bpf_loader_upgradeable::ID),
         fixture.registry_programdata.to_bytes(),
         CoreContentId::new([0xb1; 32]).expect("semantic release"),
-        hash(b"dclutch-registry-v1-fixture").to_bytes(),
+        dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(
+            b"dclutch-registry-v1-fixture",
+        )
+        .expect("code commitment"),
         71,
         ArtifactUpgradePolicyV1::ExactAuthority,
         Some([0xee; 32]),
     )
     .expect("mutable artifact");
     let mutable_artifact = RecordBacking::new(
-        ARTIFACT_RELEASE_SCHEMA_ID_V1,
+        ARTIFACT_RELEASE_SCHEMA_ID_V2,
         mutable_release.to_bytes().to_vec(),
     );
     assert_eq!(
@@ -1264,7 +1268,9 @@ fn stale_registry_elf_refuses_before_transaction_export() {
                 ..state
             }
         ),
-        Err(Error::Registry(dclutch_registry::Error::ElfDigestMismatch))
+        Err(Error::Registry(
+            dclutch_registry::Error::CodeCommitmentMismatch
+        ))
     );
 }
 

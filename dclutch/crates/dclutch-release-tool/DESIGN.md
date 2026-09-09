@@ -5,19 +5,21 @@ capability manifest continues to own its opaque semantic release identity, and
 `PythReleaseV1` continues to own Pyth provider-release semantics. This tool
 hashes the exact selected preimage and never invents a second capability DTO.
 
-`CheckedReleaseV1` is a separate, offline evidence record. Its content ID does
+`CheckedReleaseV2` is a separate, offline evidence record. Its content ID does
 not replace the semantic release ID. It states that one semantic preimage was
 checked against one exact built SBF ELF and one exact pair of Loader V3 account
 snapshots under named build metadata and assumptions.
 
 ## Canonical evidence
 
-The binary manifest has an exact V1 header followed by six length-prefixed
+The binary manifest has an exact 420-byte `DCLTREL2`, schema-2 prefix followed
+by six length-prefixed
 metadata strings and a bounded, strictly sorted set of length-prefixed
 assumptions. It commits:
 
 - semantic preimage kind, byte length, and SHA-256 content identity;
-- ELF byte length and SHA-256 digest;
+- ELF byte length and flat-ELF SHA-256 provenance digest;
+- the ordered commitment to the complete Loader payload at fixed offset 388;
 - exact Program and ProgramData account-data lengths and SHA-256 digests;
 - Program, ProgramData, and loader program public keys;
 - Loader V3 deployment slot and optional upgrade authority;
@@ -40,6 +42,14 @@ V3 enum interpretation. This tool additionally applies the loader's fixed
 exactly there, and every byte after the ELF must be zero allocation padding.
 It refuses to equate a prefix hash, a nonzero padded payload, or a merely
 ELF-shaped file with the checked artifact.
+
+The two code digests have different jobs. `artifact_digest` is ordinary
+SHA-256 of the flat ELF and records build provenance. `code_commitment` is the
+canonical ordered chunk commitment over the entire Loader payload after byte
+45, including admitted zero padding. `ArtifactReleaseV2` carries only that
+runtime commitment at offset 144. Registry finalization recomputes it once from
+native Loader bytes; activation and later reauthentication check Loader
+continuity without repeating the full traversal.
 
 The ELF validator requires ELF64, little-endian, current ELF version, shared
 object type, and one of the two machine identifiers accepted by Solana's sBPF
@@ -75,7 +85,7 @@ It exists because `Option<Pubkey>` cannot express "immutable, formerly A", and
 that is the only state a real deployed-then-revoked program is in.
 
 `SemanticPreimageKindV1::Unowned` exists because no first-party contract decodes
-a role-program semantic release preimage, while `ArtifactReleaseV1` still
+a role-program semantic release preimage, while `ArtifactReleaseV2` still
 persists one per role. The alternatives were to mislabel those preimages
 `capability`—asserting a decoder that does not exist—or to mint a role-release
 DTO in host tooling, which would create a second semantic owner. Naming the

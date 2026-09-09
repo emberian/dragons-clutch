@@ -4,14 +4,14 @@ import { ascii, hex, requireNonzero, requireZero, sha256, slice, u16 } from './b
 import {
   ACTIVATION_CACHE_BYTES,
   ARTIFACT_RELEASE_BYTES,
-  ARTIFACT_RELEASE_SCHEMA_ID_V1,
+  ARTIFACT_RELEASE_SCHEMA_ID_V2,
   CHECKED_MULTIPROGRAM_BYTES,
   REGISTRY_ROLES,
   RENT_SYSVAR_ID,
   SYSTEM_PROGRAM_ID,
   SYSVAR_OWNER_ID,
   authenticateArtifactDeploymentV1,
-  decodeArtifactReleaseV1,
+  decodeArtifactReleaseV2,
   decodeExecutionReleaseSetV1,
   deriveFinalizedRecordAddressesV1,
   REGISTRY_ACTIVATION_CACHE_BUMP_OFFSET_V1,
@@ -19,7 +19,7 @@ import {
   REGISTRY_ACTIVATION_CACHE_RESERVED_OFFSET_V1,
   REGISTRY_ACTIVATION_PDA_SEED_V1,
   requireSlotPinnedReleaseV1,
-  type ArtifactReleaseV1,
+  type ArtifactReleaseV2,
   type CheckedMultiprogramV1,
   type ExecutionReleaseSetV1,
   type RegistryRole,
@@ -111,9 +111,9 @@ export type CheckedInfrastructureV1 = Readonly<{
   execution: CheckedMultiprogramV1;
   profile: ProtocolInfrastructureProfileV2;
   profilePda: string;
-  registryArtifact: ArtifactReleaseV1;
+  registryArtifact: ArtifactReleaseV2;
   registryCheckedReleaseId: string;
-  rentArtifact: ArtifactReleaseV1;
+  rentArtifact: ArtifactReleaseV2;
   rentCheckedReleaseId: string;
 }>;
 
@@ -126,7 +126,7 @@ export type InfrastructureComponentEvidenceV1 = Readonly<{
   programData: string;
   artifactReleaseId: string;
   semanticReleaseId: string;
-  elfDigest: string;
+  codeCommitment: string;
   deploymentSlot: string;
 }>;
 
@@ -151,7 +151,7 @@ type InfrastructureRpc = Pick<
 export type ActivatedProjectionV1 = Readonly<{
   releaseSetId: string;
   releaseSet: ExecutionReleaseSetV1;
-  artifacts: Readonly<Record<RegistryRole, ArtifactReleaseV1>>;
+  artifacts: Readonly<Record<RegistryRole, ArtifactReleaseV2>>;
   artifactIds: Readonly<Record<RegistryRole, string>>;
 }>;
 
@@ -196,7 +196,7 @@ function required(accounts: ReadonlyMap<string, RpcAccount | null>, address: str
  * exact authority the release bound, and a moved slot is named
  * `ReleaseSupersededByUpgrade` in the protocol's own registered words.
  */
-function slotPinned(artifact: ArtifactReleaseV1, field: string): void {
+function slotPinned(artifact: ArtifactReleaseV2, field: string): void {
   requireSlotPinnedReleaseV1(artifact, `the ${field} ArtifactRelease`);
 }
 
@@ -285,7 +285,7 @@ export function decodeProtocolInfrastructureProfileV2(bytes: Uint8Array): Protoc
   });
 }
 
-function releaseSetBytes(artifacts: Readonly<Record<RegistryRole, ArtifactReleaseV1>>, artifactIds: Readonly<Record<RegistryRole, string>>): Uint8Array {
+function releaseSetBytes(artifacts: Readonly<Record<RegistryRole, ArtifactReleaseV2>>, artifactIds: Readonly<Record<RegistryRole, string>>): Uint8Array {
   const output = new Uint8Array(336);
   output.set(new TextEncoder().encode(EXECUTION_RELEASE_SET_MAGIC_V1));
   const view = new DataView(output.buffer);
@@ -320,13 +320,13 @@ export async function decodeActivationCacheV1(bytes: Uint8Array, registryProgram
   if (carriedBump !== 0 && carriedBump !== derivedBump) {
     throw new Error('activation cache carries a bump that does not derive its own address');
   }
-  const artifacts: ArtifactReleaseV1[] = [];
+  const artifacts: ArtifactReleaseV2[] = [];
   const artifactIds: string[] = [];
   for (let index = 0; index < REGISTRY_ROLES.length; index += 1) {
     const offset = 48 + index * (32 + ARTIFACT_RELEASE_BYTES);
     const artifactId = slice(bytes, offset, 32);
     requireNonzero(artifactId, `${REGISTRY_ROLES[index]} cached artifact release`);
-    const artifact = decodeArtifactReleaseV1(slice(bytes, offset + 32, ARTIFACT_RELEASE_BYTES));
+    const artifact = decodeArtifactReleaseV2(slice(bytes, offset + 32, ARTIFACT_RELEASE_BYTES));
     if (hex(await sha256(artifact.bytes)) !== hex(artifactId)) throw new Error(`${REGISTRY_ROLES[index]} cached artifact bytes do not hash to their identity`);
     artifacts.push(artifact);
     artifactIds.push(hex(artifactId));
@@ -350,12 +350,12 @@ async function decodeEmbeddedCheckedMultiprogramV1(bytes: Uint8Array): Promise<C
   }
   requireZero(bytes, 12, 4, 'checked multiprogram header');
   const releaseSet = await decodeExecutionReleaseSetV1(slice(bytes, 16, 336));
-  const artifacts: ArtifactReleaseV1[] = [];
+  const artifacts: ArtifactReleaseV2[] = [];
   const checkedReleaseIds: string[] = [];
   for (let index = 0; index < REGISTRY_ROLES.length; index += 1) {
     const role = REGISTRY_ROLES[index];
     const offset = 352 + index * (ARTIFACT_RELEASE_BYTES + 32);
-    const artifact = decodeArtifactReleaseV1(slice(bytes, offset, ARTIFACT_RELEASE_BYTES));
+    const artifact = decodeArtifactReleaseV2(slice(bytes, offset, ARTIFACT_RELEASE_BYTES));
     const artifactId = hex(await sha256(artifact.bytes));
     const checkedReleaseId = slice(bytes, offset + ARTIFACT_RELEASE_BYTES, 32);
     requireNonzero(checkedReleaseId, `${role} checked release identity`);
@@ -386,9 +386,9 @@ export async function decodeCheckedInfrastructureV1(bytes: Uint8Array): Promise<
     PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2,
   ));
   const profilePda = new PublicKey(slice(bytes, CHECKED_INFRASTRUCTURE_PROFILE_PDA_OFFSET, 32)).toBase58();
-  const registryArtifact = decodeArtifactReleaseV1(slice(bytes, CHECKED_INFRASTRUCTURE_REGISTRY_OFFSET, ARTIFACT_RELEASE_BYTES));
+  const registryArtifact = decodeArtifactReleaseV2(slice(bytes, CHECKED_INFRASTRUCTURE_REGISTRY_OFFSET, ARTIFACT_RELEASE_BYTES));
   const registryChecked = slice(bytes, CHECKED_INFRASTRUCTURE_REGISTRY_OFFSET + ARTIFACT_RELEASE_BYTES, 32);
-  const rentArtifact = decodeArtifactReleaseV1(slice(bytes, CHECKED_INFRASTRUCTURE_RENT_OFFSET, ARTIFACT_RELEASE_BYTES));
+  const rentArtifact = decodeArtifactReleaseV2(slice(bytes, CHECKED_INFRASTRUCTURE_RENT_OFFSET, ARTIFACT_RELEASE_BYTES));
   const rentChecked = slice(bytes, CHECKED_INFRASTRUCTURE_RENT_OFFSET + ARTIFACT_RELEASE_BYTES, 32);
   requireNonzero(registryChecked, 'Registry checked release identity');
   requireNonzero(rentChecked, 'Rent checked release identity');
@@ -446,13 +446,13 @@ function vacantStaging(account: RpcAccount | null | undefined, field: string): v
   }
 }
 
-function component(artifactReleaseId: string, artifact: ArtifactReleaseV1): InfrastructureComponentEvidenceV1 {
+function component(artifactReleaseId: string, artifact: ArtifactReleaseV2): InfrastructureComponentEvidenceV1 {
   return Object.freeze({
     program: artifact.program,
     programData: artifact.programData,
     artifactReleaseId,
     semanticReleaseId: artifact.semanticReleaseId,
-    elfDigest: artifact.elfDigest,
+    codeCommitment: artifact.codeCommitment,
     deploymentSlot: artifact.deploymentSlot.toString(),
   });
 }
@@ -462,8 +462,8 @@ function manifestMatches(
   profile: ProtocolInfrastructureProfileV2,
   profilePda: string,
   activated: ActivatedProjectionV1,
-  registryArtifact: ArtifactReleaseV1,
-  rentArtifact: ArtifactReleaseV1,
+  registryArtifact: ArtifactReleaseV2,
+  rentArtifact: ArtifactReleaseV2,
 ): boolean {
   if (
     !same(manifest.profile.bytes, profile.bytes)
@@ -513,12 +513,12 @@ export async function inspectProtocolInfrastructureV1(
 
   const registryRecordAddresses = deriveFinalizedRecordAddressesV1(
     input.registryProgram,
-    ARTIFACT_RELEASE_SCHEMA_ID_V1,
+    ARTIFACT_RELEASE_SCHEMA_ID_V2,
     hexBytes(profile.registry.artifactReleaseId, 'Registry artifact release'),
   );
   const rentRecordAddresses = deriveFinalizedRecordAddressesV1(
     input.registryProgram,
-    ARTIFACT_RELEASE_SCHEMA_ID_V1,
+    ARTIFACT_RELEASE_SCHEMA_ID_V2,
     hexBytes(profile.rent.artifactReleaseId, 'Rent artifact release'),
   );
   const recordObservation = await client.multipleAccounts(
@@ -528,8 +528,8 @@ export async function inspectProtocolInfrastructureV1(
   const recordAccounts = accountMap(recordObservation);
   const registryArtifactAccount = required(recordAccounts, registryRecordAddresses.record, 'Registry artifact');
   const rentArtifactAccount = required(recordAccounts, rentRecordAddresses.record, 'Rent artifact');
-  const registryArtifact = decodeArtifactReleaseV1(registryArtifactAccount.data);
-  const rentArtifact = decodeArtifactReleaseV1(rentArtifactAccount.data);
+  const registryArtifact = decodeArtifactReleaseV2(registryArtifactAccount.data);
+  const rentArtifact = decodeArtifactReleaseV2(rentArtifactAccount.data);
   slotPinned(registryArtifact, 'Registry');
   slotPinned(rentArtifact, 'Rent');
   if (

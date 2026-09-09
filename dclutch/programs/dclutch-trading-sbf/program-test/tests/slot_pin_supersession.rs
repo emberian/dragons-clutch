@@ -1,6 +1,6 @@
 //! Decision 0012's `ExactAuthority` arm, on a real chain, both ways.
 //!
-//! `slot_pinned_release_elf_digest_v1` has two arms. The `Immutable` one is
+//! `slot_pinned_release_code_commitment_v2` has two arms. The `Immutable` one is
 //! delegated unchanged to the pre-0012 function and is what every other
 //! real-ELF case in this directory has ever executed: `waist::release` built
 //! every release `Immutable` and the staged ProgramData wrote the authority
@@ -174,7 +174,7 @@ async fn assert_slot_pinned_substrate(
 /// for a PDA seeded by it. This is the confound, named and measured.
 ///
 /// The upgrade policy byte, the bound authority and the bound slot all live
-/// inside `ArtifactReleaseV1::to_bytes`, so `artifact_id = hash(release)` moves,
+/// inside `ArtifactReleaseV2::to_bytes`, so `artifact_id = hash(release)` moves,
 /// so the release-set identity moves. That identity is a SEED at two on-chain
 /// `find_program_address` sites the Direct Hot route reaches:
 ///

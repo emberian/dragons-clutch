@@ -3,7 +3,7 @@ use dclutch_registry::release_set::{
     ExecutionRoleBindingV1, ExecutionRoleV1, ProgramIdentityV1,
 };
 use dclutch_registry::{
-    ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1,
+    ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_SCHEMA_ID_V2, ArtifactReleaseV2,
     ArtifactUpgradePolicyV1,
 };
 use solana_program::{hash::hash, pubkey::Pubkey, rent::Rent, sysvar::SysvarSerialize};
@@ -110,12 +110,13 @@ impl Fixture {
         let programdata =
             Pubkey::find_program_address(&[registry.as_ref()], &bpf_loader_upgradeable::ID).0;
         let elf = vec![0xa5; 96];
-        let release = ArtifactReleaseV1::new(
+        let release = ArtifactReleaseV2::new(
             ProgramIdentityV1::new(registry.to_bytes()).expect("program"),
             ProgramIdentityV1::new(bpf_loader_upgradeable::ID.to_bytes()).expect("loader"),
             programdata.to_bytes(),
             dclutch_core_contract::ContentId::new(bytes(9)).expect("semantic release"),
-            hash(&elf).to_bytes(),
+            dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(&elf)
+                .expect("code commitment"),
             77,
             ArtifactUpgradePolicyV1::Immutable,
             None,
@@ -123,7 +124,7 @@ impl Fixture {
         .expect("release");
         let (artifact_release, artifact_digest) = finalized_record(
             registry,
-            ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            ARTIFACT_RELEASE_SCHEMA_ID_V2,
             release.to_bytes().to_vec(),
             &rent,
         );
@@ -239,7 +240,7 @@ fn activation_derives_exact_per_role_frames_cache_rent_and_packet_geometry() {
             .minimum_balance(ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1)
     );
     // The walk-up total is five ELFs; each *transaction* hashes exactly one.
-    assert_eq!(report.compute.elf_bytes_hashed, 5 * 96);
+    assert_eq!(report.compute.elf_bytes_authenticated, 5 * 96);
     assert_eq!(report.compute.matching_measured_compute_units, None);
 
     for plan in &report.roles {
@@ -247,7 +248,7 @@ fn activation_derives_exact_per_role_frames_cache_rent_and_packet_geometry() {
             plan.instruction.accounts.len(),
             REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1
         );
-        assert_eq!(plan.compute.elf_bytes_hashed, 96);
+        assert_eq!(plan.compute.elf_bytes_authenticated, 96);
         assert!(!plan.already_activated);
         assert!(plan.instruction.accounts.first().expect("payer").is_signer);
         assert!(plan.instruction.accounts.get(1).expect("cache").is_writable);
@@ -388,7 +389,9 @@ fn activation_refuses_stale_loader_substitution_and_record_owner() {
     }
     assert_eq!(
         build_registry_activation_v1(substituted.registry, &substituted.state),
-        Err(Error::Registry(dclutch_registry::Error::ElfDigestMismatch))
+        Err(Error::Registry(
+            dclutch_registry::Error::CodeCommitmentMismatch
+        ))
     );
 
     let mut changed_upgrade_policy = Fixture::new();
@@ -458,7 +461,7 @@ fn reauthentication_derives_three_readonly_accounts_and_rechecks_deployment() {
             .iter()
             .all(|meta| !meta.is_signer && !meta.is_writable)
     );
-    assert_eq!(report.compute.elf_bytes_hashed, 96);
+    assert_eq!(report.compute.elf_bytes_authenticated, 96);
     let packet = compile_registry_reauthentication_packet_v0(
         &report,
         Pubkey::new_from_array(bytes(91)),

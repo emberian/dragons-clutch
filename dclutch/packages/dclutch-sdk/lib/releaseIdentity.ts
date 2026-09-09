@@ -16,7 +16,7 @@
  *
  * None of that archaeology was ever necessary. The chain SAYS which release is
  * live. The Registry owns an activation cache (`DCLTACT1`) whose body is an
- * exact projection of the five finalized `ArtifactReleaseV1` records that were
+ * exact projection of the five finalized `ArtifactReleaseV2` records that were
  * activated, and each of those records carries a `semantic_release_id`. Clients
  * simply never asked.
  *
@@ -73,13 +73,13 @@ const PROGRAMDATA_HEADER_BYTES = 45;
 
 /** One activated role's identity, exactly as the Registry cache states it. */
 export type ExecutionRoleIdentityV1 = Readonly<{
-  /** Content id of the finalized `ArtifactReleaseV1` record. */
+  /** Content id of the finalized `ArtifactReleaseV2` record. */
   artifactReleaseId: string;
   /** The role's SOURCE-derived semantic identity — the ABI selection key. */
   semanticReleaseId: string;
   program: string;
   programData: string;
-  elfDigest: string;
+  codeCommitment: string;
   /** Deployment slot the activation PINNED. State, not identity. */
   deploymentSlot: string;
 }>;
@@ -221,7 +221,7 @@ export const DEVNET_COHORT_15_ABI_RELEASE_V1: AbiReleaseTableV1 = Object.freeze(
 });
 
 /**
- * The release identity public devnet is running now.
+ * Historical ABI observation for devnet cohort-16, which used ArtifactRelease V1.
  *
  * OBSERVED, by the same call this module exports. The five ids were decoded
  * from the live Registry activation cache
@@ -317,7 +317,7 @@ function identityFromProjection(
       semanticReleaseId: release.semanticReleaseId,
       program: release.program,
       programData: release.programData,
-      elfDigest: release.elfDigest,
+      codeCommitment: release.codeCommitment,
       deploymentSlot: release.deploymentSlot.toString(),
     })];
   })) as Record<RegistryRole, ExecutionRoleIdentityV1>;
@@ -362,7 +362,7 @@ async function readDeploymentSlotsV1(
  * cohorts stale, and it had passed an existence-owner-magic audit that morning.
  *
  * The activation pins each role's deployment slot, and
- * `ArtifactReleaseV1::authenticate_deployment` re-checks it on chain, so a
+ * `ArtifactReleaseV2::authenticate_deployment` re-checks it on chain, so a
  * stale cache is not merely wrong metadata: every route that re-authenticates
  * a role against it MUST refuse. This turns that refusal into a named answer.
  */

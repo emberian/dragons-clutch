@@ -122,7 +122,7 @@ impl ArtifactWriter {
 /// forget an upgrade it had already refused, and until this it had no caller:
 /// a restarted daemon began with an empty map, read the upgraded
 /// `deployment_slot` as the first one it had ever seen, and attested a program
-/// whose pinned `elf_digest` it had already refused. This is the value that
+/// whose pinned code commitment it had already refused. This is the value that
 /// closes it, and it is read back out of the daemon's own published artifact
 /// rather than a new state file, because the artifact already carries it: the
 /// manifest records each position's exact inline `ProgramData` prefix, and the
@@ -254,6 +254,14 @@ pub fn build_manifest(cycle: &ObservationCycle) -> serde_json::Value {
         .positions
         .iter()
         .map(|position| {
+            let tail_authenticator_scheme = if crate::chain::is_loader_v3_programdata(
+                &position.owner,
+                u16::try_from(position.inline.len()).unwrap_or(u16::MAX),
+            ) {
+                "code-commitment-v2"
+            } else {
+                "sha256"
+            };
             let (pages, tail_bytes, cached_slot) = match position.tail_digest_source {
                 TailDigestSource::FullyInline => (0u32, 0u64, None),
                 TailDigestSource::Paged { pages, bytes } => (pages, bytes, None),
@@ -270,6 +278,7 @@ pub fn build_manifest(cycle: &ObservationCycle) -> serde_json::Value {
                 "executable": position.executable,
                 "inline_hex": to_hex(&position.inline),
                 "tail_digest_hex": to_hex(&position.tail_digest),
+                "tail_authenticator_scheme": tail_authenticator_scheme,
                 "tail_digest_source": position.tail_digest_source.as_str(),
                 "tail_pages_read": pages,
                 "tail_bytes_hashed": tail_bytes,
@@ -419,6 +428,10 @@ mod tests {
         assert_eq!(
             manifest["positions"][0]["tail_digest_source"],
             "fully-inline"
+        );
+        assert_eq!(
+            manifest["positions"][0]["tail_authenticator_scheme"],
+            "sha256"
         );
         assert_eq!(manifest["positions"][0]["message_len"], 272);
     }

@@ -16,8 +16,8 @@ use dclutch_registry::release_set::{
 use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
-    ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1,
-    ArtifactUpgradePolicyV1, DeploymentObservationV1, require_slot_pinned_release_v1,
+    ARTIFACT_RELEASE_SCHEMA_ID_V2, ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV2,
+    ArtifactUpgradePolicyV1, DeploymentObservationV2, require_slot_pinned_release_v1,
 };
 use dclutch_release_tool::CheckedInfrastructureV1;
 use solana_program::{hash::hash, pubkey::Pubkey};
@@ -36,13 +36,13 @@ pub struct ProtocolInfrastructureStateV1 {
     pub core_program: ObservedAccount,
     /// Current Core ProgramData account and complete ELF tail.
     pub core_programdata: ObservedAccount,
-    /// Finalized exact Registry `ArtifactReleaseV1` raw/staging pair.
+    /// Finalized exact Registry `ArtifactReleaseV2` raw/staging pair.
     pub registry_artifact: RegistryFinalizedRecordState,
     /// Current executable Registry Program account.
     pub registry_program: ObservedAccount,
     /// Current Registry ProgramData account and complete ELF tail.
     pub registry_programdata: ObservedAccount,
-    /// Finalized exact Rent `ArtifactReleaseV1` raw/staging pair.
+    /// Finalized exact Rent `ArtifactReleaseV2` raw/staging pair.
     pub rent_artifact: RegistryFinalizedRecordState,
     /// Current executable Rent Program account.
     pub rent_program: ObservedAccount,
@@ -76,8 +76,8 @@ pub struct InfrastructureComponentEvidenceV1 {
     pub artifact_release_id: ArtifactReleaseIdV1,
     /// Semantic release implemented by the exact artifact.
     pub semantic_release_id: ContentId,
-    /// SHA-256 of the complete current ProgramData ELF tail.
-    pub elf_digest: [u8; 32],
+    /// Canonical V2 commitment to the complete current ProgramData ELF tail.
+    pub code_commitment: [u8; 32],
     /// Exact current Loader V3 deployment slot.
     pub deployment_slot: u64,
 }
@@ -370,9 +370,9 @@ fn authenticate_artifact_component(
     program: &ObservedAccount,
     programdata: &ObservedAccount,
     class: SubstrateClassV1,
-) -> Result<(ArtifactReleaseV1, InfrastructureComponentEvidenceV1), InfrastructureInspectionErrorV1>
+) -> Result<(ArtifactReleaseV2, InfrastructureComponentEvidenceV1), InfrastructureInspectionErrorV1>
 {
-    let release = ArtifactReleaseV1::decode(&record.record.data)
+    let release = ArtifactReleaseV2::decode(&record.record.data)
         .map_err(InfrastructureInspectionErrorV1::Registry)?;
     let digest = hash(&record.record.data).to_bytes();
     let artifact_release_id =
@@ -386,7 +386,7 @@ fn authenticate_artifact_component(
     let expected_raw = Pubkey::find_program_address(
         &[
             RAW_RECORD_PDA_SEED_V1,
-            &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            &ARTIFACT_RELEASE_SCHEMA_ID_V2,
             &digest,
         ],
         &registry_program,
@@ -395,7 +395,7 @@ fn authenticate_artifact_component(
     let expected_staging = Pubkey::find_program_address(
         &[
             STAGING_CURSOR_PDA_SEED_V1,
-            &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            &ARTIFACT_RELEASE_SCHEMA_ID_V2,
             &digest,
         ],
         &registry_program,
@@ -417,7 +417,7 @@ fn authenticate_artifact_component(
 
 fn authenticate_deployment(
     artifact_release_id: ArtifactReleaseIdV1,
-    release: ArtifactReleaseV1,
+    release: ArtifactReleaseV2,
     program: &ObservedAccount,
     programdata: &ObservedAccount,
 ) -> Result<InfrastructureComponentEvidenceV1, InfrastructureInspectionErrorV1> {
@@ -440,7 +440,7 @@ fn authenticate_deployment(
     if program_view.programdata() != programdata.key.to_bytes() || programdata.key != derived {
         return Err(InfrastructureInspectionErrorV1::InvalidDeployment);
     }
-    let deployment = DeploymentObservationV1::new(
+    let deployment = DeploymentObservationV2::new(
         program.key.to_bytes(),
         program.owner.to_bytes(),
         program.executable,
@@ -450,7 +450,8 @@ fn authenticate_deployment(
         program_view.programdata(),
         bpf_loader_upgradeable::ID.to_bytes(),
         programdata_view.deployment_slot(),
-        hash(programdata_view.elf()).to_bytes(),
+        dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(programdata_view.elf())
+            .map_err(|_| InfrastructureInspectionErrorV1::InvalidDeployment)?,
         programdata_view.upgrade_authority(),
     )
     .map_err(InfrastructureInspectionErrorV1::Registry)?;
@@ -462,7 +463,7 @@ fn authenticate_deployment(
         programdata: programdata.key,
         artifact_release_id,
         semantic_release_id: release.semantic_release_id(),
-        elf_digest: release.elf_digest(),
+        code_commitment: release.code_commitment(),
         deployment_slot: release.deployment_slot(),
     })
 }
@@ -473,7 +474,7 @@ fn authenticate_deployment(
 /// gets. The slot-pinned class defers to the protocol's own admission predicate
 /// so the host and the chain can never disagree about which releases exist.
 fn require_admissible_release(
-    release: ArtifactReleaseV1,
+    release: ArtifactReleaseV2,
     class: SubstrateClassV1,
 ) -> Result<(), InfrastructureInspectionErrorV1> {
     match class {
@@ -495,8 +496,8 @@ fn recognize_checked_manifest(
     state: &ProtocolInfrastructureStateV1,
     profile: ProtocolInfrastructureProfileV2,
     activated: &ActivatedExecutionReleaseSetViewV1<'_>,
-    registry_release: ArtifactReleaseV1,
-    rent_release: ArtifactReleaseV1,
+    registry_release: ArtifactReleaseV2,
+    rent_release: ArtifactReleaseV2,
 ) -> Result<InfrastructureRecognitionV1, InfrastructureInspectionErrorV1> {
     let Some(bytes) = checked_manifest else {
         return Ok(InfrastructureRecognitionV1::InternallyConsistentUnrecognized);
@@ -626,8 +627,8 @@ fn render_component(output: &mut String, label: &str, evidence: InfrastructureCo
     );
     push_line(
         output,
-        &format!("{label}_elf_sha256"),
-        &encode_hex(&evidence.elf_digest),
+        &format!("{label}_code_commitment_v2"),
+        &encode_hex(&evidence.code_commitment),
     );
     push_line(
         output,
@@ -662,12 +663,12 @@ mod tests {
     /// cannot end up trusting a mutable substrate without a call site saying so.
     #[test]
     fn the_mutable_substrate_is_admitted_only_under_the_named_class() {
-        use dclutch_registry::ArtifactReleaseV1;
+        use dclutch_registry::ArtifactReleaseV2;
         use dclutch_registry::release_set::ProgramIdentityV1;
 
         let identity = |fill: u8| ProgramIdentityV1::decode(&[fill; 32]).expect("identity");
         let build = |policy, authority| {
-            ArtifactReleaseV1::new(
+            ArtifactReleaseV2::new(
                 identity(1),
                 identity(2),
                 [3; 32],
@@ -702,7 +703,7 @@ mod tests {
         activate_execution_release_set_v1,
     };
     use dclutch_release_tool::{
-        BuildMetadataV1, CheckedReleaseV1, LOADER_V3_PROGRAMDATA_METADATA_BYTES,
+        BuildMetadataV1, CheckedReleaseV2, LOADER_V3_PROGRAMDATA_METADATA_BYTES,
         RELEASE_METADATA_HEADER_V1, ReleaseEvidenceV1, artifact_release_from_checked,
         build_checked_execution_release_set, build_checked_infrastructure_v1,
         build_checked_release,
@@ -744,8 +745,8 @@ mod tests {
     }
 
     struct ReleaseFixture {
-        checked: CheckedReleaseV1,
-        artifact: ArtifactReleaseV1,
+        checked: CheckedReleaseV2,
+        artifact: ArtifactReleaseV2,
         program: ObservedAccount,
         programdata: ObservedAccount,
     }
@@ -809,7 +810,7 @@ mod tests {
             ArtifactActivationInputV1::new(
                 self.binding().artifact_release(),
                 self.artifact,
-                DeploymentObservationV1::new(
+                DeploymentObservationV2::new(
                     self.program.key.to_bytes(),
                     self.program.owner.to_bytes(),
                     self.program.executable,
@@ -819,7 +820,10 @@ mod tests {
                     self.programdata.key.to_bytes(),
                     bpf_loader_upgradeable::ID.to_bytes(),
                     programdata.deployment_slot(),
-                    hash(programdata.elf()).to_bytes(),
+                    dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(
+                        programdata.elf(),
+                    )
+                    .expect("fixture code commitment"),
                     programdata.upgrade_authority(),
                 )
                 .expect("deployment"),
@@ -1002,7 +1006,7 @@ mod tests {
         let raw = Pubkey::find_program_address(
             &[
                 RAW_RECORD_PDA_SEED_V1,
-                &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+                &ARTIFACT_RELEASE_SCHEMA_ID_V2,
                 &digest,
             ],
             &registry,
@@ -1011,7 +1015,7 @@ mod tests {
         let staging = Pubkey::find_program_address(
             &[
                 STAGING_CURSOR_PDA_SEED_V1,
-                &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+                &ARTIFACT_RELEASE_SCHEMA_ID_V2,
                 &digest,
             ],
             &registry,

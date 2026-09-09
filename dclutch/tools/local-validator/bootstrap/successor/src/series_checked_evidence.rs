@@ -8,9 +8,9 @@ use std::{
 use dclutch_core_contract::ContentId;
 use dclutch_market::execution_strategy::v2::ExecutionStrategyCertificateV2;
 use dclutch_registry::release_set::ArtifactReleaseIdV1;
-use dclutch_registry::{ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1};
+use dclutch_registry::{ARTIFACT_RELEASE_SCHEMA_ID_V2, ArtifactReleaseV2};
 use dclutch_release_tool::{
-    CheckedReleaseV1, CheckedSeriesTranslationV1, artifact_release_from_checked,
+    CheckedReleaseV2, CheckedSeriesTranslationV1, artifact_release_from_checked,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -39,7 +39,7 @@ pub(crate) struct SeriesShadowEvidenceFilesV1 {
 /// Checked accelerator and evidence material handed to the preselection owner.
 pub(crate) struct CheckedSeriesShadowEvidenceV1 {
     pub(crate) accelerator_semantic_release: ContentId,
-    pub(crate) accelerator_artifact: ArtifactReleaseV1,
+    pub(crate) accelerator_artifact: ArtifactReleaseV2,
     pub(crate) accelerator_record: RecordPair,
     pub(crate) checked_manifest_path: PathBuf,
     pub(crate) checked_manifest_sha256: String,
@@ -69,7 +69,7 @@ pub(crate) struct CheckedSelectedSeriesAcceleratorBuildV1 {
     pub(crate) checked_manifest_path: PathBuf,
     pub(crate) checked_manifest_sha256: String,
     pub(crate) artifact_sha256: String,
-    pub(crate) artifact_release: ArtifactReleaseV1,
+    pub(crate) artifact_release: ArtifactReleaseV2,
     pub(crate) artifact_release_id: ArtifactReleaseIdV1,
 }
 
@@ -99,7 +99,7 @@ pub(crate) fn authenticate_checked_series_shadow_evidence_v1(
         "accelerator",
         Path::new(&pin.checked_candidate_elf_path),
     )?;
-    let checked = CheckedReleaseV1::decode(&gate.checked_build_manifest)
+    let checked = CheckedReleaseV2::decode(&gate.checked_build_manifest)
         .map_err(|error| Error::new(format!("Series accelerator checked manifest: {error:?}")))?;
     if crate::plan::hex(&checked.artifact_digest()) != gate.raw_elf_sha256 {
         return Err(Error::new(
@@ -121,7 +121,7 @@ pub(crate) fn authenticate_checked_series_shadow_evidence_v1(
             )
         })?
         .clone();
-    if record.schema_id != crate::plan::hex(&ARTIFACT_RELEASE_SCHEMA_ID_V1)
+    if record.schema_id != crate::plan::hex(&ARTIFACT_RELEASE_SCHEMA_ID_V2)
         || record.raw.is_empty()
         || record.staging.is_empty()
     {
@@ -135,7 +135,7 @@ pub(crate) fn authenticate_checked_series_shadow_evidence_v1(
             "Series accelerator ArtifactRelease body hash differs from its record pair",
         ));
     }
-    let artifact = ArtifactReleaseV1::decode(&body)
+    let artifact = ArtifactReleaseV2::decode(&body)
         .map_err(|error| Error::new(format!("Series accelerator ArtifactRelease: {error:?}")))?;
     let artifact_id = ArtifactReleaseIdV1::new(Sha256::digest(&body).into())
         .map_err(|_| Error::new("Series accelerator ArtifactRelease identity is zero"))?;
@@ -251,7 +251,7 @@ pub(crate) fn authenticate_selected_series_accelerator_build_v1(
         "selected Series accelerator ELF",
         MAX_SELECTED_ELF_BYTES,
     )?;
-    let selected = CheckedReleaseV1::decode(&manifest)
+    let selected = CheckedReleaseV2::decode(&manifest)
         .map_err(|error| Error::new(format!("selected Series checked manifest: {error:?}")))?;
     let baseline = read_regular(
         &evidence.checked_manifest_path,
@@ -262,7 +262,7 @@ pub(crate) fn authenticate_selected_series_accelerator_build_v1(
             "baseline Series checked manifest changed after authentication",
         ));
     }
-    let baseline = CheckedReleaseV1::decode(&baseline)
+    let baseline = CheckedReleaseV2::decode(&baseline)
         .map_err(|error| Error::new(format!("baseline Series checked manifest: {error:?}")))?;
     authenticate_series_selected_source_v1(
         &evidence.compiler_manifest,

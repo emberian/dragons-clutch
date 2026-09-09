@@ -4,7 +4,7 @@ use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ProgramIdentityV1,
 };
 use dclutch_registry::{
-    ACTIVATION_PDA_DOMAIN_V1, ArtifactActivationInputV1, ArtifactReleaseV1,
+    ACTIVATION_PDA_DOMAIN_V1, ArtifactActivationInputV1, ArtifactReleaseV2,
     ArtifactUpgradePolicyV1, ExecutionReleaseActivationInputsV1, activate_execution_release_set_v1,
 };
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
@@ -66,7 +66,7 @@ fn immutable_programdata_bytes(slot: u64, elf: &[u8]) -> Vec<u8> {
 
 #[derive(Clone)]
 struct RoleFixture {
-    release: ArtifactReleaseV1,
+    release: ArtifactReleaseV2,
     artifact: ArtifactReleaseIdV1,
     program: ObservedAccount,
     programdata: ObservedAccount,
@@ -77,12 +77,13 @@ fn role(seed: u8, slot: u64) -> RoleFixture {
     let programdata =
         Pubkey::find_program_address(&[program.as_ref()], &bpf_loader_upgradeable::ID).0;
     let elf = vec![seed; 128];
-    let release = ArtifactReleaseV1::new(
+    let release = ArtifactReleaseV2::new(
         ProgramIdentityV1::new(program.to_bytes()).expect("program"),
         ProgramIdentityV1::new(bpf_loader_upgradeable::ID.to_bytes()).expect("loader"),
         programdata.to_bytes(),
         ContentId::new(bytes(seed + 20)).expect("semantic release"),
-        hash(&elf).to_bytes(),
+        dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(&elf)
+            .expect("code commitment"),
         slot,
         ArtifactUpgradePolicyV1::Immutable,
         None,
@@ -435,7 +436,7 @@ fn nonfinal_or_changed_current_deployment_refuses() {
         build_registry_open_market_continuation_v1(&changed, &fixture.instruction),
         Err(RegistryOpenMarketContinuationErrorV1::Registry(
             RegistryOpenMarketObservationErrorV1::Registry(
-                dclutch_registry::Error::ElfDigestMismatch
+                dclutch_registry::Error::CodeCommitmentMismatch
             )
         ))
     );

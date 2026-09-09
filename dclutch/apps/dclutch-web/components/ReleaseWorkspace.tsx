@@ -62,21 +62,21 @@ function ActivationResult({ plan }: Readonly<{ plan: RegistryActivationPlanV1 }>
       <div><dt>Activation cache</dt><dd>{plan.cache}</dd></div>
       <div><dt>Walk shape</dt><dd>{plan.packets.length} unsigned v0 packets · one role each · 10-account Registry frame</dd></div>
       <div><dt>Compute limit</dt><dd>{plan.computeUnitLimit.toLocaleString()} CU per transaction</dd></div>
-      <div><dt>Total ELF bytes hashed</dt><dd>{plan.totalElfBytesHashed.toLocaleString()} across the whole walk, never in one transaction</dd></div>
+      <div><dt>Code checked in your browser</dt><dd>{plan.totalCodeBytesVerifiedOffchain.toLocaleString()} bytes across all roles</dd></div>
       <div><dt>External signer</dt><dd>{plan.packets[0]?.requiredSigners.join(', ') ?? plan.payer}</dd></div>
     </dl>
-    <p className="direct-status">Whole-ELF hashing costs about one compute unit per two bytes, so a single five-role instruction exceeds the chain maximum. The Registry accepts exactly ten accounts and one named role, and refuses any other frame before reading a byte.</p>
+    <p className="direct-status">Registry verified the code when each release was finalized. Activation checks that its deployment slot and authority still match, one role per transaction. Your browser also checks the observed code against the release.</p>
     <div className="registered-state-grid release-role-grid">
       {plan.packets.map((packet) => <article className="registered-state-card" key={packet.role} data-testid={`activation-packet-${packet.role}`}>
         <span className="eyebrow">{packet.role} role · {packet.alreadyActivated ? 'already admitted' : 'not yet admitted'}</span><h3>{compact(packet.addresses.program)}</h3>
         <p>artifact {compact(plan.evidence.releaseSet.roles[packet.role].artifactReleaseId)} · semantic {compact(plan.evidence.artifacts[packet.role].semanticReleaseId)}</p>
         <p>ProgramData {compact(packet.addresses.programData)} · slot {plan.evidence.artifacts[packet.role].deploymentSlot.toString()}</p>
-        <p>{packet.wireBytes.length} / 1232 bytes · {packet.elfBytesHashed.toLocaleString()} ELF bytes hashed by this transaction</p>
+        <p>{packet.wireBytes.length} / 1232 bytes · {packet.codeBytesVerifiedOffchain.toLocaleString()} code bytes checked in your browser</p>
         <label><span>{packet.role} unsigned v0 transaction · base64</span><textarea readOnly value={base64(packet.wireBytes)} /></label>
       </article>)}
     </div>
     {plan.mode === 'complete'
-      ? <p className="direct-status">Every role is already admitted. Re-sending any packet is idempotent on chain and still pays that role&apos;s full ELF hash, so a cheapest walk-up sends none of them.</p>
+      ? <p className="direct-status">Every role is already admitted. No activation transactions remain. Re-sending a packet would still incur transaction fees.</p>
       : <p className="direct-status">Export the {plan.remainingRoles.length} packet{plan.remainingRoles.length === 1 ? '' : 's'} whose role is not yet admitted, in any order. Each is signed separately for an external submitter.</p>}
     <p className="direct-refusal"><strong>Building this plan did not sign or submit a packet.</strong> It did not deploy code or mutate an account. The finalized blockhash will expire.</p>
   </div>;
@@ -111,7 +111,7 @@ function InfrastructureResult({ report }: Readonly<{ report: ProtocolInfrastruct
         <span className="eyebrow">{role} · immutable</span><h3>{compact(report[role].program)}</h3>
         <p>artifact {compact(report[role].artifactReleaseId)} · semantic {compact(report[role].semanticReleaseId)}</p>
         <p>ProgramData {compact(report[role].programData)} · slot {report[role].deploymentSlot}</p>
-        <p>ELF {compact(report[role].elfDigest)}</p>
+        <p>Code commitment {compact(report[role].codeCommitment)}</p>
       </article>)}
     </div>
     <p className="direct-refusal"><strong>{recognized ? 'Recognized by the manifest supplied in this inspection.' : 'No checked manifest was supplied, so this chain is not recognized.'}</strong> Internal consistency is not an official-deployment claim.</p>
@@ -215,7 +215,7 @@ export default function ReleaseWorkspace() {
           {activation.packets.map((packet) => <article className="registered-state-card" key={packet.role}>
             <span className="eyebrow">{packet.role} · {packet.alreadyActivated ? 'already admitted' : 'not yet admitted'}</span>
             <h3>{signed[packet.role] === undefined ? `${packet.wireBytes.length} bytes unsigned` : `${signed[packet.role]?.wireBytes.length} bytes wallet-signed`}</h3>
-            <p>{packet.alreadyActivated ? 'Re-sending this is idempotent on chain and still pays its full ELF hash.' : `${packet.elfBytesHashed.toLocaleString()} ELF bytes hashed by this transaction.`}</p>
+            <p>{packet.alreadyActivated ? 'Already admitted. Re-sending is idempotent and still incurs transaction fees.' : `${packet.codeBytesVerifiedOffchain.toLocaleString()} code bytes checked in your browser.`}</p>
             <button type="button" disabled={!gate.open} onClick={() => void signRolePacket(packet.role)}>Sign {packet.role} as fee payer</button>
             <button type="button" onClick={() => downloadRolePacket(packet.role)}>Export {packet.role} packet</button>
           </article>)}

@@ -52,8 +52,8 @@ use dclutch_registry::release_set::ExecutionRoleV1;
 use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
-    ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1, DeploymentObservationV1,
-    require_slot_pinned_release_v1, slot_pinned_release_elf_digest_v1,
+    ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV2, DeploymentObservationV2,
+    require_slot_pinned_release_v1, slot_pinned_release_code_commitment_v2,
 };
 use dclutch_source::relay::SOLANA_DEVNET_GENESIS_HASH_V1;
 use dclutch_versioned_message_operator::compile_v0_message_with_optional_tables;
@@ -1658,8 +1658,8 @@ fn custody_deployment_observation_v1(
     program_account: &RpcAccount,
     programdata: Pubkey,
     programdata_account: &RpcAccount,
-    release: ArtifactReleaseV1,
-) -> Result<DeploymentObservationV1> {
+    release: ArtifactReleaseV2,
+) -> Result<DeploymentObservationV2> {
     require_slot_pinned_release_v1(release)
         .map_err(|error| Error::new(format!("Custody slot-pin release: {error:?}")))?;
     if release.loader_program().to_bytes() != bpf_loader_upgradeable::ID.to_bytes()
@@ -1687,13 +1687,13 @@ fn custody_deployment_observation_v1(
         .map_err(|error| Error::new(format!("Custody ProgramData: {error:?}")))?;
     let observed_slot = programdata_view.deployment_slot();
     let observed_authority = programdata_view.upgrade_authority();
-    let elf_digest = slot_pinned_release_elf_digest_v1(release, observed_authority, observed_slot)
+    let elf_digest = slot_pinned_release_code_commitment_v2(release, observed_authority, observed_slot)
         .map_err(|error| {
             Error::new(format!(
                 "Custody release was superseded or substituted: {error:?}"
             ))
         })?;
-    DeploymentObservationV1::new(
+    DeploymentObservationV2::new(
         program.to_bytes(),
         program_account.owner.to_bytes(),
         program_account.executable,
@@ -6748,12 +6748,12 @@ mod tests {
         let slot = 71;
         let authority = [0x61; 32];
         let elf = vec![0x52; 128];
-        let release = ArtifactReleaseV1::new(
+        let release = ArtifactReleaseV2::new(
             ProgramIdentityV1::new(program.to_bytes()).expect("Custody program"),
             ProgramIdentityV1::new(bpf_loader_upgradeable::ID.to_bytes()).expect("Loader"),
             programdata.to_bytes(),
             ContentId::new([0x53; 32]).expect("semantic release"),
-            hash(&elf).to_bytes(),
+            dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(&elf).expect("exact fixture code commitment"),
             slot,
             ArtifactUpgradePolicyV1::ExactAuthority,
             Some(authority),
@@ -6763,7 +6763,7 @@ mod tests {
         let binding = ExecutionRoleBindingV1::new(release.program(), artifact);
         let release_set = ExecutionReleaseSetV1::new(binding, binding, binding, binding, binding)
             .expect("release set");
-        let observation = DeploymentObservationV1::new(
+        let observation = DeploymentObservationV2::new(
             program.to_bytes(),
             bpf_loader_upgradeable::ID.to_bytes(),
             true,
@@ -6773,7 +6773,7 @@ mod tests {
             programdata.to_bytes(),
             bpf_loader_upgradeable::ID.to_bytes(),
             slot,
-            release.elf_digest(),
+            release.code_commitment(),
             Some(authority),
         )
         .expect("deployment observation");

@@ -13,7 +13,7 @@ use dclutch_registry::release_set::{
     CallerAuthoritySeedsV1, ExecutionRoleV1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2,
     ProtocolInfrastructureProfileV2,
 };
-use dclutch_registry::{ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1};
+use dclutch_registry::{ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_SCHEMA_ID_V2};
 use dclutch_source::pyth::{PostUpdateParamsView, PythReleaseV1, VerifiedEncodedVaaV1};
 use dclutch_source::resolution::{
     EnsembleFragmentSeatSeedsV1, PROVIDER_RESOLUTION_CORE_ACCOUNT_COUNT_V3,
@@ -247,7 +247,7 @@ pub fn derive_provider_submit_material_coordinates_v3(
     );
     let registry_artifact = record_pair(
         registry,
-        ARTIFACT_RELEASE_SCHEMA_ID_V1,
+        ARTIFACT_RELEASE_SCHEMA_ID_V2,
         profile.registry().artifact_release().to_bytes(),
     );
     Ok(ProviderSubmitMaterialCoordinatesV3 {

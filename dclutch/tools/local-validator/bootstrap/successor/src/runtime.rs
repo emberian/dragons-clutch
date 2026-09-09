@@ -27,22 +27,22 @@ use dclutch_product_runtime_v2_operator::{
     },
 };
 use dclutch_registry::record::{AbortRecordV1, RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry::{
-    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
-    ActivatedExecutionReleaseSetV1, ActivationCacheProgressV1, ArtifactActivationInputV1,
-    ArtifactReleaseV1, DeploymentObservationV1, ExecutionReleaseActivationInputsV1,
-    activate_execution_release_set_v1, activation_cache_progress_v1,
-};
-use dclutch_registry::svm::{
-    LOADER_V3_PROGRAMDATA_METADATA_BYTES, ProgramDataMetadataV3View,
-    REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1, RegistryInstructionV1,
-};
 use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleV1,
     InitializeProtocolInfrastructureV1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1,
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V1,
     PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V2, ProtocolInfrastructureProfileV1,
     ProtocolInfrastructureProfileV2,
+};
+use dclutch_registry::svm::{
+    LOADER_V3_PROGRAMDATA_METADATA_BYTES, ProgramDataMetadataV3View,
+    REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1, RegistryInstructionV1,
+};
+use dclutch_registry::{
+    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
+    ActivatedExecutionReleaseSetV1, ActivationCacheProgressV1, ArtifactActivationInputV1,
+    ArtifactReleaseV2, DeploymentObservationV2, ExecutionReleaseActivationInputsV1,
+    activate_execution_release_set_v1, activation_cache_progress_v1,
 };
 use sha2::Digest as _;
 use solana_loader_v3_interface::instruction::set_upgrade_authority;
@@ -649,7 +649,7 @@ pub(crate) fn role_pins(plan: &SuccessorPlan) -> [(&'static str, &ProgramPin); 7
 /// record body exists.
 ///
 /// The plan decoded each slot out of a `ProgramData` account image and every
-/// minted body binds it; `ArtifactReleaseV1::authenticate_deployment` refuses
+/// minted body binds it; `ArtifactReleaseV2::authenticate_deployment` refuses
 /// `DeploymentSlotMismatch` on chain if that number is wrong. This step turns
 /// the plan's number into an observation *of this chain*, through the same
 /// `ProgramDataMetadataV3View` parse the contract itself runs — so a
@@ -1474,10 +1474,99 @@ pub(crate) fn publish_record(
         let evidence = rpc.send(&label, &[instruction], payer)?;
         minimum_slot = evidence.slot;
         transactions.push(evidence);
+        if plan.action == RecordPublicationActionV1::Finalize {
+            let (post_slot, post_accounts) =
+                rpc.finalized_accounts(&[raw, staging], minimum_slot)?;
+            let poststate = finalized_publication_poststate_v2(
+                registry,
+                publication,
+                state,
+                post_slot,
+                post_accounts.first().and_then(Option::as_ref),
+                post_accounts.get(1).and_then(Option::as_ref),
+            )?;
+            transactions
+                .last_mut()
+                .ok_or_else(|| Error::new("publication transaction evidence disappeared"))?
+                .publication_poststate = Some(poststate);
+        }
     }
     Err(Error::new(
         "record publication exceeded its bounded transition count",
     ))
+}
+
+fn require_code_progress_advanced_v2(
+    prior: Option<dclutch_registry::artifact_code_commitment_v2::CodeCommitmentProgressV2>,
+    next: dclutch_registry::artifact_code_commitment_v2::CodeCommitmentProgressV2,
+) -> Result<()> {
+    let prior_offset = prior.map(|progress| progress.next_offset()).unwrap_or(0);
+    if next.next_offset() <= prior_offset {
+        return Err(Error::new(
+            "successful partial Finalize did not advance the native code offset",
+        ));
+    }
+    if prior.is_some_and(|progress| progress.total_length() != next.total_length()) {
+        return Err(Error::new("partial Finalize changed the bound ELF length"));
+    }
+    Ok(())
+}
+
+/// Verify a Finalize transaction from a finalized raw/cursor observation.
+/// Cursor presence is partial progress, never a finalized-record claim.
+fn finalized_publication_poststate_v2(
+    registry: Pubkey,
+    publication: RecordPublicationContentV1<'_>,
+    before: RecordPublicationStateV1<'_>,
+    observed_slot: u64,
+    raw: Option<&crate::rpc::RpcAccount>,
+    cursor: Option<&crate::rpc::RpcAccount>,
+) -> Result<crate::model::PublicationPoststateV2> {
+    use dclutch_registry::record::{STAGING_CURSOR_BYTES_V1, artifact_verification_progress_v2};
+    let raw = raw.ok_or_else(|| Error::new("Finalize poststate omitted the raw record"))?;
+    if raw.owner != registry
+        || raw.executable
+        || raw.data != publication.content
+        || raw.lamports != before.raw_record.lamports
+    {
+        return Err(Error::new(
+            "Finalize changed the exact raw record bytes, owner, or funding",
+        ));
+    }
+    let mut total = None;
+    let mut offset = None;
+    if let Some(cursor) = cursor {
+        if publication.schema_release_id != dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V2
+            || cursor.owner != registry
+            || cursor.executable
+            || cursor.lamports != before.staging_cursor.lamports
+            || cursor.data.get(..STAGING_CURSOR_BYTES_V1)
+                != before.staging_cursor.data.get(..STAGING_CURSOR_BYTES_V1)
+        {
+            return Err(Error::new(
+                "partial Finalize changed the authenticated staging prefix or funding",
+            ));
+        }
+        let prior = artifact_verification_progress_v2(before.staging_cursor.data)
+            .map_err(|error| Error::new(format!("Finalize prior code cursor: {error:?}")))?;
+        let next = artifact_verification_progress_v2(&cursor.data)
+            .map_err(|error| Error::new(format!("Finalize poststate code cursor: {error:?}")))?
+            .ok_or_else(|| {
+                Error::new("successful partial Finalize omitted native code progress")
+            })?;
+        require_code_progress_advanced_v2(prior, next)?;
+        total = Some(next.total_length());
+        offset = Some(next.next_offset());
+    }
+    Ok(crate::model::PublicationPoststateV2 {
+        observed_slot,
+        raw_record: account_evidence(before.raw_record.key, raw),
+        raw_record_data_hex: hex(&raw.data),
+        staging_cursor: cursor.map(|account| account_evidence(before.staging_cursor.key, account)),
+        staging_cursor_data_hex: cursor.map(|account| hex(&account.data)),
+        code_total_length: total,
+        code_next_offset: offset,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1548,18 +1637,9 @@ pub(crate) fn publish_product_graph(
                 staging: coordinates[index].1,
             };
             return Ok((
-                published(
-                    0,
-                    dclutch_product::admission::PRODUCT_RECORD_SCHEMA_ID_V2,
-                ),
-                published(
-                    1,
-                    dclutch_product::admission::RESULT_DOMAIN_SCHEMA_ID_V2,
-                ),
-                published(
-                    2,
-                    dclutch_product::admission::PORTFOLIO_SCHEMA_ID_V2,
-                ),
+                published(0, dclutch_product::admission::PRODUCT_RECORD_SCHEMA_ID_V2),
+                published(1, dclutch_product::admission::RESULT_DOMAIN_SCHEMA_ID_V2),
+                published(2, dclutch_product::admission::PORTFOLIO_SCHEMA_ID_V2),
             ));
         }
         let instruction = plan
@@ -1687,7 +1767,7 @@ pub(crate) fn verify_profile(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<()> 
 fn activation_artifact(
     plan: &SuccessorPlan,
     label: &str,
-) -> Result<(ArtifactReleaseIdV1, ArtifactReleaseV1)> {
+) -> Result<(ArtifactReleaseIdV1, ArtifactReleaseV2)> {
     let pin = match label {
         "core_artifact_release" => &plan.core,
         "claims_artifact_release" => &plan.claims,
@@ -1707,7 +1787,7 @@ fn activation_artifact(
             "activation record {label} body digest does not match its plan coordinate"
         )));
     }
-    let release = ArtifactReleaseV1::decode(&body)
+    let release = ArtifactReleaseV2::decode(&body)
         .map_err(|error| Error::new(format!("decode {label}: {error:?}")))?;
     let release_id = ArtifactReleaseIdV1::new(digest)
         .map_err(|error| Error::new(format!("decode {label} content ID: {error:?}")))?;
@@ -1721,7 +1801,7 @@ fn activation_artifact(
         || release.program().to_bytes() != pubkey(&pin.program_id)?.to_bytes()
         || release.programdata() != pubkey(&pin.programdata_id)?.to_bytes()
         || release.loader_program().to_bytes() != bpf_loader_upgradeable::ID.to_bytes()
-        || release.elf_digest() != hex32(&pin.live_elf_sha256)?
+        || release.code_commitment() != crate::plan::pinned_code_commitment_v2(pin)?
         || release.deployment_slot() != pin.deployment_slot
         || release.upgrade_authority() != expected_authority
     {
@@ -1736,7 +1816,7 @@ fn activation_input(plan: &SuccessorPlan, label: &str) -> Result<ArtifactActivat
     let (release_id, release) = activation_artifact(plan, label)?;
     let loader = release.loader_program().to_bytes();
     let programdata = release.programdata();
-    let deployment = DeploymentObservationV1::new(
+    let deployment = DeploymentObservationV2::new(
         release.program().to_bytes(),
         loader,
         true,
@@ -1746,7 +1826,7 @@ fn activation_input(plan: &SuccessorPlan, label: &str) -> Result<ArtifactActivat
         programdata,
         loader,
         release.deployment_slot(),
-        release.elf_digest(),
+        release.code_commitment(),
         release.upgrade_authority(),
     )
     .map_err(|error| Error::new(format!("construct {label} projection: {error:?}")))?;
@@ -2323,12 +2403,12 @@ fn validate_program_pin(
         .records
         .get(&record_label)
         .ok_or_else(|| Error::new(format!("missing {record_label}")))?;
-    let release = ArtifactReleaseV1::decode(&decode_hex(&pair.body_hex)?)
+    let release = ArtifactReleaseV2::decode(&decode_hex(&pair.body_hex)?)
         .map_err(|error| Error::new(format!("decode {record_label}: {error:?}")))?;
     if release.program().to_bytes() != program.to_bytes()
         || release.programdata() != expected_programdata.to_bytes()
         || release.loader_program().to_bytes() != bpf_loader_upgradeable::ID.to_bytes()
-        || release.elf_digest() != expected_live
+        || release.code_commitment() != crate::plan::pinned_code_commitment_v2(pin)?
         || release.deployment_slot() != pin.deployment_slot
         || release.upgrade_authority().is_some()
     {
@@ -2501,6 +2581,46 @@ pub(crate) fn decode_hex(value: &str) -> Result<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn artifact_finalize_readback_refuses_stalled_or_substituted_code_progress() {
+        use dclutch_registry::artifact_code_commitment_v2::{
+            CODE_COMMITMENT_CHUNK_BYTES_V2, CodeCommitmentProgressV2,
+        };
+        let chunk = vec![0x5a; CODE_COMMITMENT_CHUNK_BYTES_V2];
+        let total = u64::try_from(chunk.len() + 17).expect("total");
+        let initial = CodeCommitmentProgressV2::new(total).expect("initial");
+        let first = initial.advance(0, &chunk).expect("first chunk");
+        super::require_code_progress_advanced_v2(None, first).expect("first actual progress");
+        let expected = "successful partial Finalize did not advance the native code offset";
+        assert_eq!(
+            super::require_code_progress_advanced_v2(None, initial)
+                .expect_err("successful no-op is not progress")
+                .to_string(),
+            expected
+        );
+        assert_eq!(
+            super::require_code_progress_advanced_v2(Some(first), first)
+                .expect_err("same offset is not progress")
+                .to_string(),
+            expected
+        );
+        let other_initial = CodeCommitmentProgressV2::new(total * 2).expect("other total");
+        let other_first = other_initial.advance(0, &chunk).expect("other first chunk");
+        let other = other_first
+            .advance(other_first.next_offset(), &chunk)
+            .expect("other second chunk");
+        assert_eq!(
+            super::require_code_progress_advanced_v2(Some(first), other)
+                .expect_err("different ELF length is not same verification")
+                .to_string(),
+            "partial Finalize changed the bound ELF length"
+        );
+        let final_progress = first
+            .advance(first.next_offset(), &[0x6a; 17])
+            .expect("last chunk");
+        super::require_code_progress_advanced_v2(Some(first), final_progress)
+            .expect("actual later progress");
+    }
     use super::*;
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 
@@ -2878,7 +2998,7 @@ mod tests {
         let release_id =
             ArtifactReleaseIdV1::new([tag.saturating_add(40); 32]).expect("release ID");
         let authority = [tag.saturating_add(60); 32];
-        let release = ArtifactReleaseV1::new(
+        let release = ArtifactReleaseV2::new(
             program,
             loader,
             programdata,
@@ -2889,7 +3009,7 @@ mod tests {
             Some(authority),
         )
         .expect("artifact release");
-        let observation = DeploymentObservationV1::new(
+        let observation = DeploymentObservationV2::new(
             program.to_bytes(),
             loader.to_bytes(),
             true,
@@ -2899,7 +3019,7 @@ mod tests {
             programdata,
             loader.to_bytes(),
             release.deployment_slot(),
-            release.elf_digest(),
+            release.code_commitment(),
             Some(authority),
         )
         .expect("deployment observation");

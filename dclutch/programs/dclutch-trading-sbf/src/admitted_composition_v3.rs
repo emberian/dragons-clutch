@@ -57,7 +57,7 @@ use dclutch_market::execution_strategy::{
         accelerator_invocation_count_v2, register_bank_bytes_v2, resolve_execution_candidate_v2,
     },
 };
-use dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V1;
+use dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V2;
 use dclutch_registry::record::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
 use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
@@ -1177,7 +1177,7 @@ fn validate_authenticated_frame<'a, 'info>(
         frame.registry.key,
         frame.artifact_raw.key,
         frame.artifact_staging.key,
-        ARTIFACT_RELEASE_SCHEMA_ID_V1,
+        ARTIFACT_RELEASE_SCHEMA_ID_V2,
         context.artifact_release.to_bytes(),
         false,
         bumps.artifact,

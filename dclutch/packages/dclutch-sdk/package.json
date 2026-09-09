@@ -89,7 +89,9 @@
     "abi:state-machines:verify": "node scripts/generate-state-machines-v1.mjs --check",
     "abi:route-census": "node scripts/generate-route-census.mjs",
     "abi:route-census:verify": "node scripts/generate-route-census.mjs --check",
-    "abi:coverage": "node ../../tools/abi-coverage/abi-coverage.mjs"
+    "abi:coverage": "node ../../tools/abi-coverage/abi-coverage.mjs",
+    "abi:code-commitment": "node scripts/generate-code-commitment-vectors.mjs",
+    "abi:code-commitment:verify": "node scripts/generate-code-commitment-vectors.mjs --check"
   },
   "dependencies": {
     "@solana/web3.js": "1.98.4"

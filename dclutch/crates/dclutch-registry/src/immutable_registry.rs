@@ -11,7 +11,7 @@
 use crate::release_set::{ArtifactReleaseIdV1, ProgramIdentityV1};
 use dclutch_core_contract::ContentId;
 
-use crate::{ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1, Error, Result};
+use crate::{ArtifactReleaseV2, ArtifactUpgradePolicyV1, DeploymentObservationV2, Error, Result};
 
 /// Chain-selected inputs for authenticating the exact current pinned Registry release.
 ///
@@ -23,8 +23,8 @@ pub struct PinnedRegistryReleaseInputV1 {
     selected_registry_program: ProgramIdentityV1,
     selected_artifact_release_id: ArtifactReleaseIdV1,
     finalized_artifact_release_id: ArtifactReleaseIdV1,
-    release: ArtifactReleaseV1,
-    current_deployment: DeploymentObservationV1,
+    release: ArtifactReleaseV2,
+    current_deployment: DeploymentObservationV2,
 }
 
 impl PinnedRegistryReleaseInputV1 {
@@ -33,8 +33,8 @@ impl PinnedRegistryReleaseInputV1 {
         selected_registry_program: ProgramIdentityV1,
         selected_artifact_release_id: ArtifactReleaseIdV1,
         finalized_artifact_release_id: ArtifactReleaseIdV1,
-        release: ArtifactReleaseV1,
-        current_deployment: DeploymentObservationV1,
+        release: ArtifactReleaseV2,
+        current_deployment: DeploymentObservationV2,
     ) -> Self {
         Self {
             selected_registry_program,
@@ -371,23 +371,24 @@ pub fn authenticate_immutable_finalized_record_v1<A: ImmutableFinalizedRecordAda
     })
 }
 
-/// Return the exact current ELF digest of an already-immutable deployment.
+/// Return the admitted code commitment of an already-immutable deployment.
 ///
-/// Activation hashed the complete ELF once, before persisting `release`. A
+/// Registry finalization verified every Loader code byte before admitting
+/// `release`; the caller must authenticate that finalized record first. A
 /// Loader V3 deployment whose admitted policy is `Immutable`, whose release
 /// carries no upgrade authority, and whose observed ProgramData currently
 /// carries no upgrade authority can never be redeployed, so the admitted
-/// digest is the exact current ELF digest. Re-hashing a multi-hundred-kilobyte
+/// code commitment remains current. Re-hashing a multi-hundred-kilobyte
 /// ELF on every recurring action therefore recomputes an authenticated fact.
 ///
 /// This is the strict half of the argument, kept for deployments that are
 /// genuinely immutable. An upgradeable release is refused here; it reaches the
-/// same reuse through [`slot_pinned_release_elf_digest_v1`], which pays for it
+/// same reuse through [`slot_pinned_release_code_commitment_v2`], which pays for it
 /// with a slot equality instead of with irrevocability.
 /// `authenticate_deployment` still checks identity, link, ownership,
 /// executability, the exact deployment slot, and the upgrade authority.
-pub fn immutable_release_elf_digest_v1(
-    release: ArtifactReleaseV1,
+pub fn immutable_release_code_commitment_v2(
+    release: ArtifactReleaseV2,
     observed_upgrade_authority: Option<[u8; crate::IDENTITY_BYTES]>,
 ) -> Result<[u8; crate::IDENTITY_BYTES]> {
     if release.upgrade_policy() != ArtifactUpgradePolicyV1::Immutable
@@ -396,18 +397,18 @@ pub fn immutable_release_elf_digest_v1(
     {
         return Err(Error::MutableRegistryRelease);
     }
-    Ok(release.elf_digest())
+    Ok(release.code_commitment())
 }
 
-/// Return the admitted ELF digest of a deployment whose pin still holds,
+/// Return the admitted code commitment of a deployment whose pin still holds,
 /// under either upgrade policy.
 ///
-/// This generalizes [`immutable_release_elf_digest_v1`] per decision 0012
+/// This generalizes [`immutable_release_code_commitment_v2`] per decision 0012
 /// (`docs/decisions/0012-devnet-iteration-substrate.md`) and is the single
 /// semantic owner of the slot-pin argument:
 ///
 /// - **`Immutable`**: delegated unchanged to
-///   [`immutable_release_elf_digest_v1`], which owns the immutability
+///   [`immutable_release_code_commitment_v2`], which owns the immutability
 ///   argument — the bytes can never move, so the admitted digest is current.
 /// - **`ExactAuthority`**: the Loader V3 writes the current slot into
 ///   ProgramData on every `Upgrade`, refuses an `Upgrade` in the deployment's
@@ -423,7 +424,7 @@ pub fn immutable_release_elf_digest_v1(
 ///
 /// A refusal here means the pin does not hold — an upgraded substrate
 /// ([`Error::ReleaseSupersededByUpgrade`], matching
-/// `ArtifactReleaseV1::authenticate_deployment`'s naming for a
+/// `ArtifactReleaseV2::authenticate_deployment`'s naming for a
 /// strictly-later slot), a stale or wrong-generation observation
 /// ([`Error::DeploymentSlotMismatch`]), or a changed authority
 /// ([`Error::UpgradeAuthorityMismatch`]). Callers refuse; they never fall
@@ -436,14 +437,14 @@ pub fn immutable_release_elf_digest_v1(
 /// invocation. Passing a release's own bound values back in would make the
 /// check vacuous; every in-tree caller reads them out of a parsed
 /// `ProgramDataV3View`.
-pub fn slot_pinned_release_elf_digest_v1(
-    release: ArtifactReleaseV1,
+pub fn slot_pinned_release_code_commitment_v2(
+    release: ArtifactReleaseV2,
     observed_upgrade_authority: Option<[u8; crate::IDENTITY_BYTES]>,
     observed_deployment_slot: u64,
 ) -> Result<[u8; crate::IDENTITY_BYTES]> {
     match release.upgrade_policy() {
         ArtifactUpgradePolicyV1::Immutable => {
-            immutable_release_elf_digest_v1(release, observed_upgrade_authority)
+            immutable_release_code_commitment_v2(release, observed_upgrade_authority)
         }
         ArtifactUpgradePolicyV1::ExactAuthority => {
             require_slot_pinned_release_v1(release)?;
@@ -453,7 +454,7 @@ pub fn slot_pinned_release_elf_digest_v1(
             if observed_upgrade_authority != release.upgrade_authority() {
                 return Err(Error::UpgradeAuthorityMismatch);
             }
-            Ok(release.elf_digest())
+            Ok(release.code_commitment())
         }
     }
 }
@@ -470,12 +471,12 @@ pub fn slot_pinned_release_elf_digest_v1(
 ///   only by an `Upgrade` signed by that key, and every such move breaks the
 ///   slot pin and refuses every dependent open market by name.
 ///
-/// A decoded [`ArtifactReleaseV1`] is already canonical in this respect, so
+/// A decoded [`ArtifactReleaseV2`] is already canonical in this respect, so
 /// this predicate is total on decoded records. It exists so that every reader
 /// states its admission out loud in one greppable place rather than by the
 /// absence of a check, and so that a hand-constructed release cannot slip a
 /// non-canonical pairing past a reader that skipped `decode`.
-pub const fn require_slot_pinned_release_v1(release: ArtifactReleaseV1) -> Result<()> {
+pub const fn require_slot_pinned_release_v1(release: ArtifactReleaseV2) -> Result<()> {
     match (release.upgrade_policy(), release.upgrade_authority()) {
         (ArtifactUpgradePolicyV1::Immutable, None)
         | (ArtifactUpgradePolicyV1::ExactAuthority, Some(_)) => Ok(()),
@@ -486,7 +487,7 @@ pub const fn require_slot_pinned_release_v1(release: ArtifactReleaseV1) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1};
+    use crate::{ArtifactReleaseV2, ArtifactUpgradePolicyV1, DeploymentObservationV2};
 
     fn program(fill: u8) -> ProgramIdentityV1 {
         ProgramIdentityV1::decode(&[fill; 32]).expect("program identity")
@@ -504,11 +505,11 @@ mod tests {
         registry: ProgramIdentityV1,
         policy: ArtifactUpgradePolicyV1,
         authority: Option<[u8; 32]>,
-    ) -> (ArtifactReleaseV1, DeploymentObservationV1) {
+    ) -> (ArtifactReleaseV2, DeploymentObservationV2) {
         let loader = program(2);
         let programdata = [3; 32];
         let elf = [4; 32];
-        let value = ArtifactReleaseV1::new(
+        let value = ArtifactReleaseV2::new(
             registry,
             loader,
             programdata,
@@ -519,7 +520,7 @@ mod tests {
             authority,
         )
         .expect("artifact release");
-        let observation = DeploymentObservationV1::new(
+        let observation = DeploymentObservationV2::new(
             registry.to_bytes(),
             loader.to_bytes(),
             true,
@@ -623,7 +624,7 @@ mod tests {
         let release_id = artifact(7);
         let (immutable_release, mutable_observation) = {
             let (value, _) = release(registry, ArtifactUpgradePolicyV1::Immutable, None);
-            let observation = DeploymentObservationV1::new(
+            let observation = DeploymentObservationV2::new(
                 registry.to_bytes(),
                 value.loader_program().to_bytes(),
                 true,
@@ -633,7 +634,7 @@ mod tests {
                 value.programdata(),
                 value.loader_program().to_bytes(),
                 value.deployment_slot(),
-                value.elf_digest(),
+                value.code_commitment(),
                 Some([8; 32]),
             )
             .expect("retained-authority observation");
@@ -905,17 +906,17 @@ mod tests {
     }
 
     #[test]
-    fn immutable_elf_digest_is_the_admitted_digest_and_upgradeable_refuses() {
+    fn immutable_code_commitment_is_the_admitted_digest_and_upgradeable_refuses() {
         let registry = program(1);
         let (immutable, _) = release(registry, ArtifactUpgradePolicyV1::Immutable, None);
         assert_eq!(
-            immutable_release_elf_digest_v1(immutable, None),
-            Ok(immutable.elf_digest())
+            immutable_release_code_commitment_v2(immutable, None),
+            Ok(immutable.code_commitment())
         );
         // A live upgrade authority on the observed ProgramData refuses even
         // when the admitted release claims immutability.
         assert_eq!(
-            immutable_release_elf_digest_v1(immutable, Some([9; 32])),
+            immutable_release_code_commitment_v2(immutable, Some([9; 32])),
             Err(Error::MutableRegistryRelease)
         );
         let (upgradeable, _) = release(
@@ -924,11 +925,11 @@ mod tests {
             Some([7; 32]),
         );
         assert_eq!(
-            immutable_release_elf_digest_v1(upgradeable, Some([7; 32])),
+            immutable_release_code_commitment_v2(upgradeable, Some([7; 32])),
             Err(Error::MutableRegistryRelease)
         );
         assert_eq!(
-            immutable_release_elf_digest_v1(upgradeable, None),
+            immutable_release_code_commitment_v2(upgradeable, None),
             Err(Error::MutableRegistryRelease)
         );
     }
@@ -950,11 +951,11 @@ mod tests {
         // can move those bytes, so the slot is `authenticate_deployment`'s
         // business and not the digest argument's.
         assert_eq!(
-            slot_pinned_release_elf_digest_v1(immutable, None, pinned_slot),
-            Ok(immutable.elf_digest())
+            slot_pinned_release_code_commitment_v2(immutable, None, pinned_slot),
+            Ok(immutable.code_commitment())
         );
         assert_eq!(
-            slot_pinned_release_elf_digest_v1(immutable, Some([9; 32]), pinned_slot),
+            slot_pinned_release_code_commitment_v2(immutable, Some([9; 32]), pinned_slot),
             Err(Error::MutableRegistryRelease)
         );
 
@@ -967,33 +968,33 @@ mod tests {
 
         // POSITIVE: the pin holds -- the admitted digest is the current digest.
         assert_eq!(
-            slot_pinned_release_elf_digest_v1(upgradeable, Some(authority), pinned_slot),
-            Ok(upgradeable.elf_digest())
+            slot_pinned_release_code_commitment_v2(upgradeable, Some(authority), pinned_slot),
+            Ok(upgradeable.code_commitment())
         );
 
         // The upgrade lands: a strictly later slot, named for the operator.
         assert_eq!(
-            slot_pinned_release_elf_digest_v1(upgradeable, Some(authority), pinned_slot + 1),
+            slot_pinned_release_code_commitment_v2(upgradeable, Some(authority), pinned_slot + 1),
             Err(Error::ReleaseSupersededByUpgrade)
         );
 
         // A slot BELOW the pin is not an upgrade -- the Loader only ever writes
         // the current slot -- so it keeps the substitution name.
         assert_eq!(
-            slot_pinned_release_elf_digest_v1(upgradeable, Some(authority), pinned_slot - 1),
+            slot_pinned_release_code_commitment_v2(upgradeable, Some(authority), pinned_slot - 1),
             Err(Error::DeploymentSlotMismatch)
         );
 
         // HOSTILE: pin substitution. A different authority at the pinned slot.
         assert_eq!(
-            slot_pinned_release_elf_digest_v1(upgradeable, Some([8; 32]), pinned_slot),
+            slot_pinned_release_code_commitment_v2(upgradeable, Some([8; 32]), pinned_slot),
             Err(Error::UpgradeAuthorityMismatch)
         );
 
         // HOSTILE: a revoked authority at the pinned slot. `SetAuthority` moves
         // no slot, so only the identity contract catches this one.
         assert_eq!(
-            slot_pinned_release_elf_digest_v1(upgradeable, None, pinned_slot),
+            slot_pinned_release_code_commitment_v2(upgradeable, None, pinned_slot),
             Err(Error::UpgradeAuthorityMismatch)
         );
     }
@@ -1035,7 +1036,7 @@ mod tests {
             .is_ok()
         );
 
-        let upgraded = DeploymentObservationV1::new(
+        let upgraded = DeploymentObservationV2::new(
             registry.to_bytes(),
             release_value.loader_program().to_bytes(),
             true,
@@ -1045,7 +1046,7 @@ mod tests {
             release_value.programdata(),
             release_value.loader_program().to_bytes(),
             release_value.deployment_slot() + 1,
-            release_value.elf_digest(),
+            release_value.code_commitment(),
             Some(authority),
         )
         .expect("upgraded observation");

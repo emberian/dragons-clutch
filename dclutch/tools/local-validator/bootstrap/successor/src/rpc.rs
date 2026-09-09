@@ -941,6 +941,7 @@ impl Rpc {
                 compute_units_consumed,
                 error: meta_error,
                 logs,
+                publication_poststate: None,
                 instructions,
             },
             packet,
@@ -2579,6 +2580,7 @@ impl Rpc {
             compute_units_consumed,
             error: meta_error,
             logs,
+            publication_poststate: None,
             instructions,
         }))
     }
@@ -2627,6 +2629,7 @@ impl Rpc {
             compute_units_consumed: None,
             error: None,
             logs: Vec::new(),
+            publication_poststate: None,
             instructions: Vec::new(),
         })
     }

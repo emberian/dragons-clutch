@@ -105,7 +105,7 @@ use dclutch_registry::svm::{
 };
 use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_CACHE_BUMP_OFFSET_V1,
-    ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1,
+    ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV2,
     ArtifactUpgradePolicyV1,
 };
 use dclutch_trading::series::{

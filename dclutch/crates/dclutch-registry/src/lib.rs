@@ -14,6 +14,8 @@
 
 mod activation;
 mod artifact;
+/// Canonical bounded commitment to the native Loader ELF tail.
+pub mod artifact_code_commitment_v2;
 mod immutable_registry;
 mod lineage;
 mod lineage_walk;
@@ -95,8 +97,8 @@ pub enum Error {
     /// forward under it, and the remedy is a new release generation: publish,
     /// activate, and found on the new observation.
     ReleaseSupersededByUpgrade,
-    /// The complete observed ELF digest differed from the release.
-    ElfDigestMismatch,
+    /// The complete observed code commitment differed from the release.
+    CodeCommitmentMismatch,
     /// Current upgrade authority differed from the immutable release policy.
     UpgradeAuthorityMismatch,
     /// A lineage record named one release set as its own successor.

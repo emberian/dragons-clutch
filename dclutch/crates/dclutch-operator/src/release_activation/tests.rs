@@ -3,9 +3,9 @@ use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1, ExecutionReleaseSetV1,
     ExecutionRoleBindingV1,
 };
-use dclutch_registry::{ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1};
+use dclutch_registry::{ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_SCHEMA_ID_V2};
 use dclutch_release_tool::{
-    BuildMetadataV1, CheckedReleaseV1, ReleaseEvidenceV1, artifact_release_from_checked,
+    BuildMetadataV1, CheckedReleaseV2, ReleaseEvidenceV1, artifact_release_from_checked,
     build_checked_execution_release_set, build_checked_release,
 };
 use solana_program::{
@@ -105,7 +105,7 @@ fn checked_release(
     elf: &[u8],
     semantic_seed: u8,
     source_seed: u8,
-) -> CheckedReleaseV1 {
+) -> CheckedReleaseV2 {
     let program_data = loader_program_bytes(programdata);
     let programdata_data = immutable_programdata_bytes(77, elf);
     let metadata = BuildMetadataV1::parse(&format!(
@@ -178,7 +178,7 @@ fn rent_account(rent: Rent) -> ObservedAccount {
 
 struct Fixture {
     registry: Pubkey,
-    checked_releases: [CheckedReleaseV1; EXECUTION_ROLE_COUNT_V1],
+    checked_releases: [CheckedReleaseV2; EXECUTION_ROLE_COUNT_V1],
     checked_release_set: CheckedExecutionReleaseSetV1,
     state: RegistryActivationState,
 }
@@ -199,7 +199,7 @@ impl Fixture {
         let elfs: [Vec<u8>; EXECUTION_ROLE_COUNT_V1] = std::array::from_fn(|index| {
             sbf_elf(0xa5_u8.saturating_add(u8::try_from(index).expect("role index")))
         });
-        let checked_releases: [CheckedReleaseV1; EXECUTION_ROLE_COUNT_V1] =
+        let checked_releases: [CheckedReleaseV2; EXECUTION_ROLE_COUNT_V1] =
             std::array::from_fn(|index| {
                 checked_release(
                     programs.get(index).copied().expect("role program"),
@@ -242,7 +242,7 @@ impl Fixture {
         let artifact_releases = artifacts.map(|artifact| {
             finalized_record(
                 registry,
-                ARTIFACT_RELEASE_SCHEMA_ID_V1,
+                ARTIFACT_RELEASE_SCHEMA_ID_V2,
                 artifact.to_bytes().to_vec(),
                 &rent,
             )
@@ -372,7 +372,7 @@ fn exact_checked_evidence_builds_existing_activation_and_deterministic_projectio
                 "activation_cache",
                 "activation_mode",
                 "cache_rent_debit_lamports",
-                "elf_bytes_hashed_total",
+                "elf_bytes_authenticated_total",
                 "activation_transactions",
             ]
             .as_slice()
@@ -382,7 +382,7 @@ fn exact_checked_evidence_builds_existing_activation_and_deterministic_projectio
     // One packet projection per activation transaction, in canonical role order.
     for role in ["core", "claims", "trading", "resolution", "custody"] {
         for key in [
-            "role_elf_bytes_hashed",
+            "role_elf_bytes_authenticated",
             "unsigned_message_sha256",
             "packet_wire_bytes",
             "required_signatures",

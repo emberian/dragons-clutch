@@ -20,7 +20,7 @@ immutable Loader-v3 Program accounts and exact fixed-offset ProgramData
 headers followed by the exact ELFs. Core begins with the same exact ELF and a
 single ephemeral upgrade authority, then must reach that immutable header by
 Loader revocation before release recognition. The plan also creates distinct
-`ArtifactReleaseV1` bodies, the five-role
+`ArtifactReleaseV2` bodies, the five-role
 `ExecutionReleaseSetV1`, the captured local-Pyth release body, and the expected
 144-byte `ProtocolInfrastructureProfileV1` body selecting Registry and Rent.
 The profile itself is not genesis-injected: its sole PDA is derived under Core
@@ -36,11 +36,17 @@ localhost transactions:
 
 1. Core initialization of the sole Registry/Rent infrastructure profile.
 2. Loader-v3 revocation of Core's ephemeral authority to `None`, followed by
-   Registry activation of the five-role immutable release set. Activation is
-   **one role per transaction**: whole-ELF hashing costs about one compute unit
-   per two bytes, so admitting the real seven artifacts in a single transaction
-   cannot fit under the chain maximum. A partially activated cache cannot
-   decode, so no reader can consume a half-activated release set.
+   Registry finalization of each `ArtifactReleaseV2` and activation of the
+   five-role immutable release set. Finalization verifies native Loader payload
+   bytes once in canonical 1 MiB chunks, using the 344-byte artifact cursor to
+   retain proper partial progress. Every call rechecks Loader continuity; only
+   the final call commits finality, closes the cursor, and refunds its rent. The
+   4 MiB native-loader test takes four calls at about 545k CU per full chunk;
+   the exact ProgramTest measurements are in
+   [`REGISTRY_ARTIFACT_V2_CHUNKED_FINALIZATION_2026_09_09.md`](../../../../docs/evidence/REGISTRY_ARTIFACT_V2_CHUNKED_FINALIZATION_2026_09_09.md).
+   Activation then checks the native Loader envelope without hashing the
+   payload again. A partially activated cache cannot decode, so no reader can
+   consume a half-activated release set.
 
 Loader-v3 owns authority presence with the tag at byte 12. Its real
 `Some -> None` serialization leaves bytes 13..45 as inactive storage rather
@@ -222,8 +228,9 @@ Solana's 1,400,000 compute maximum:
 | Claims `FoundingV5` (four Registry reauths) | Claims | 260,279 |
 | Open, commit-last, plus the outer's five joins — **arithmetic**, the RPC truncated the log | Core + Trading | 315,652 |
 
-Release-set activation is one role per transaction; the worst of the five is
-Trading at 710,601 CU.
+Artifact finalization owns the complete payload traversal. Release-set
+activation now performs only the native Loader continuity checks needed to
+show that each already-verified deployment has not moved.
 
 ### `DCLTPCB1` is no longer heap-bound, and it never was program-side
 

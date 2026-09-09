@@ -50,7 +50,7 @@ export const REFUSAL_CODES_V1: ReadonlyArray<RefusalCodeV1> = [
   { code: 0x1012, name: "RegistryError::ReleaseLineageNotForward", meaning: "A moved role's successor deployment slot was not strictly later.", band: "registry" },
   { code: 0x1013, name: "RegistryError::ArtifactReleaseDeploymentFrame", meaning: "An `ArtifactRelease` was finalized without its deployment in the frame.", band: "registry" },
   { code: 0x1014, name: "RegistryError::ArtifactReleaseNotDeployed", meaning: "An `ArtifactRelease` did not describe the deployment at its own address.", band: "registry" },
-  { code: 0x1015, name: "RegistryError::ArtifactReleaseElfMismatch", meaning: "A deployment is at that address and it is not the release's bytes.", band: "registry" },
+  { code: 0x1015, name: "RegistryError::ArtifactReleaseCodeCommitmentMismatch", meaning: "A deployment is at that address and it is not the release's bytes.", band: "registry" },
   { code: 0x2000, name: "RentSbfError::Instruction", meaning: "Instruction bytes did not decode under the canonical contract.", band: "rent" },
   { code: 0x2001, name: "RentSbfError::AccountFrame", meaning: "Account count, order, privileges, aliases, or wallet facts refused.", band: "rent" },
   { code: 0x2002, name: "RentSbfError::RuntimeAccount", meaning: "System Program or Rent sysvar identity/value refused.", band: "rent" },

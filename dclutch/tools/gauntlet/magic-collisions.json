@@ -32,15 +32,6 @@
       "owner": "Claims (fixture convergence)"
     },
     {
-      "magic": "DCLTARF1",
-      "constants": [
-        "AGGREGATE_RETIREMENT_FINISH_MAGIC_V1",
-        "ARTIFACT_RELEASE_MAGIC_V1"
-      ],
-      "verdict": "DIFFERENT ELFS AND DIFFERENT CHANNELS. AGGREGATE_RETIREMENT_FINISH_MAGIC_V1 belongs to the Core retirement checkpoint (crates/dclutch-market), ARTIFACT_RELEASE_MAGIC_V1 to the Registry artifact record (crates/dclutch-registry). No single program dispatches on both, and neither is an instruction selector reached from the other's entrypoint. A reader of a raw wire dump can still confuse them, which is why this is recorded rather than dismissed.",
-      "owner": "Core + Registry (naming)"
-    },
-    {
       "magic": "DCLTSA03",
       "constants": [
         "SHADOW_ACK_MAGIC_V3",

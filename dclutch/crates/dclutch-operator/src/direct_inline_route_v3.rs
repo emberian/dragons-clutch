@@ -4047,7 +4047,7 @@ mod tests {
     use dclutch_registry::svm::LOADER_V3_PROGRAM_BYTES;
     use dclutch_registry::{
         ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
-        ARTIFACT_RELEASE_BYTES_V1, ArtifactActivationInputV1, ArtifactReleaseV1,
+        ARTIFACT_RELEASE_BYTES_V2, ArtifactActivationInputV1, ArtifactReleaseV2,
         ArtifactUpgradePolicyV1, ExecutionReleaseActivationInputsV1,
         activate_execution_release_set_v1,
     };
@@ -4353,7 +4353,7 @@ mod tests {
 
     #[derive(Clone)]
     struct RoleFixtureV3 {
-        release: ArtifactReleaseV1,
+        release: ArtifactReleaseV2,
         artifact: ArtifactReleaseIdV1,
         program: ObservedAccount,
         programdata: ObservedAccount,
@@ -4363,12 +4363,12 @@ mod tests {
         let programdata =
             Pubkey::find_program_address(&[program.as_ref()], &bpf_loader_upgradeable::ID).0;
         let programdata_bytes = immutable_programdata_bytes(deployment_slot, semantic_fill);
-        let release = ArtifactReleaseV1::new(
+        let release = ArtifactReleaseV2::new(
             ProgramIdentityV1::new(program.to_bytes()).expect("role program"),
             ProgramIdentityV1::new(bpf_loader_upgradeable::ID.to_bytes()).expect("loader"),
             programdata.to_bytes(),
             CoreContentId::new([semantic_fill; 32]).expect("semantic release"),
-            hash(programdata_bytes.get(45..).expect("ELF")).to_bytes(),
+            dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(programdata_bytes.get(45..).expect("ELF")).expect("exact fixture code commitment"),
             deployment_slot,
             ArtifactUpgradePolicyV1::Immutable,
             None,
@@ -4399,7 +4399,7 @@ mod tests {
 
     fn checked_release_set_bytes(
         release_set: ExecutionReleaseSetV1,
-        artifacts: [ArtifactReleaseV1; 5],
+        artifacts: [ArtifactReleaseV2; 5],
     ) -> [u8; CHECKED_MULTIPROGRAM_BYTES_V1] {
         const HEADER: usize = 16;
         let mut output = [0_u8; CHECKED_MULTIPROGRAM_BYTES_V1];
@@ -4422,10 +4422,10 @@ mod tests {
         let mut offset = HEADER + EXECUTION_RELEASE_SET_BYTES_V1;
         for (index, artifact) in artifacts.into_iter().enumerate() {
             output
-                .get_mut(offset..offset + ARTIFACT_RELEASE_BYTES_V1)
+                .get_mut(offset..offset + ARTIFACT_RELEASE_BYTES_V2)
                 .expect("artifact")
                 .copy_from_slice(&artifact.to_bytes());
-            offset += ARTIFACT_RELEASE_BYTES_V1;
+            offset += ARTIFACT_RELEASE_BYTES_V2;
             output
                 .get_mut(offset..offset + 32)
                 .expect("checked release identity")

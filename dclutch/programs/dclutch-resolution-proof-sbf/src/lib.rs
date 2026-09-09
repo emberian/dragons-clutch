@@ -10,10 +10,10 @@ extern crate std;
 use dclutch_market::capability_manifest::CapabilityManifestV1;
 use dclutch_market::capability_manifest::funding::funded_rent_persists_v1;
 use dclutch_registry::activation_auth_v1::{
-    ActivationAuthErrorV1, cached_role_deployment_observation_v1,
+    ActivationAuthErrorV1, cached_role_deployment_observation_v2,
 };
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry::{ArtifactReleaseV1, DeploymentObservationV1};
+use dclutch_registry::{ArtifactReleaseV2, DeploymentObservationV2};
 use dclutch_source::{RecoveryPolicyV2, SourceMaterialV3};
 use solana_program::{
     account_info::AccountInfo, clock::Clock, entrypoint::ProgramResult, hash::hash,
@@ -194,7 +194,7 @@ pub enum ResolutionError {
     /// it names, did not authenticate.
     ///
     /// The profile's PDA, owner, width and rent exemption, its decode, the
-    /// Registry program it names, and the `ArtifactReleaseV1` reached through
+    /// Registry program it names, and the `ArtifactReleaseV2` reached through
     /// it including its slot pin. This is upstream of every activation
     /// question: it is how a frame learns WHICH Registry to believe, so a
     /// failure here means the frame never got as far as a release set.
@@ -556,9 +556,9 @@ pub(crate) const fn pinned_deployment_refusal(error: dclutch_registry::Error) ->
 pub(crate) fn cached_deployment_observation(
     program: &AccountInfo<'_>,
     programdata: &AccountInfo<'_>,
-    release: ArtifactReleaseV1,
-) -> Result<DeploymentObservationV1, ProgramError> {
-    cached_role_deployment_observation_v1(program, programdata, release).map_err(|error| {
+    release: ArtifactReleaseV2,
+) -> Result<DeploymentObservationV2, ProgramError> {
+    cached_role_deployment_observation_v2(program, programdata, release).map_err(|error| {
         match error {
             ActivationAuthErrorV1::ReleaseSuperseded => ResolutionError::ReleaseSuperseded,
             ActivationAuthErrorV1::AccountFrame

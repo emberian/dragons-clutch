@@ -53,8 +53,8 @@ use dclutch_program_test_evidence::TransactionEvidence;
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
-    ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1,
-    ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1,
+    ARTIFACT_RELEASE_SCHEMA_ID_V2, ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1,
+    ArtifactReleaseV2, ArtifactUpgradePolicyV1, DeploymentObservationV2,
     activate_execution_role_into_v1, initialize_activation_cache_v1,
 };
 // The DBC venue's decoding rules have ONE author: the relay contract's
@@ -203,7 +203,7 @@ const GRADUATION_REGION_COUNT: u32 = GRADUATION_OUTCOME_COUNT - 1;
 
 const DEPLOYMENT_SLOT: u64 = 423_941_138;
 const UPGRADE_AUTHORITY: [u8; 32] = [0x4a; 32];
-const ELF_DIGEST: [u8; 32] = [0xee; 32];
+const CODE_COMMITMENT: [u8; 32] = [0xee; 32];
 
 /// The mainnet SPL Token-2022 program, `TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb`.
 ///
@@ -365,13 +365,14 @@ fn program_identity(program: Pubkey) -> ProgramIdentityV1 {
     ProgramIdentityV1::new(program.to_bytes()).expect("nonzero program")
 }
 
-fn release(program: Pubkey, semantic: [u8; 32], elf: &[u8]) -> ArtifactReleaseV1 {
-    ArtifactReleaseV1::new(
+fn release(program: Pubkey, semantic: [u8; 32], elf: &[u8]) -> ArtifactReleaseV2 {
+    ArtifactReleaseV2::new(
         program_identity(program),
         program_identity(bpf_loader_upgradeable::ID),
         programdata(program).to_bytes(),
         ContentId::new(semantic).expect("semantic release"),
-        hash(elf).to_bytes(),
+        dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(elf)
+            .expect("exact ProgramData ELF commitment"),
         0,
         ArtifactUpgradePolicyV1::Immutable,
         None,
@@ -379,19 +380,37 @@ fn release(program: Pubkey, semantic: [u8; 32], elf: &[u8]) -> ArtifactReleaseV1
     .expect("immutable artifact release")
 }
 
-fn artifact_id(release: ArtifactReleaseV1) -> ArtifactReleaseIdV1 {
+#[test]
+fn fixture_release_commits_exact_elf_bytes_v2() {
+    // A synthetic nonempty tail exercises this fixture constructor's argument
+    // semantics; actual SBF campaigns supply the exact loaded ELF bytes here.
+    let elf = b"\x7fELFfixture-code-commitment-v2";
+    let observed = release(Pubkey::new_unique(), [7; 32], elf);
+    let expected = dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(elf)
+        .expect("nonempty exact tail");
+    assert_eq!(observed.code_commitment(), expected);
+    assert_ne!(observed.code_commitment(), hash(elf).to_bytes());
+    let mut changed = elf.to_vec();
+    changed[elf.len() - 1] ^= 1;
+    assert_ne!(
+        observed.code_commitment(),
+        release(observed.program().to_bytes().into(), [7; 32], &changed).code_commitment()
+    );
+}
+
+fn artifact_id(release: ArtifactReleaseV2) -> ArtifactReleaseIdV1 {
     ArtifactReleaseIdV1::new(hash(&release.to_bytes()).to_bytes()).expect("artifact identity")
 }
 
-fn binding(release: ArtifactReleaseV1) -> ExecutionRoleBindingV1 {
+fn binding(release: ArtifactReleaseV2) -> ExecutionRoleBindingV1 {
     ExecutionRoleBindingV1::new(release.program(), artifact_id(release))
 }
 
-fn activation_input(release: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
+fn activation_input(release: ArtifactReleaseV2) -> ArtifactActivationInputV1 {
     ArtifactActivationInputV1::new(
         artifact_id(release),
         release,
-        DeploymentObservationV1::new(
+        DeploymentObservationV2::new(
             release.program().to_bytes(),
             bpf_loader_upgradeable::ID.to_bytes(),
             true,
@@ -401,7 +420,7 @@ fn activation_input(release: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
             release.programdata(),
             bpf_loader_upgradeable::ID.to_bytes(),
             release.deployment_slot(),
-            release.elf_digest(),
+            release.code_commitment(),
             release.upgrade_authority(),
         )
         .expect("current deployment observation"),
@@ -413,7 +432,7 @@ fn activation_input(release: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
 /// The relay routes never invoke Core or Custody; the set is complete because a
 /// release set IS five roles, and the one binding the adapter reads is
 /// Resolution's, which must name the executing Program.
-fn activation(core: ArtifactReleaseV1, resolution: ArtifactReleaseV1) -> ([u8; 32], Vec<u8>) {
+fn activation(core: ArtifactReleaseV2, resolution: ArtifactReleaseV2) -> ([u8; 32], Vec<u8>) {
     let release_set = ExecutionReleaseSetV1::new(
         binding(core),
         binding(core),
@@ -753,8 +772,8 @@ fn positions(row: RowFixtureV1) -> Vec<Position> {
             key: row.programdata,
             executable: false,
             // For a ProgramData account inlined at exactly 45 bytes the tail
-            // digest IS the deployed ELF digest, by construction.
-            tail_digest: ELF_DIGEST,
+            // authenticator is the deployed ELF's V2 code commitment.
+            tail_digest: CODE_COMMITMENT,
         },
         Position {
             body: state_body(row),
@@ -884,14 +903,14 @@ fn product_graph(test: &mut ProgramTest, row: RowFixtureV1) -> ProductGraph {
 fn venue_release(
     row: RowFixtureV1,
     deployment_slot: u64,
-    elf_digest: [u8; 32],
-) -> ArtifactReleaseV1 {
-    ArtifactReleaseV1::new(
+    code_commitment: [u8; 32],
+) -> ArtifactReleaseV2 {
+    ArtifactReleaseV2::new(
         ProgramIdentityV1::new(row.program).expect("venue program"),
         ProgramIdentityV1::new(LOADER_V3_PROGRAM_ID).expect("loader"),
         row.programdata,
         ContentId::new([row.identity_seed.wrapping_add(7); 32]).expect("venue semantic release"),
-        elf_digest,
+        code_commitment,
         deployment_slot,
         ArtifactUpgradePolicyV1::ExactAuthority,
         Some(UPGRADE_AUTHORITY),
@@ -1379,13 +1398,13 @@ fn fixture(seal_threshold: u8, extra_keys: &[[u8; 32]]) -> Fixture {
         seal_threshold,
         extra_keys,
         DEPLOYMENT_SLOT,
-        ELF_DIGEST,
+        CODE_COMMITMENT,
     )
 }
 
 /// Any row's world, with that row's pinned deployment.
 fn fixture_for_row(row: RowFixtureV1, seal_threshold: u8) -> Fixture {
-    fixture_with_venue(row, seal_threshold, &[], DEPLOYMENT_SLOT, ELF_DIGEST)
+    fixture_with_venue(row, seal_threshold, &[], DEPLOYMENT_SLOT, CODE_COMMITMENT)
 }
 
 /// Any row's world, founded with a chosen statistic shape.
@@ -1399,7 +1418,7 @@ fn fixture_with_statistic(
         seal_threshold,
         &[],
         DEPLOYMENT_SLOT,
-        ELF_DIGEST,
+        CODE_COMMITMENT,
         shape,
         None,
     )
@@ -1417,7 +1436,7 @@ fn ensemble_fixture(answered: u8) -> Fixture {
         1,
         &[],
         DEPLOYMENT_SLOT,
-        ELF_DIGEST,
+        CODE_COMMITMENT,
         StatisticShapeV1::NoConversion,
         Some(EnsembleShapeV1 {
             spec: EnsembleSpecV1::new(ENSEMBLE_MEMBERS, ENSEMBLE_QUORUM)
@@ -1437,14 +1456,14 @@ fn fixture_with_venue(
     seal_threshold: u8,
     extra_keys: &[[u8; 32]],
     pinned_deployment_slot: u64,
-    pinned_elf_digest: [u8; 32],
+    pinned_code_commitment: [u8; 32],
 ) -> Fixture {
     fixture_full(
         row,
         seal_threshold,
         extra_keys,
         pinned_deployment_slot,
-        pinned_elf_digest,
+        pinned_code_commitment,
         StatisticShapeV1::NoConversion,
         None,
     )
@@ -1456,7 +1475,7 @@ fn fixture_full(
     seal_threshold: u8,
     extra_keys: &[[u8; 32]],
     pinned_deployment_slot: u64,
-    pinned_elf_digest: [u8; 32],
+    pinned_code_commitment: [u8; 32],
     statistic_shape: StatisticShapeV1,
     ensemble: Option<EnsembleShapeV1>,
 ) -> Fixture {
@@ -1516,8 +1535,8 @@ fn fixture_full(
     let product = product_graph(&mut test, row);
     let (venue, venue_digest) = add_record(
         &mut test,
-        ARTIFACT_RELEASE_SCHEMA_ID_V1,
-        venue_release(row, pinned_deployment_slot, pinned_elf_digest)
+        ARTIFACT_RELEASE_SCHEMA_ID_V2,
+        venue_release(row, pinned_deployment_slot, pinned_code_commitment)
             .to_bytes()
             .to_vec(),
     );
@@ -2933,7 +2952,7 @@ async fn the_record_transport_runs_create_append_seal_and_retire() {
     let observed =
         reconstruct_deployment_observation_v1(program, programdata).expect("reconstruction");
     assert!(
-        pinned_release(DEPLOYMENT_SLOT, ELF_DIGEST)
+        pinned_release(DEPLOYMENT_SLOT, CODE_COMMITMENT)
             .authenticate_deployment(observed)
             .is_ok()
     );
@@ -3056,13 +3075,13 @@ async fn the_record_transport_runs_create_append_seal_and_retire() {
     );
 }
 
-fn pinned_release(deployment_slot: u64, elf_digest: [u8; 32]) -> ArtifactReleaseV1 {
-    ArtifactReleaseV1::new(
+fn pinned_release(deployment_slot: u64, code_commitment: [u8; 32]) -> ArtifactReleaseV2 {
+    ArtifactReleaseV2::new(
         ProgramIdentityV1::new(DBC_PROGRAM).expect("program"),
         ProgramIdentityV1::new(LOADER_V3_PROGRAM_ID).expect("loader"),
         DBC_PROGRAMDATA,
         ContentId::new([0x77; 32]).expect("semantic release"),
-        elf_digest,
+        code_commitment,
         deployment_slot,
         ArtifactUpgradePolicyV1::ExactAuthority,
         Some(UPGRADE_AUTHORITY),

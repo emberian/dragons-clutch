@@ -13,7 +13,7 @@ use dclutch_registry::release_set::{
     ExecutionRoleBindingV1, ProgramIdentityV1,
 };
 use dclutch_registry::{
-    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1,
+    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ARTIFACT_RELEASE_SCHEMA_ID_V2, ArtifactReleaseV2,
     ArtifactUpgradePolicyV1,
 };
 use solana_program::{account_info::AccountInfo, hash::hash, rent::Rent, sysvar::SysvarSerialize};
@@ -218,12 +218,12 @@ fn build_cache(registry: Pubkey, rent: &Rent, specs: [RoleSpec; 5]) -> Cache {
             Pubkey::find_program_address(&[program.as_ref()], &bpf_loader_upgradeable::ID).0;
         let elf = vec![spec.elf_seed; 96];
         let authority = spec.authority.map(seeded);
-        let release = ArtifactReleaseV1::new(
+        let release = ArtifactReleaseV2::new(
             ProgramIdentityV1::new(program.to_bytes()).expect("program"),
             ProgramIdentityV1::new(bpf_loader_upgradeable::ID.to_bytes()).expect("loader"),
             programdata.to_bytes(),
             ContentId::new([spec.program_seed; 32]).expect("semantic release"),
-            hash(&elf).to_bytes(),
+            dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(&elf).expect("exact fixture code commitment"),
             spec.slot,
             match authority {
                 Some(_) => ArtifactUpgradePolicyV1::ExactAuthority,
@@ -234,7 +234,7 @@ fn build_cache(registry: Pubkey, rent: &Rent, specs: [RoleSpec; 5]) -> Cache {
         .expect("release");
         let (artifact_release, artifact_digest) = finalized_record(
             registry,
-            ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            ARTIFACT_RELEASE_SCHEMA_ID_V2,
             release.to_bytes().to_vec(),
             rent,
         );

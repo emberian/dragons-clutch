@@ -66,8 +66,8 @@ use dclutch_market::{
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
-    ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
-    ArtifactUpgradePolicyV1, DeploymentObservationV1, activate_execution_role_into_v1,
+    ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV2,
+    ArtifactUpgradePolicyV1, DeploymentObservationV2, activate_execution_role_into_v1,
     initialize_activation_cache_v1,
 };
 use dclutch_registry::release_set::{
@@ -906,7 +906,7 @@ fn loader_program_bytes(program: Pubkey) -> Vec<u8> {
 /// Loader V3's ProgramData body: the 45-byte metadata span, then the ELF.
 ///
 /// `Immutable` with no upgrade authority, matching what [`release`] binds, so
-/// `slot_pinned_release_elf_digest_v1` takes the activation-bound digest and
+/// `slot_pinned_release_code_commitment_v2` takes the activation-bound digest and
 /// never hashes this tail. The tail still has to BE there -- the runtime
 /// executes the program out of it.
 fn loader_programdata_bytes(elf: &[u8]) -> Vec<u8> {
@@ -967,8 +967,8 @@ fn add_upgradeable_role(test: &mut ProgramTest, name: &'static str, program: Pub
     );
 }
 
-fn release(program: Pubkey, seed: u8) -> ArtifactReleaseV1 {
-    ArtifactReleaseV1::new(
+fn release(program: Pubkey, seed: u8) -> ArtifactReleaseV2 {
+    ArtifactReleaseV2::new(
         program_identity(program),
         program_identity(bpf_loader_upgradeable::ID),
         programdata_address(program).to_bytes(),
@@ -981,16 +981,16 @@ fn release(program: Pubkey, seed: u8) -> ArtifactReleaseV1 {
     .expect("release")
 }
 
-fn artifact_id(value: ArtifactReleaseV1) -> ArtifactReleaseIdV1 {
+fn artifact_id(value: ArtifactReleaseV2) -> ArtifactReleaseIdV1 {
     ArtifactReleaseIdV1::new(hash(&value.to_bytes()).to_bytes()).expect("artifact ID")
 }
 
-fn binding(value: ArtifactReleaseV1) -> ExecutionRoleBindingV1 {
+fn binding(value: ArtifactReleaseV2) -> ExecutionRoleBindingV1 {
     ExecutionRoleBindingV1::new(value.program(), artifact_id(value))
 }
 
-fn activation_input(value: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
-    let observation = DeploymentObservationV1::new(
+fn activation_input(value: ArtifactReleaseV2) -> ArtifactActivationInputV1 {
+    let observation = DeploymentObservationV2::new(
         value.program().to_bytes(),
         value.loader_program().to_bytes(),
         true,
@@ -1000,7 +1000,7 @@ fn activation_input(value: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
         value.programdata(),
         value.loader_program().to_bytes(),
         value.deployment_slot(),
-        value.elf_digest(),
+        value.code_commitment(),
         value.upgrade_authority(),
     )
     .expect("observation");

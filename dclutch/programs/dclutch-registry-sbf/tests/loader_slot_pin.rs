@@ -6,11 +6,11 @@
 //! Loader instruction. No test writes ProgramData behind the Loader's back.
 
 use dclutch_registry::activation_auth_v1::{
-    ActivationAuthErrorV1, cached_role_deployment_observation_v1,
+    ActivationAuthErrorV1, cached_role_deployment_observation_v2,
 };
 use dclutch_registry::release_set::ProgramIdentityV1;
 use dclutch_registry::svm::ProgramDataV3View;
-use dclutch_registry::{ArtifactReleaseV1, ArtifactUpgradePolicyV1};
+use dclutch_registry::{ArtifactReleaseV2, ArtifactUpgradePolicyV1};
 use solana_account::Account;
 use solana_loader_v3_interface::{instruction, state::UpgradeableLoaderState};
 use solana_program::{account_info::AccountInfo, clock::Clock, hash::hash};
@@ -91,7 +91,7 @@ fn observe(
     mut program: Account,
     data_key: Pubkey,
     mut data: Account,
-    release: ArtifactReleaseV1,
+    release: ArtifactReleaseV2,
 ) -> Result<(), ActivationAuthErrorV1> {
     let program_info = AccountInfo::new(
         &program_key,
@@ -111,7 +111,7 @@ fn observe(
         &data.owner,
         data.executable,
     );
-    cached_role_deployment_observation_v1(&program_info, &data_info, release).map(|_| ())
+    cached_role_deployment_observation_v2(&program_info, &data_info, release).map(|_| ())
 }
 
 #[tokio::test]
@@ -150,12 +150,12 @@ async fn native_loader_blocks_same_slot_mutations_and_supersedes_after_extend_an
         programdata_address: data_key,
     })
     .expect("Loader Program encoding");
-    let release = ArtifactReleaseV1::new(
+    let release = ArtifactReleaseV2::new(
         ProgramIdentityV1::new(program_key.to_bytes()).expect("program"),
         ProgramIdentityV1::new(bpf_loader_upgradeable::ID.to_bytes()).expect("loader"),
         data_key.to_bytes(),
         dclutch_core_contract::ContentId::new([1; 32]).expect("semantic id"),
-        hash(&elf).to_bytes(),
+        dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(&elf).expect("code commitment"),
         PIN,
         ArtifactUpgradePolicyV1::ExactAuthority,
         Some(authority.pubkey().to_bytes()),

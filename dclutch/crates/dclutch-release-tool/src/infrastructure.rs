@@ -21,11 +21,11 @@ use dclutch_registry::release_set::{
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, ProtocolInfrastructureProfileV1,
     ProtocolInfrastructureProfileV2,
 };
-use dclutch_registry::{ARTIFACT_RELEASE_BYTES_V1, ArtifactReleaseV1, ArtifactUpgradePolicyV1};
+use dclutch_registry::{ARTIFACT_RELEASE_BYTES_V2, ArtifactReleaseV2, ArtifactUpgradePolicyV1};
 use solana_program::pubkey::Pubkey;
 
 use crate::{
-    CHECKED_MULTIPROGRAM_BYTES_V1, CheckedExecutionReleaseSetV1, CheckedReleaseV1, Error, Result,
+    CHECKED_MULTIPROGRAM_BYTES_V1, CheckedExecutionReleaseSetV1, CheckedReleaseV2, Error, Result,
     artifact_release_from_checked, encode_hex, sha256,
 };
 
@@ -44,7 +44,7 @@ pub const CHECKED_INFRASTRUCTURE_COMPONENTS_V1: u16 = 3;
 /// Fixed checked-infrastructure header width.
 pub const CHECKED_INFRASTRUCTURE_HEADER_BYTES_V1: usize = 16;
 /// Bytes in one non-Core artifact record plus checked-release identity.
-pub const CHECKED_INFRASTRUCTURE_LEAF_BYTES_V1: usize = ARTIFACT_RELEASE_BYTES_V1 + 32;
+pub const CHECKED_INFRASTRUCTURE_LEAF_BYTES_V1: usize = ARTIFACT_RELEASE_BYTES_V2 + 32;
 /// Exact checked-infrastructure evidence width.
 pub const CHECKED_INFRASTRUCTURE_BYTES_V1: usize = CHECKED_INFRASTRUCTURE_HEADER_BYTES_V1
     + CHECKED_MULTIPROGRAM_BYTES_V1
@@ -67,9 +67,9 @@ pub struct CheckedInfrastructureV1 {
     execution: CheckedExecutionReleaseSetV1,
     profile: ProtocolInfrastructureProfileV2,
     profile_pda: [u8; 32],
-    registry_artifact: ArtifactReleaseV1,
+    registry_artifact: ArtifactReleaseV2,
     registry_checked_release_id: ContentId,
-    rent_artifact: ArtifactReleaseV1,
+    rent_artifact: ArtifactReleaseV2,
     rent_checked_release_id: ContentId,
 }
 
@@ -104,18 +104,18 @@ impl CheckedInfrastructureV1 {
         .map_err(|_| Error::InvalidInfrastructureManifest)?;
         let profile_pda = read_array(bytes, PROFILE_PDA_OFFSET)?;
         let registry_artifact =
-            ArtifactReleaseV1::decode(subslice(bytes, REGISTRY_OFFSET, ARTIFACT_RELEASE_BYTES_V1)?)
+            ArtifactReleaseV2::decode(subslice(bytes, REGISTRY_OFFSET, ARTIFACT_RELEASE_BYTES_V2)?)
                 .map_err(|_| Error::InvalidArtifactRelease)?;
         let registry_checked_release_id = ContentId::new(read_array(
             bytes,
-            REGISTRY_OFFSET + ARTIFACT_RELEASE_BYTES_V1,
+            REGISTRY_OFFSET + ARTIFACT_RELEASE_BYTES_V2,
         )?)
         .map_err(|_| Error::ZeroIdentifier)?;
         let rent_artifact =
-            ArtifactReleaseV1::decode(subslice(bytes, RENT_OFFSET, ARTIFACT_RELEASE_BYTES_V1)?)
+            ArtifactReleaseV2::decode(subslice(bytes, RENT_OFFSET, ARTIFACT_RELEASE_BYTES_V2)?)
                 .map_err(|_| Error::InvalidArtifactRelease)?;
         let rent_checked_release_id =
-            ContentId::new(read_array(bytes, RENT_OFFSET + ARTIFACT_RELEASE_BYTES_V1)?)
+            ContentId::new(read_array(bytes, RENT_OFFSET + ARTIFACT_RELEASE_BYTES_V2)?)
                 .map_err(|_| Error::ZeroIdentifier)?;
         let result = Self {
             execution,
@@ -157,13 +157,13 @@ impl CheckedInfrastructureV1 {
         );
         copy(
             &mut output,
-            REGISTRY_OFFSET + ARTIFACT_RELEASE_BYTES_V1,
+            REGISTRY_OFFSET + ARTIFACT_RELEASE_BYTES_V2,
             self.registry_checked_release_id.as_bytes(),
         );
         copy(&mut output, RENT_OFFSET, &self.rent_artifact.to_bytes());
         copy(
             &mut output,
-            RENT_OFFSET + ARTIFACT_RELEASE_BYTES_V1,
+            RENT_OFFSET + ARTIFACT_RELEASE_BYTES_V2,
             self.rent_checked_release_id.as_bytes(),
         );
         output
@@ -286,7 +286,7 @@ impl CheckedInfrastructureV1 {
     }
 
     /// Return the checked Registry artifact record.
-    pub const fn registry_artifact(self) -> ArtifactReleaseV1 {
+    pub const fn registry_artifact(self) -> ArtifactReleaseV2 {
         self.registry_artifact
     }
 
@@ -296,7 +296,7 @@ impl CheckedInfrastructureV1 {
     }
 
     /// Return the checked Rent artifact record.
-    pub const fn rent_artifact(self) -> ArtifactReleaseV1 {
+    pub const fn rent_artifact(self) -> ArtifactReleaseV2 {
         self.rent_artifact
     }
 
@@ -341,9 +341,9 @@ impl CheckedInfrastructureV1 {
 pub fn build_checked_infrastructure_v1(
     execution: CheckedExecutionReleaseSetV1,
     profile: ProtocolInfrastructureProfileV2,
-    core_checked: &CheckedReleaseV1,
-    registry_checked: &CheckedReleaseV1,
-    rent_checked: &CheckedReleaseV1,
+    core_checked: &CheckedReleaseV2,
+    registry_checked: &CheckedReleaseV2,
+    rent_checked: &CheckedReleaseV2,
 ) -> Result<CheckedInfrastructureV1> {
     let execution_artifacts = execution.artifacts();
     let execution_checked = execution.checked_release_ids();
@@ -389,8 +389,8 @@ pub fn build_checked_infrastructure_v1(
 /// predecessor artifact-release ids, which name what the succession succeeded
 /// and are therefore not a function of the successor's own manifests.
 pub fn derive_protocol_infrastructure_profile_v1(
-    registry_checked: &CheckedReleaseV1,
-    rent_checked: &CheckedReleaseV1,
+    registry_checked: &CheckedReleaseV2,
+    rent_checked: &CheckedReleaseV2,
 ) -> Result<ProtocolInfrastructureProfileV1> {
     let registry = binding_from_checked(registry_checked)?;
     let rent = binding_from_checked(rent_checked)?;
@@ -408,8 +408,8 @@ pub fn derive_protocol_infrastructure_profile_v1(
 /// the ceremony's exact bytes before the ceremony runs, and compare them
 /// against what lands afterwards.
 pub fn derive_protocol_infrastructure_profile_v2(
-    registry_checked: &CheckedReleaseV1,
-    rent_checked: &CheckedReleaseV1,
+    registry_checked: &CheckedReleaseV2,
+    rent_checked: &CheckedReleaseV2,
     predecessor: ProtocolInfrastructureProfileV1,
 ) -> Result<ProtocolInfrastructureProfileV2> {
     let registry = binding_from_checked(registry_checked)?;
@@ -424,7 +424,7 @@ pub fn derive_protocol_infrastructure_profile_v2(
 }
 
 fn binding_from_checked(
-    checked: &CheckedReleaseV1,
+    checked: &CheckedReleaseV2,
 ) -> Result<dclutch_registry::release_set::ExecutionRoleBindingV1> {
     let artifact = artifact_release_from_checked(checked)?;
     require_pinned_component(artifact)?;
@@ -449,9 +449,9 @@ pub fn verify_checked_infrastructure_v1(
         execution_manifest,
         execution_checked_manifests,
     )?;
-    let core_checked = CheckedReleaseV1::decode(execution_checked_manifests[0])?;
-    let registry_checked = CheckedReleaseV1::decode(registry_checked_manifest)?;
-    let rent_checked = CheckedReleaseV1::decode(rent_checked_manifest)?;
+    let core_checked = CheckedReleaseV2::decode(execution_checked_manifests[0])?;
+    let registry_checked = CheckedReleaseV2::decode(registry_checked_manifest)?;
+    let rent_checked = CheckedReleaseV2::decode(rent_checked_manifest)?;
     let rebuilt = build_checked_infrastructure_v1(
         execution,
         expected.profile,
@@ -467,7 +467,7 @@ pub fn verify_checked_infrastructure_v1(
 
 fn validate_binding(
     expected: dclutch_registry::release_set::ExecutionRoleBindingV1,
-    artifact: ArtifactReleaseV1,
+    artifact: ArtifactReleaseV2,
 ) -> Result<()> {
     let artifact_id = ArtifactReleaseIdV1::new(sha256(&artifact.to_bytes()))
         .map_err(|_| Error::InvalidArtifactRelease)?;
@@ -493,7 +493,7 @@ fn validate_binding(
 /// making a codec's strictness caller-selectable would make the same bytes mean
 /// two things depending on who called, and then the manifest would no longer be
 /// evidence of anything on its own.
-fn require_pinned_component(artifact: ArtifactReleaseV1) -> Result<()> {
+fn require_pinned_component(artifact: ArtifactReleaseV2) -> Result<()> {
     dclutch_registry::require_slot_pinned_release_v1(artifact)
         .map_err(|_| Error::InfrastructureMustBeImmutable)
 }
@@ -555,9 +555,9 @@ mod tests {
 
     struct Fixture {
         execution: CheckedExecutionReleaseSetV1,
-        execution_releases: [CheckedReleaseV1; 5],
-        registry: CheckedReleaseV1,
-        rent: CheckedReleaseV1,
+        execution_releases: [CheckedReleaseV2; 5],
+        registry: CheckedReleaseV2,
+        rent: CheckedReleaseV2,
         predecessor_registry_artifact: ArtifactReleaseIdV1,
         profile: ProtocolInfrastructureProfileV2,
         checked: CheckedInfrastructureV1,
@@ -673,8 +673,8 @@ mod tests {
         }
     }
 
-    fn release(seed: u8, authority: Option<[u8; 32]>) -> CheckedReleaseV1 {
-        CheckedReleaseV1 {
+    fn release(seed: u8, authority: Option<[u8; 32]>) -> CheckedReleaseV2 {
+        CheckedReleaseV2 {
             semantic_kind: SemanticPreimageKindV1::Capability,
             semantic_preimage_len: 16,
             elf_len: 64,
@@ -683,6 +683,7 @@ mod tests {
             deployment_slot: u64::from(seed),
             programdata_elf_offset: 45,
             artifact_digest: [seed.wrapping_add(4); 32],
+            code_commitment: [seed.wrapping_add(10); 32],
             semantic_release_id: ContentId::new([seed.wrapping_add(5); 32])
                 .expect("semantic release"),
             program_account_digest: [seed.wrapping_add(6); 32],
@@ -703,7 +704,7 @@ mod tests {
         }
     }
 
-    fn binding(artifact: ArtifactReleaseV1) -> ExecutionRoleBindingV1 {
+    fn binding(artifact: ArtifactReleaseV2) -> ExecutionRoleBindingV1 {
         let artifact_id =
             ArtifactReleaseIdV1::new(sha256(&artifact.to_bytes())).expect("artifact release id");
         ExecutionRoleBindingV1::new(artifact.program(), artifact_id)
@@ -1026,7 +1027,7 @@ mod tests {
 
         // The residue of the gate. `require_pinned_component` is TOTAL on
         // anything this tool can build, exactly as the contract's own predicate
-        // is total on decoded records: `ArtifactReleaseV1::new` refuses a
+        // is total on decoded records: `ArtifactReleaseV2::new` refuses a
         // non-canonical policy/authority pairing before it can reach here, and
         // `artifact_release_from_checked` derives the policy FROM the authority
         // so it cannot construct one either. The check stays because it states
@@ -1040,7 +1041,7 @@ mod tests {
             assert_eq!(require_pinned_component(artifact), Ok(()));
         }
         assert!(
-            ArtifactReleaseV1::new(
+            ArtifactReleaseV2::new(
                 ProgramIdentityV1::new([1; 32]).expect("program"),
                 ProgramIdentityV1::new([2; 32]).expect("loader"),
                 [3; 32],
@@ -1054,7 +1055,7 @@ mod tests {
             "an Immutable release carrying an authority is not constructible",
         );
         assert!(
-            ArtifactReleaseV1::new(
+            ArtifactReleaseV2::new(
                 ProgramIdentityV1::new([1; 32]).expect("program"),
                 ProgramIdentityV1::new([2; 32]).expect("loader"),
                 [3; 32],
@@ -1193,9 +1194,9 @@ pub struct CheckedGenesisInfrastructureV1 {
     /// V1 beside it.
     genesis_profile_v2: ProtocolInfrastructureProfileV2,
     genesis_profile_v2_pda: [u8; 32],
-    registry_artifact: ArtifactReleaseV1,
+    registry_artifact: ArtifactReleaseV2,
     registry_checked_release_id: ContentId,
-    rent_artifact: ArtifactReleaseV1,
+    rent_artifact: ArtifactReleaseV2,
     rent_checked_release_id: ContentId,
 }
 
@@ -1236,26 +1237,26 @@ impl CheckedGenesisInfrastructureV1 {
         )?)
         .map_err(|_| Error::InvalidInfrastructureManifest)?;
         let genesis_profile_v2_pda = read_array(bytes, GENESIS_PROFILE_V2_PDA_OFFSET)?;
-        let registry_artifact = ArtifactReleaseV1::decode(subslice(
+        let registry_artifact = ArtifactReleaseV2::decode(subslice(
             bytes,
             GENESIS_REGISTRY_OFFSET,
-            ARTIFACT_RELEASE_BYTES_V1,
+            ARTIFACT_RELEASE_BYTES_V2,
         )?)
         .map_err(|_| Error::InvalidArtifactRelease)?;
         let registry_checked_release_id = ContentId::new(read_array(
             bytes,
-            GENESIS_REGISTRY_OFFSET + ARTIFACT_RELEASE_BYTES_V1,
+            GENESIS_REGISTRY_OFFSET + ARTIFACT_RELEASE_BYTES_V2,
         )?)
         .map_err(|_| Error::ZeroIdentifier)?;
-        let rent_artifact = ArtifactReleaseV1::decode(subslice(
+        let rent_artifact = ArtifactReleaseV2::decode(subslice(
             bytes,
             GENESIS_RENT_OFFSET,
-            ARTIFACT_RELEASE_BYTES_V1,
+            ARTIFACT_RELEASE_BYTES_V2,
         )?)
         .map_err(|_| Error::InvalidArtifactRelease)?;
         let rent_checked_release_id = ContentId::new(read_array(
             bytes,
-            GENESIS_RENT_OFFSET + ARTIFACT_RELEASE_BYTES_V1,
+            GENESIS_RENT_OFFSET + ARTIFACT_RELEASE_BYTES_V2,
         )?)
         .map_err(|_| Error::ZeroIdentifier)?;
         let result = Self {
@@ -1314,7 +1315,7 @@ impl CheckedGenesisInfrastructureV1 {
         );
         copy(
             &mut output,
-            GENESIS_REGISTRY_OFFSET + ARTIFACT_RELEASE_BYTES_V1,
+            GENESIS_REGISTRY_OFFSET + ARTIFACT_RELEASE_BYTES_V2,
             self.registry_checked_release_id.as_bytes(),
         );
         copy(
@@ -1324,7 +1325,7 @@ impl CheckedGenesisInfrastructureV1 {
         );
         copy(
             &mut output,
-            GENESIS_RENT_OFFSET + ARTIFACT_RELEASE_BYTES_V1,
+            GENESIS_RENT_OFFSET + ARTIFACT_RELEASE_BYTES_V2,
             self.rent_checked_release_id.as_bytes(),
         );
         output
@@ -1528,9 +1529,9 @@ impl CheckedGenesisInfrastructureV1 {
 pub fn build_checked_genesis_infrastructure_v1(
     execution: CheckedExecutionReleaseSetV1,
     profile: ProtocolInfrastructureProfileV1,
-    core_checked: &CheckedReleaseV1,
-    registry_checked: &CheckedReleaseV1,
-    rent_checked: &CheckedReleaseV1,
+    core_checked: &CheckedReleaseV2,
+    registry_checked: &CheckedReleaseV2,
+    rent_checked: &CheckedReleaseV2,
 ) -> Result<CheckedGenesisInfrastructureV1> {
     let execution_artifacts = execution.artifacts();
     let execution_checked = execution.checked_release_ids();
@@ -1586,9 +1587,9 @@ pub fn verify_checked_genesis_infrastructure_v1(
         execution_manifest,
         execution_checked_manifests,
     )?;
-    let core_checked = CheckedReleaseV1::decode(execution_checked_manifests[0])?;
-    let registry_checked = CheckedReleaseV1::decode(registry_checked_manifest)?;
-    let rent_checked = CheckedReleaseV1::decode(rent_checked_manifest)?;
+    let core_checked = CheckedReleaseV2::decode(execution_checked_manifests[0])?;
+    let registry_checked = CheckedReleaseV2::decode(registry_checked_manifest)?;
+    let rent_checked = CheckedReleaseV2::decode(rent_checked_manifest)?;
     let rebuilt = build_checked_genesis_infrastructure_v1(
         execution,
         expected.profile,

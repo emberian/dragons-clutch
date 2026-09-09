@@ -23,7 +23,7 @@ use dclutch_registry::svm::{
     },
 };
 use dclutch_registry::{
-    ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1, DeploymentObservationV1,
+    ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1, DeploymentObservationV2,
 };
 use dclutch_resolution_core_v3_operator::{Finality, Observation, ObservedAccount};
 use solana_program::{
@@ -380,7 +380,7 @@ fn authenticate_current_role(
 fn deployment_observation(
     program: &ObservedAccount,
     programdata: &ObservedAccount,
-) -> Result<DeploymentObservationV1, RegistryOpenMarketObservationErrorV1> {
+) -> Result<DeploymentObservationV2, RegistryOpenMarketObservationErrorV1> {
     let program_view = ProgramV3View::parse(&program.data)
         .map_err(RegistryOpenMarketObservationErrorV1::RegistrySvm)?;
     let expected_programdata =
@@ -392,7 +392,7 @@ fn deployment_observation(
     }
     let programdata_view = ProgramDataV3View::parse(&programdata.data)
         .map_err(RegistryOpenMarketObservationErrorV1::RegistrySvm)?;
-    DeploymentObservationV1::new(
+    DeploymentObservationV2::new(
         program.key.to_bytes(),
         program.owner.to_bytes(),
         program.executable,
@@ -402,7 +402,8 @@ fn deployment_observation(
         program_view.programdata(),
         bpf_loader_upgradeable::ID.to_bytes(),
         programdata_view.deployment_slot(),
-        hash(programdata_view.elf()).to_bytes(),
+        dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(programdata_view.elf())
+            .map_err(|_| RegistryOpenMarketObservationErrorV1::InvalidDeployment)?,
         programdata_view.upgrade_authority(),
     )
     .map_err(RegistryOpenMarketObservationErrorV1::Registry)

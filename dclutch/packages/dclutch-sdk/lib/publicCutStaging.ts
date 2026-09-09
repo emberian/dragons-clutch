@@ -29,7 +29,7 @@ export type PublicCutActivityStepV1 = (typeof ACTIVITY_STEPS)[number];
  * gate the release was checked under and `sealedSet` the set it sealed, so a
  * reader who has the artifact can compare it against what this site claims.
  */
-export type PublicCutCheckedReleaseV1 = Readonly<{ gateDigest: string; sealedSet: string }>;
+export type PublicCutCheckedReleaseV2 = Readonly<{ gateDigest: string; sealedSet: string }>;
 
 export type PublicDevnetCutV1 = Readonly<{
   schema: typeof SCHEMA;
@@ -37,7 +37,7 @@ export type PublicDevnetCutV1 = Readonly<{
   market: string | null;
   activity: Readonly<Record<PublicCutActivityStepV1, string | null>>;
   /** Keyed by execution release set identity, 64 lowercase hex. May be empty. */
-  checkedReleases: Readonly<Record<string, PublicCutCheckedReleaseV1>>;
+  checkedReleases: Readonly<Record<string, PublicCutCheckedReleaseV2>>;
 }>;
 
 function object(value: unknown, field: string): Record<string, unknown> {
@@ -143,7 +143,7 @@ export function checkedReleaseSetIdsV1(cut = PUBLIC_DEVNET_CUT_V1): ReadonlyArra
 export type CheckedReleaseFragmentV1 = Readonly<{
   schema: 'dclutch-public-cut-checked-releases-fragment-v1';
   /** Keyed exactly as the cut's own rows are, so ingestion is a copy. */
-  checkedReleases: Readonly<Record<string, PublicCutCheckedReleaseV1>>;
+  checkedReleases: Readonly<Record<string, PublicCutCheckedReleaseV2>>;
 }>;
 
 const FRAGMENT_SCHEMA = 'dclutch-public-cut-checked-releases-fragment-v1';
@@ -186,7 +186,7 @@ export function parseCheckedReleaseFragmentV1(value: unknown): CheckedReleaseFra
  * Returns a NEW cut. Nothing here writes a file: the caller re-serializes and
  * replaces the fixture atomically, as every other generator in this tree does.
  */
-export function stageCheckedReleaseV1(
+export function stageCheckedReleaseV2(
   cut: PublicDevnetCutV1,
   fragment: CheckedReleaseFragmentV1,
   marketReleaseSetId: string,

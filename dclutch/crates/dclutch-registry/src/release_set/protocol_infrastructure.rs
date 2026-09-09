@@ -252,7 +252,7 @@ pub const PROTOCOL_INFRASTRUCTURE_GENESIS_REGISTRY_PREIMAGE_V2: &[u8] =
 /// accepts, so the genesis profile needs no new field and no new length.
 ///
 /// These are not artifact releases and can never collide with one: a real
-/// predecessor id is the SHA-256 of a published `ArtifactReleaseV1` record
+/// predecessor id is the SHA-256 of a published `ArtifactReleaseV2` record
 /// body, and these are the SHA-256 of a fixed ASCII domain string that is not
 /// a record body.
 pub const PROTOCOL_INFRASTRUCTURE_GENESIS_REGISTRY_ARTIFACT_V2: [u8; 32] = [

@@ -10,7 +10,7 @@ use dclutch_registry::release_set::{
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2,
     ProgramIdentityV1, ProtocolInfrastructureProfileV1, ProtocolInfrastructureProfileV2,
 };
-use dclutch_registry::{ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1, ArtifactUpgradePolicyV1};
+use dclutch_registry::{ARTIFACT_RELEASE_SCHEMA_ID_V2, ArtifactReleaseV2, ArtifactUpgradePolicyV1};
 use solana_account::Account;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_program::{
@@ -144,18 +144,18 @@ fn artifact_release(
     elf: &[u8],
     semantic: u8,
     upgrade_authority: Option<Pubkey>,
-) -> ArtifactReleaseV1 {
+) -> ArtifactReleaseV2 {
     let policy = if upgrade_authority.is_some() {
         ArtifactUpgradePolicyV1::ExactAuthority
     } else {
         ArtifactUpgradePolicyV1::Immutable
     };
-    ArtifactReleaseV1::new(
+    ArtifactReleaseV2::new(
         identity(program),
         identity(bpf_loader_upgradeable::ID),
         programdata_address(program).to_bytes(),
         ContentId::new([semantic; 32]).expect("semantic release"),
-        hash(elf).to_bytes(),
+        dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(elf).expect("exact fixture code commitment"),
         0,
         policy,
         upgrade_authority.map(|authority| authority.to_bytes()),
@@ -163,13 +163,13 @@ fn artifact_release(
     .expect("artifact")
 }
 
-fn add_artifact_record(test: &mut ProgramTest, release: ArtifactReleaseV1) -> (Pubkey, Pubkey) {
+fn add_artifact_record(test: &mut ProgramTest, release: ArtifactReleaseV2) -> (Pubkey, Pubkey) {
     let data = release.to_bytes().to_vec();
     let digest = hash(&data).to_bytes();
     let raw = Pubkey::find_program_address(
         &[
             RAW_RECORD_PDA_SEED_V1,
-            &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            &ARTIFACT_RELEASE_SCHEMA_ID_V2,
             &digest,
         ],
         &REGISTRY_PROGRAM_ID,
@@ -178,7 +178,7 @@ fn add_artifact_record(test: &mut ProgramTest, release: ArtifactReleaseV1) -> (P
     let staging = Pubkey::find_program_address(
         &[
             STAGING_CURSOR_PDA_SEED_V1,
-            &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            &ARTIFACT_RELEASE_SCHEMA_ID_V2,
             &digest,
         ],
         &REGISTRY_PROGRAM_ID,

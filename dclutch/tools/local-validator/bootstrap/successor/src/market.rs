@@ -2111,7 +2111,7 @@ fn authenticate_source_publication_v1(
                 ));
             }
             Ok(SourcePublicationContractV1 {
-                adapter_config_schema: dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V1,
+                adapter_config_schema: dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V2,
                 sponsored_release: None,
             })
         }
@@ -4898,6 +4898,8 @@ pub(crate) fn publish_future_market_immutable_records_v1(
     transactions: &mut Vec<TransactionEvidence>,
 ) -> Result<FutureMarketImmutablePublicationV1> {
     validate_market_input(input)?;
+    let authenticated_plan = authenticated_found_infrastructure_plan_v1(rpc, plan)?;
+    let plan = &authenticated_plan;
     if input.selected_capability.is_some() {
         return Err(Error::new(
             "future immutable publication expects an M0 Direct Market without a selected family payload",
@@ -4996,6 +4998,37 @@ pub(crate) fn publish_future_market_immutable_records_v1(
     let project_found = project_found
         .try_into()
         .map_err(|_| Error::new("M0 ordinary ProjectFound frame changed its exact cardinality"))?;
+    // ProjectFound also authenticates the active Registry and Rent artifact
+    // pairs. Their staging PDAs are vacant because the records are finalized;
+    // retain their typed record identity so Series never mistakes those slots
+    // for missing non-record accounts.
+    let mut series_prepare_records = records.series_prepare_records.clone();
+    for label in ["registry_artifact_release", "rent_artifact_release"] {
+        let pin = plan.records.get(label).ok_or_else(|| {
+            Error::new(format!("future M0 omitted active {label} record pin"))
+        })?;
+        let (raw, staging) = record(plan, label)?;
+        let body = decode_hex(&pin.body_hex)?;
+        let schema = hex32(&pin.schema_id)?;
+        let (derived_raw, derived_staging, digest) = derive_record_addresses_v1(
+            registry,
+            RecordPublicationContentV1 { schema_release_id: schema, content: &body },
+        )
+        .map_err(|error| Error::new(format!("future M0 {label} identity: {error:?}")))?;
+        let observed = snapshot.observation(raw)?;
+        if raw != derived_raw || staging != derived_staging
+            || observed.owner != registry || observed.executable || observed.data != body
+            || !matches!(snapshot.accounts.get(&staging), Some(None))
+        {
+            return Err(Error::new(format!(
+                "future M0 active {label} differs from its finalized record"
+            )));
+        }
+        series_prepare_records.push(FutureMarketFinalizedRecordV1 {
+            published: PublishedRecord { schema, digest, raw, staging },
+            body,
+        });
+    }
     Ok(FutureMarketImmutablePublicationV1 {
         realm: records.realm,
         product: records.product,
@@ -5005,7 +5038,7 @@ pub(crate) fn publish_future_market_immutable_records_v1(
         rent_credit: credit,
         project_found,
         principal_cap_sets: projection.principal_cap_sets,
-        series_prepare_records: records.series_prepare_records.clone(),
+        series_prepare_records,
         series_prepare_vacancies: records.series_prepare_vacancies.clone(),
     })
 }
@@ -6221,7 +6254,7 @@ fn checked_successor_found_coordinates_v1(
     let registry_raw = Pubkey::find_program_address(
         &[
             RAW_RECORD_PDA_SEED_V1,
-            &dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            &dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V2,
             &registry_artifact_id,
         ],
         &registry,
@@ -6230,7 +6263,7 @@ fn checked_successor_found_coordinates_v1(
     let registry_staging = Pubkey::find_program_address(
         &[
             STAGING_CURSOR_PDA_SEED_V1,
-            &dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            &dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V2,
             &registry_artifact_id,
         ],
         &registry,
@@ -6257,7 +6290,7 @@ fn checked_successor_found_plan_v1(
     let expected_raw = Pubkey::find_program_address(
         &[
             RAW_RECORD_PDA_SEED_V1,
-            &dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            &dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V2,
             &coordinates.registry_artifact_id,
         ],
         &registry,
@@ -6266,7 +6299,7 @@ fn checked_successor_found_plan_v1(
     let expected_staging = Pubkey::find_program_address(
         &[
             STAGING_CURSOR_PDA_SEED_V1,
-            &dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            &dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V2,
             &coordinates.registry_artifact_id,
         ],
         &registry,
@@ -6299,7 +6332,7 @@ fn checked_successor_found_plan_v1(
         RecordPair {
             raw: coordinates.registry_raw.to_string(),
             staging: coordinates.registry_staging.to_string(),
-            schema_id: hex(&dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V1),
+            schema_id: hex(&dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V2),
             content_sha256: hex(&coordinates.registry_artifact_id),
             body_hex: hex(&registry_raw_account.data),
         },

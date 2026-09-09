@@ -14,15 +14,15 @@
 //! [`require_observed_cluster`] refuses with [`Error::ObservedClusterMismatch`]
 //! specifically: on the byte-identical twin, nothing else can refuse.
 //!
-//! Everything below reconstructs the *existing* `DeploymentObservationV1` from
+//! Everything below reconstructs the *existing* `DeploymentObservationV2` from
 //! attested bytes and hands it to the *existing*
-//! `ArtifactReleaseV1::authenticate_deployment`, unchanged.  No new
+//! `ArtifactReleaseV2::authenticate_deployment`, unchanged.  No new
 //! authentication primitive is introduced, and none is needed: for a
 //! `ProgramData` account observed with `inline_len = 45`, the observation's
-//! `tail_digest` is by construction SHA-256 over `data[45..]`, which is exactly
-//! what the registry already calls `elf_digest`.
+//! tail authenticator is the canonical V2 commitment over `data[45..]`, which
+//! is exactly the Loader ELF tail the Registry release commits to.
 
-use dclutch_registry::DeploymentObservationV1;
+use dclutch_registry::DeploymentObservationV2;
 use dclutch_registry::svm::{
     LOADER_V3_PROGRAM_BYTES, LOADER_V3_PROGRAMDATA_METADATA_BYTES, ProgramDataMetadataV3View,
     ProgramV3View,
@@ -53,13 +53,13 @@ pub fn require_observed_cluster(
 /// Rebuild a Loader V3 deployment observation from two attested bodies.
 ///
 /// `program` must be carried fully inline (36 bytes) and `programdata` must
-/// carry exactly the 45-byte metadata prefix, so that its `tail_digest` *is* the
-/// deployed ELF digest.  Any other pinned inline width for those two positions
+/// carry exactly the 45-byte metadata prefix, so that its tail authenticator is
+/// the deployed ELF's V2 code commitment. Any other pinned inline width for those two positions
 /// is refused here rather than silently producing a digest of the wrong span.
 pub fn reconstruct_deployment_observation_v1(
     program: AccountObservationV1<'_>,
     programdata: AccountObservationV1<'_>,
-) -> Result<DeploymentObservationV1> {
+) -> Result<DeploymentObservationV2> {
     if program.inline().len() != LOADER_V3_PROGRAM_BYTES
         || usize::try_from(program.data_len()).map_err(|_| Error::ArithmeticOverflow)?
             != LOADER_V3_PROGRAM_BYTES
@@ -87,7 +87,7 @@ pub fn reconstruct_deployment_observation_v1(
             _ => Error::InvalidLoaderVariant,
         })?;
 
-    DeploymentObservationV1::new(
+    DeploymentObservationV2::new(
         program.key(),
         program.owner(),
         program.executable(),
@@ -97,7 +97,7 @@ pub fn reconstruct_deployment_observation_v1(
         program_view.programdata(),
         LOADER_V3_PROGRAM_ID,
         metadata.deployment_slot(),
-        programdata.tail_digest(),
+        programdata.tail_authenticator(),
         metadata.upgrade_authority(),
     )
     .map_err(|_| Error::RecordBindingMismatch)
@@ -109,7 +109,7 @@ mod tests {
     use crate::relay::{SOLANA_DEVNET_GENESIS_HASH_V1, SOLANA_MAINNET_GENESIS_HASH_V1, put};
     use dclutch_core_contract::ContentId;
     use dclutch_registry::release_set::ProgramIdentityV1;
-    use dclutch_registry::{ArtifactReleaseV1, ArtifactUpgradePolicyV1};
+    use dclutch_registry::{ArtifactReleaseV2, ArtifactUpgradePolicyV1};
 
     const PROGRAMDATA_KEY: [u8; 32] = [0xf4; 32];
 
@@ -185,12 +185,12 @@ mod tests {
 
         // The reconstruction is handed to the *existing* release authenticator
         // unchanged.  That is the whole claim of this module: no new
-        // authentication primitive, and the ELF digest of a 2.3 MB mainnet
+        // authentication primitive, and the code commitment of a 2.3 MB mainnet
         // program costs 157 wire bytes.
         let release = pinned_release(423_941_138, [0xee; 32], Some([0x5a; 32]));
         assert!(release.authenticate_deployment(observed).is_ok());
 
-        // P-B, executed: a venue redeploy moves the digest and the pinned
+        // P-B, executed: a venue redeploy moves the commitment and the pinned
         // release refuses, which is what drives the Source to the Product's
         // named failure outcome rather than to a wrong resolution.
         let upgraded = pinned_release(423_941_139, [0xef; 32], Some([0x5a; 32]));
@@ -203,15 +203,15 @@ mod tests {
 
     fn pinned_release(
         deployment_slot: u64,
-        elf_digest: [u8; 32],
+        code_commitment: [u8; 32],
         upgrade_authority: Option<[u8; 32]>,
-    ) -> ArtifactReleaseV1 {
-        ArtifactReleaseV1::new(
+    ) -> ArtifactReleaseV2 {
+        ArtifactReleaseV2::new(
             ProgramIdentityV1::new([0x09; 32]).expect("program"),
             ProgramIdentityV1::new(LOADER_V3_PROGRAM_ID).expect("loader"),
             PROGRAMDATA_KEY,
             ContentId::new([0x77; 32]).expect("semantic release"),
-            elf_digest,
+            code_commitment,
             deployment_slot,
             match upgrade_authority {
                 None => ArtifactUpgradePolicyV1::Immutable,

@@ -49,8 +49,8 @@ use dclutch_registry::release_set::{
 };
 use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_registry::{
-    ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetViewV1,
-    ArtifactReleaseV1, DeploymentObservationV1, require_slot_pinned_release_v1,
+    ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_SCHEMA_ID_V2, ActivatedExecutionReleaseSetViewV1,
+    ArtifactReleaseV2, DeploymentObservationV2, require_slot_pinned_release_v1,
 };
 use dclutch_resolution_core_v3_operator::authenticate_resolution_retirement_receipt_v3;
 pub use dclutch_resolution_core_v3_operator::{
@@ -948,7 +948,7 @@ fn authenticate_infrastructure_artifact(
     let expected_raw = Pubkey::find_program_address(
         &[
             RAW_RECORD_PDA_SEED_V1,
-            &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            &ARTIFACT_RELEASE_SCHEMA_ID_V2,
             &digest,
         ],
         &snapshot.registry_program.key,
@@ -957,7 +957,7 @@ fn authenticate_infrastructure_artifact(
     let expected_staging = Pubkey::find_program_address(
         &[
             STAGING_CURSOR_PDA_SEED_V1,
-            &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            &ARTIFACT_RELEASE_SCHEMA_ID_V2,
             &digest,
         ],
         &snapshot.registry_program.key,
@@ -977,7 +977,7 @@ fn authenticate_infrastructure_artifact(
         return Err(MarketRetirementOperatorErrorV1::Release);
     }
     let release =
-        ArtifactReleaseV1::decode(&raw.data).map_err(MarketRetirementOperatorErrorV1::Registry)?;
+        ArtifactReleaseV2::decode(&raw.data).map_err(MarketRetirementOperatorErrorV1::Registry)?;
     if release.program().to_bytes() != program.key.to_bytes()
         || release.programdata() != programdata.key.to_bytes()
     {
@@ -992,7 +992,7 @@ fn authenticate_infrastructure_artifact(
 fn deployment_observation(
     program: &ObservedAccount,
     programdata: &ObservedAccount,
-) -> Result<DeploymentObservationV1, MarketRetirementOperatorErrorV1> {
+) -> Result<DeploymentObservationV2, MarketRetirementOperatorErrorV1> {
     let program_view = ProgramV3View::parse(&program.data)
         .map_err(MarketRetirementOperatorErrorV1::RegistrySvm)?;
     let expected_programdata =
@@ -1004,7 +1004,7 @@ fn deployment_observation(
     }
     let programdata_view = ProgramDataV3View::parse(&programdata.data)
         .map_err(MarketRetirementOperatorErrorV1::RegistrySvm)?;
-    DeploymentObservationV1::new(
+    DeploymentObservationV2::new(
         program.key.to_bytes(),
         program.owner.to_bytes(),
         program.executable,
@@ -1014,7 +1014,8 @@ fn deployment_observation(
         program_view.programdata(),
         bpf_loader_upgradeable::ID.to_bytes(),
         programdata_view.deployment_slot(),
-        hash(programdata_view.elf()).to_bytes(),
+        dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(programdata_view.elf())
+            .map_err(|_| MarketRetirementOperatorErrorV1::Release)?,
         programdata_view.upgrade_authority(),
     )
     .map_err(MarketRetirementOperatorErrorV1::Registry)

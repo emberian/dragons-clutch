@@ -42,8 +42,8 @@ use dclutch_registry::svm::continuation_v2::{
 };
 use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
-    ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
-    ArtifactUpgradePolicyV1, DeploymentObservationV1, activate_execution_role_into_v1,
+    ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV2,
+    ArtifactUpgradePolicyV1, DeploymentObservationV2, activate_execution_role_into_v1,
     initialize_activation_cache_v1, put_activation_cache_bump_v1,
 };
 use dclutch_trading::native_evidence_v3::{
@@ -83,7 +83,7 @@ pub const COMPUTE_LIMIT: u64 = 1_400_000;
 /// and its `ExactAuthority` releases bind.
 ///
 /// It signs nothing here. Its only role is to be the same 32 bytes on both
-/// sides of `slot_pinned_release_elf_digest_v1`'s authority equality, so a key
+/// sides of `slot_pinned_release_code_commitment_v2`'s authority equality, so a key
 /// distinct from every program identity above is exactly right.
 pub const UPGRADE_AUTHORITY: Pubkey = Pubkey::new_from_array([0x9a; 32]);
 
@@ -137,7 +137,7 @@ pub const SUPERSEDED_FIXTURE_BANK_SLOT: u64 = UPGRADED_DEPLOYMENT_SLOT + 1;
 /// # Why this exists
 ///
 /// Decision 0012 admitted a MUTABLE substrate onto the cached-digest path:
-/// `slot_pinned_release_elf_digest_v1` branches on the release's upgrade
+/// `slot_pinned_release_code_commitment_v2` branches on the release's upgrade
 /// policy, and the `ExactAuthority` arm -- the whole of what 0012 added -- was
 /// unreachable from this fixture, because `release` built every release
 /// `Immutable` and the staged ProgramData wrote the authority option as `None`.
@@ -151,7 +151,7 @@ pub const SUPERSEDED_FIXTURE_BANK_SLOT: u64 = UPGRADED_DEPLOYMENT_SLOT + 1;
 ///
 /// Comparing `Immutable` with `SlotPinned` does NOT isolate the digest arm.
 /// The policy byte, the bound authority and the bound slot are all inside
-/// `ArtifactReleaseV1::to_bytes`, so they move `artifact_id`, the release-set
+/// `ArtifactReleaseV2::to_bytes`, so they move `artifact_id`, the release-set
 /// identity, and therefore every PDA seeded by it -- the Registry's activation
 /// cache and its Hot admission address both come off
 /// `Pubkey::find_program_address` on chain. Under ledger M-61 that is a
@@ -229,7 +229,7 @@ impl FixtureSubstrateV1 {
     }
 
     /// The authority the staged releases BIND, and the one their ProgramData
-    /// reports. `ArtifactReleaseV1::new` refuses any other pairing with
+    /// reports. `ArtifactReleaseV2::new` refuses any other pairing with
     /// [`FixtureSubstrateV1::upgrade_policy`].
     pub const fn upgrade_authority(self) -> Option<[u8; 32]> {
         match self {
@@ -396,7 +396,7 @@ pub fn immutable_programdata(elf: &[u8]) -> Vec<u8> {
 /// depend on the substrate and neither do the deployment widths the chain
 /// fixture derives from it. What moves is the slot at 4..12 and the option at
 /// 12 with its key at 13..45, which is exactly the pair
-/// `slot_pinned_release_elf_digest_v1` compares.
+/// `slot_pinned_release_code_commitment_v2` compares.
 pub fn programdata_v2(substrate: FixtureSubstrateV1, elf: &[u8]) -> Vec<u8> {
     let mut bytes = vec![0; 45 + elf.len()];
     bytes
@@ -446,7 +446,7 @@ pub fn add_program_v2(
     );
 }
 
-pub fn release(program: Pubkey, semantic: u8, elf: &[u8]) -> ArtifactReleaseV1 {
+pub fn release(program: Pubkey, semantic: u8, elf: &[u8]) -> ArtifactReleaseV2 {
     release_v2(program, semantic, elf, fixture_substrate())
 }
 
@@ -461,13 +461,13 @@ pub fn release_v2(
     semantic: u8,
     elf: &[u8],
     substrate: FixtureSubstrateV1,
-) -> ArtifactReleaseV1 {
-    ArtifactReleaseV1::new(
+) -> ArtifactReleaseV2 {
+    ArtifactReleaseV2::new(
         program_identity(program),
         program_identity(bpf_loader_upgradeable::ID),
         programdata(program).to_bytes(),
         content([semantic; 32]),
-        hash(elf).to_bytes(),
+        dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(elf).expect("exact fixture code commitment"),
         substrate.bound_deployment_slot(program),
         substrate.upgrade_policy(),
         substrate.upgrade_authority(),
@@ -475,19 +475,19 @@ pub fn release_v2(
     .expect("canonical slot-pinned artifact release")
 }
 
-pub fn artifact_id(value: ArtifactReleaseV1) -> ArtifactReleaseIdV1 {
+pub fn artifact_id(value: ArtifactReleaseV2) -> ArtifactReleaseIdV1 {
     ArtifactReleaseIdV1::new(hash(&value.to_bytes()).to_bytes()).expect("artifact identity")
 }
 
-pub fn binding(value: ArtifactReleaseV1) -> ExecutionRoleBindingV1 {
+pub fn binding(value: ArtifactReleaseV2) -> ExecutionRoleBindingV1 {
     ExecutionRoleBindingV1::new(value.program(), artifact_id(value))
 }
 
-pub fn activation_input(value: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
+pub fn activation_input(value: ArtifactReleaseV2) -> ArtifactActivationInputV1 {
     ArtifactActivationInputV1::new(
         artifact_id(value),
         value,
-        DeploymentObservationV1::new(
+        DeploymentObservationV2::new(
             value.program().to_bytes(),
             bpf_loader_upgradeable::ID.to_bytes(),
             true,
@@ -497,7 +497,7 @@ pub fn activation_input(value: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
             value.programdata(),
             bpf_loader_upgradeable::ID.to_bytes(),
             value.deployment_slot(),
-            value.elf_digest(),
+            value.code_commitment(),
             value.upgrade_authority(),
         )
         .expect("current immutable deployment observation"),

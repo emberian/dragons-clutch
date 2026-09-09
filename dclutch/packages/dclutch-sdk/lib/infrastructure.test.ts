@@ -2,6 +2,7 @@ import { PublicKey } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
 import { sha256 } from './bytes';
+import { codeCommitmentV2 } from './codeCommitmentV2';
 import {
   CHECKED_INFRASTRUCTURE_BYTES_V1,
   decodeCheckedInfrastructureV1,
@@ -12,15 +13,15 @@ import {
 import {
   ACTIVATION_CACHE_BYTES,
   ARTIFACT_RELEASE_BYTES,
-  ARTIFACT_RELEASE_SCHEMA_ID_V1,
+  ARTIFACT_RELEASE_SCHEMA_ID_V2,
   CHECKED_MULTIPROGRAM_BYTES,
   REGISTRY_ROLES,
   RENT_SYSVAR_ID,
   SYSVAR_OWNER_ID,
   UPGRADEABLE_LOADER_ID,
-  decodeArtifactReleaseV1,
+  decodeArtifactReleaseV2,
   deriveFinalizedRecordAddressesV1,
-  type ArtifactReleaseV1,
+  type ArtifactReleaseV2,
   type RegistryRole,
 } from './releaseRegistry';
 import {
@@ -45,7 +46,7 @@ function account(owner: string, executable: boolean, data: Uint8Array, lamports 
 }
 
 type ArtifactFixture = Readonly<{
-  artifact: ArtifactReleaseV1;
+  artifact: ArtifactReleaseV2;
   programAccount: RpcAccount;
   programDataAccount: RpcAccount;
 }>;
@@ -73,19 +74,19 @@ async function artifactFixture(seed: number, upgradeAuthority?: PublicKey): Prom
   if (upgradeAuthority !== undefined) { programDataBytes[12] = 1; programDataBytes.set(upgradeAuthority.toBytes(), 13); }
   programDataBytes.set(elf, 45);
   const bytes = new Uint8Array(ARTIFACT_RELEASE_BYTES);
-  bytes.set(new TextEncoder().encode('DCLTARF1'));
+  bytes.set(new TextEncoder().encode('DCLTARF2'));
   const view = new DataView(bytes.buffer);
-  view.setUint16(8, 1, true);
+  view.setUint16(8, 2, true);
   view.setUint16(10, 1, true);
   if (upgradeAuthority !== undefined) { bytes[12] = 1; bytes.set(upgradeAuthority.toBytes(), 184); }
   bytes.set(program.toBytes(), 16);
   bytes.set(loader.toBytes(), 48);
   bytes.set(programData.toBytes(), 80);
   bytes.fill((seed + 1) & 0xff, 112, 144);
-  bytes.set(await sha256(elf), 144);
+  bytes.set(await codeCommitmentV2(elf), 144);
   view.setBigUint64(176, BigInt(seed), true);
   return Object.freeze({
-    artifact: decodeArtifactReleaseV1(bytes),
+    artifact: decodeArtifactReleaseV2(bytes),
     programAccount: account(UPGRADEABLE_LOADER_ID, true, programBytes),
     programDataAccount: account(UPGRADEABLE_LOADER_ID, false, programDataBytes),
   });
@@ -185,8 +186,8 @@ async function fixture(seed: number, upgradeAuthority?: PublicKey): Promise<Fixt
   checkedManifest.set(rentFixture.artifact.bytes, leafOffset);
   checkedManifest.fill(seed + 91, leafOffset + ARTIFACT_RELEASE_BYTES, leafOffset + ARTIFACT_RELEASE_BYTES + 32);
 
-  const registryRecord = deriveFinalizedRecordAddressesV1(registryProgram, ARTIFACT_RELEASE_SCHEMA_ID_V1, registryArtifactId);
-  const rentRecord = deriveFinalizedRecordAddressesV1(registryProgram, ARTIFACT_RELEASE_SCHEMA_ID_V1, rentArtifactId);
+  const registryRecord = deriveFinalizedRecordAddressesV1(registryProgram, ARTIFACT_RELEASE_SCHEMA_ID_V2, registryArtifactId);
+  const rentRecord = deriveFinalizedRecordAddressesV1(registryProgram, ARTIFACT_RELEASE_SCHEMA_ID_V2, rentArtifactId);
   const accounts = new Map<string, RpcAccount | null>();
   accounts.set(activationCache, account(registryProgram, false, activation));
   accounts.set(profilePda.toBase58(), account(artifacts.core.artifact.program, false, profile));
@@ -286,7 +287,7 @@ describe('immutable protocol infrastructure inspection', () => {
     await expect(inspectProtocolInfrastructureV1(client(staleFixture), {
       registryProgram: staleFixture.registryProgram,
       activationCache: staleFixture.activationCache,
-    })).rejects.toThrow('current ELF differs');
+    })).rejects.toThrow('current code commitment differs');
   });
 
   it('refuses profile PDA and reserved-byte substitution', async () => {

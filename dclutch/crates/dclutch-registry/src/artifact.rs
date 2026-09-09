@@ -9,19 +9,19 @@ use crate::{
 };
 
 /// Exact bytes in one canonical artifact-release record.
-pub const ARTIFACT_RELEASE_BYTES_V1: usize = 216;
+pub const ARTIFACT_RELEASE_BYTES_V2: usize = 216;
 /// Canonical artifact-release wire magic.
-pub const ARTIFACT_RELEASE_MAGIC_V1: [u8; 8] = *b"DCLTARF1";
+pub const ARTIFACT_RELEASE_MAGIC_V2: [u8; 8] = *b"DCLTARF2";
 /// Implemented artifact-release schema.
-pub const ARTIFACT_RELEASE_SCHEMA_VERSION_V1: u16 = 1;
+pub const ARTIFACT_RELEASE_SCHEMA_VERSION_V2: u16 = 2;
 /// Implemented artifact-release fixed-layout profile.
-pub const ARTIFACT_RELEASE_PROFILE_V1: u16 = 1;
+pub const ARTIFACT_RELEASE_PROFILE_V2: u16 = 1;
 /// Schema/validator identity for artifact-release records.
 ///
-/// This is SHA-256 of `dclutch/schema/artifact-release-v1`.
-pub const ARTIFACT_RELEASE_SCHEMA_ID_V1: [u8; IDENTITY_BYTES] = [
-    0xae, 0x19, 0xa6, 0x0d, 0xb5, 0x50, 0xb1, 0xa8, 0xa5, 0x1d, 0x46, 0x18, 0xc7, 0x7d, 0xea, 0x54,
-    0x21, 0x17, 0x4a, 0x2a, 0x85, 0x5e, 0xe6, 0x77, 0x89, 0x4f, 0xa9, 0x1b, 0x3c, 0xfd, 0x3b, 0x6c,
+/// This is SHA-256 of `dclutch/schema/artifact-release-v2`.
+pub const ARTIFACT_RELEASE_SCHEMA_ID_V2: [u8; IDENTITY_BYTES] = [
+    0x27, 0xf7, 0x21, 0x9c, 0x3d, 0xd7, 0x14, 0x50, 0x59, 0x13, 0x77, 0xa7, 0x20, 0x17, 0x57, 0x3b,
+    0xfd, 0x67, 0xa4, 0x0d, 0x84, 0xd5, 0xdd, 0x61, 0xef, 0xe6, 0xfc, 0xf9, 0x71, 0x6b, 0xa5, 0x9c,
 ];
 
 const SCHEMA_OFFSET: usize = 8;
@@ -33,7 +33,7 @@ const PROGRAM_OFFSET: usize = 16;
 const LOADER_OFFSET: usize = 48;
 const PROGRAMDATA_OFFSET: usize = 80;
 const SEMANTIC_RELEASE_OFFSET: usize = 112;
-const ELF_DIGEST_OFFSET: usize = 144;
+const CODE_COMMITMENT_OFFSET: usize = 144;
 const DEPLOYMENT_SLOT_OFFSET: usize = 176;
 const UPGRADE_AUTHORITY_OFFSET: usize = 184;
 
@@ -70,18 +70,18 @@ impl ArtifactUpgradePolicyV1 {
 /// build manifests are evidence used to construct it, not a second runtime
 /// admission path.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ArtifactReleaseV1 {
+pub struct ArtifactReleaseV2 {
     program: ProgramIdentityV1,
     loader_program: ProgramIdentityV1,
     programdata: [u8; IDENTITY_BYTES],
     semantic_release_id: ContentId,
-    elf_digest: [u8; IDENTITY_BYTES],
+    code_commitment: [u8; IDENTITY_BYTES],
     deployment_slot: u64,
     upgrade_policy: ArtifactUpgradePolicyV1,
     upgrade_authority: Option<[u8; IDENTITY_BYTES]>,
 }
 
-impl ArtifactReleaseV1 {
+impl ArtifactReleaseV2 {
     /// Construct and validate one compact artifact release.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -89,13 +89,13 @@ impl ArtifactReleaseV1 {
         loader_program: ProgramIdentityV1,
         programdata: [u8; IDENTITY_BYTES],
         semantic_release_id: ContentId,
-        elf_digest: [u8; IDENTITY_BYTES],
+        code_commitment: [u8; IDENTITY_BYTES],
         deployment_slot: u64,
         upgrade_policy: ArtifactUpgradePolicyV1,
         upgrade_authority: Option<[u8; IDENTITY_BYTES]>,
     ) -> Result<Self> {
         require_nonzero(&programdata)?;
-        require_nonzero(&elf_digest)?;
+        require_nonzero(&code_commitment)?;
         if program.to_bytes() == loader_program.to_bytes()
             || program.to_bytes() == programdata
             || loader_program.to_bytes() == programdata
@@ -108,7 +108,7 @@ impl ArtifactReleaseV1 {
             loader_program,
             programdata,
             semantic_release_id,
-            elf_digest,
+            code_commitment,
             deployment_slot,
             upgrade_policy,
             upgrade_authority,
@@ -117,18 +117,18 @@ impl ArtifactReleaseV1 {
 
     /// Hostile-decode one exact canonical artifact release.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        if bytes.len() != ARTIFACT_RELEASE_BYTES_V1 {
+        if bytes.len() != ARTIFACT_RELEASE_BYTES_V2 {
             return Err(Error::InvalidLength);
         }
-        if bytes.get(..ARTIFACT_RELEASE_MAGIC_V1.len())
-            != Some(ARTIFACT_RELEASE_MAGIC_V1.as_slice())
+        if bytes.get(..ARTIFACT_RELEASE_MAGIC_V2.len())
+            != Some(ARTIFACT_RELEASE_MAGIC_V2.as_slice())
         {
             return Err(Error::InvalidMagic);
         }
-        if read_u16(bytes, SCHEMA_OFFSET)? != ARTIFACT_RELEASE_SCHEMA_VERSION_V1 {
+        if read_u16(bytes, SCHEMA_OFFSET)? != ARTIFACT_RELEASE_SCHEMA_VERSION_V2 {
             return Err(Error::UnsupportedSchema);
         }
-        if read_u16(bytes, PROFILE_OFFSET)? != ARTIFACT_RELEASE_PROFILE_V1 {
+        if read_u16(bytes, PROFILE_OFFSET)? != ARTIFACT_RELEASE_PROFILE_V2 {
             return Err(Error::UnsupportedArtifactProfile);
         }
         require_zero(bytes, HEADER_RESERVED_OFFSET, HEADER_RESERVED_BYTES)?;
@@ -149,7 +149,7 @@ impl ArtifactReleaseV1 {
             read_array(bytes, PROGRAMDATA_OFFSET)?,
             ContentId::new(read_array(bytes, SEMANTIC_RELEASE_OFFSET)?)
                 .map_err(|_| Error::ZeroIdentity)?,
-            read_array(bytes, ELF_DIGEST_OFFSET)?,
+            read_array(bytes, CODE_COMMITMENT_OFFSET)?,
             read_u64(bytes, DEPLOYMENT_SLOT_OFFSET)?,
             policy,
             authority,
@@ -157,15 +157,15 @@ impl ArtifactReleaseV1 {
     }
 
     /// Encode the one canonical artifact-release preimage.
-    pub fn to_bytes(self) -> [u8; ARTIFACT_RELEASE_BYTES_V1] {
-        let mut output = [0; ARTIFACT_RELEASE_BYTES_V1];
-        copy_infallible(&mut output, 0, &ARTIFACT_RELEASE_MAGIC_V1);
+    pub fn to_bytes(self) -> [u8; ARTIFACT_RELEASE_BYTES_V2] {
+        let mut output = [0; ARTIFACT_RELEASE_BYTES_V2];
+        copy_infallible(&mut output, 0, &ARTIFACT_RELEASE_MAGIC_V2);
         put_u16(
             &mut output,
             SCHEMA_OFFSET,
-            ARTIFACT_RELEASE_SCHEMA_VERSION_V1,
+            ARTIFACT_RELEASE_SCHEMA_VERSION_V2,
         );
-        put_u16(&mut output, PROFILE_OFFSET, ARTIFACT_RELEASE_PROFILE_V1);
+        put_u16(&mut output, PROFILE_OFFSET, ARTIFACT_RELEASE_PROFILE_V2);
         if let Some(policy) = output.get_mut(UPGRADE_POLICY_OFFSET) {
             *policy = self.upgrade_policy.byte();
         }
@@ -177,7 +177,7 @@ impl ArtifactReleaseV1 {
             SEMANTIC_RELEASE_OFFSET,
             self.semantic_release_id.as_bytes(),
         );
-        copy_infallible(&mut output, ELF_DIGEST_OFFSET, &self.elf_digest);
+        copy_infallible(&mut output, CODE_COMMITMENT_OFFSET, &self.code_commitment);
         put_u64(&mut output, DEPLOYMENT_SLOT_OFFSET, self.deployment_slot);
         if let Some(authority) = self.upgrade_authority {
             copy_infallible(&mut output, UPGRADE_AUTHORITY_OFFSET, &authority);
@@ -205,9 +205,9 @@ impl ArtifactReleaseV1 {
         self.semantic_release_id
     }
 
-    /// Return the digest of the complete admitted ELF.
-    pub const fn elf_digest(self) -> [u8; IDENTITY_BYTES] {
-        self.elf_digest
+    /// Return the canonical ordered commitment to the complete admitted ELF tail.
+    pub const fn code_commitment(self) -> [u8; IDENTITY_BYTES] {
+        self.code_commitment
     }
 
     /// Return the exact admitted ProgramData deployment slot.
@@ -225,36 +225,69 @@ impl ArtifactReleaseV1 {
         self.upgrade_authority
     }
 
-    /// Authenticate one current Program/ProgramData/ELF observation.
-    pub fn authenticate_deployment(self, observed: DeploymentObservationV1) -> Result<()> {
-        if observed.program != self.program.to_bytes()
-            || observed.programdata != self.programdata
-            || observed.loader_program != self.loader_program.to_bytes()
+    /// Authenticate the native Loader coordinates independently of code coverage.
+    ///
+    /// This proves continuity only. Registry finalization must still verify the
+    /// complete code commitment before this record becomes an admission fact.
+    #[allow(clippy::too_many_arguments)]
+    pub fn authenticate_loader_envelope(
+        self,
+        program: [u8; 32],
+        program_owner: [u8; 32],
+        program_executable: bool,
+        programdata: [u8; 32],
+        programdata_owner: [u8; 32],
+        programdata_executable: bool,
+        programdata_link: [u8; 32],
+        loader_program: [u8; 32],
+        deployment_slot: u64,
+        upgrade_authority: Option<[u8; 32]>,
+    ) -> Result<()> {
+        if program != self.program.to_bytes()
+            || programdata != self.programdata
+            || loader_program != self.loader_program.to_bytes()
         {
             return Err(Error::DeploymentIdentityMismatch);
         }
-        if observed.programdata_link != self.programdata {
+        if programdata_link != self.programdata {
             return Err(Error::ProgramDataLinkMismatch);
         }
-        if observed.program_owner != self.loader_program.to_bytes()
-            || observed.programdata_owner != self.loader_program.to_bytes()
+        if program_owner != self.loader_program.to_bytes()
+            || programdata_owner != self.loader_program.to_bytes()
         {
             return Err(Error::LoaderOwnerMismatch);
         }
-        if !observed.program_executable {
+        if !program_executable {
             return Err(Error::ProgramNotExecutable);
         }
-        if observed.programdata_executable {
+        if programdata_executable {
             return Err(Error::ProgramDataExecutable);
         }
-        if observed.deployment_slot != self.deployment_slot {
-            return Err(self.slot_pin_refusal(observed.deployment_slot));
+        if deployment_slot != self.deployment_slot {
+            return Err(self.slot_pin_refusal(deployment_slot));
         }
-        if observed.elf_digest != self.elf_digest {
-            return Err(Error::ElfDigestMismatch);
-        }
-        if observed.upgrade_authority != self.upgrade_authority {
+        if upgrade_authority != self.upgrade_authority {
             return Err(Error::UpgradeAuthorityMismatch);
+        }
+        Ok(())
+    }
+
+    /// Authenticate both the native Loader envelope and the complete code commitment.
+    pub fn authenticate_deployment(self, observed: DeploymentObservationV2) -> Result<()> {
+        self.authenticate_loader_envelope(
+            observed.program,
+            observed.program_owner,
+            observed.program_executable,
+            observed.programdata,
+            observed.programdata_owner,
+            observed.programdata_executable,
+            observed.programdata_link,
+            observed.loader_program,
+            observed.deployment_slot,
+            observed.upgrade_authority,
+        )?;
+        if observed.code_commitment != self.code_commitment {
+            return Err(Error::CodeCommitmentMismatch);
         }
         Ok(())
     }
@@ -284,10 +317,11 @@ impl ArtifactReleaseV1 {
 
 /// Chain-derived current observation of one Loader V3 deployment.
 ///
-/// An SBF adapter constructs this only after hostile parsing of the actual
-/// Program and ProgramData accounts and hashing the exact ELF tail.
+/// An adapter constructs this after parsing the actual Program and ProgramData
+/// accounts. The code identity comes from complete native commitment verification
+/// or continuity of an authenticated finalized release, never a caller claim.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DeploymentObservationV1 {
+pub struct DeploymentObservationV2 {
     program: [u8; IDENTITY_BYTES],
     program_owner: [u8; IDENTITY_BYTES],
     program_executable: bool,
@@ -297,11 +331,11 @@ pub struct DeploymentObservationV1 {
     programdata_link: [u8; IDENTITY_BYTES],
     loader_program: [u8; IDENTITY_BYTES],
     deployment_slot: u64,
-    elf_digest: [u8; IDENTITY_BYTES],
+    code_commitment: [u8; IDENTITY_BYTES],
     upgrade_authority: Option<[u8; IDENTITY_BYTES]>,
 }
 
-impl DeploymentObservationV1 {
+impl DeploymentObservationV2 {
     /// Construct one complete chain-derived observation.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -314,7 +348,7 @@ impl DeploymentObservationV1 {
         programdata_link: [u8; IDENTITY_BYTES],
         loader_program: [u8; IDENTITY_BYTES],
         deployment_slot: u64,
-        elf_digest: [u8; IDENTITY_BYTES],
+        code_commitment: [u8; IDENTITY_BYTES],
         upgrade_authority: Option<[u8; IDENTITY_BYTES]>,
     ) -> Result<Self> {
         for identity in [
@@ -324,7 +358,7 @@ impl DeploymentObservationV1 {
             programdata_owner,
             programdata_link,
             loader_program,
-            elf_digest,
+            code_commitment,
         ] {
             require_nonzero(&identity)?;
         }
@@ -341,7 +375,7 @@ impl DeploymentObservationV1 {
             programdata_link,
             loader_program,
             deployment_slot,
-            elf_digest,
+            code_commitment,
             upgrade_authority,
         })
     }

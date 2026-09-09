@@ -8,13 +8,16 @@ import {
 
 import { ascii, hex, isZero, requireNonzero, requireZero, sha256, slice, u16, u64 } from './bytes';
 import { SOLANA_PACKET_BYTES_V1 } from './solanaLimits';
+import { codeCommitmentV2 } from './codeCommitmentV2';
+import { ARTIFACT_RELEASE_SCHEMA_ID_V2, ARTIFACT_RELEASE_SCHEMA_VERSION_V2, ARTIFACT_RELEASE_PROFILE_V2, CHECKED_RELEASE_SCHEMA_V2, CHECKED_RELEASE_FIXED_BYTES_V2, CHECKED_RELEASE_CODE_COMMITMENT_OFFSET_V2 } from './generated/coreFound';
+export { ARTIFACT_RELEASE_SCHEMA_ID_V2 } from './generated/coreFound';
 import { releaseSupersededMeaningV1 } from './refusals';
 import { type RpcAccount, type SolanaRpcClient } from './rpc';
 import {
   ACTIVATION_CACHE_MAGIC_V1,
-  ARTIFACT_RELEASE_MAGIC_V1,
+  ARTIFACT_RELEASE_MAGIC_V2,
   CHECKED_MULTIPROGRAM_MAGIC_V1,
-  CHECKED_RELEASE_MAGIC_V1,
+  CHECKED_RELEASE_MAGIC_V2,
   EXECUTION_RELEASE_SET_MAGIC_V1,
   REGISTRY_INSTRUCTION_MAGIC_V1,
 } from './generated/protocolConstantsV1';
@@ -23,17 +26,16 @@ import {
 } from './generated/claimsCustodyReplayV1';
 
 export const CHECKED_MULTIPROGRAM_BYTES = 1_592;
-export const CHECKED_RELEASE_FIXED_BYTES = 388;
+export const CHECKED_RELEASE_FIXED_BYTES = CHECKED_RELEASE_FIXED_BYTES_V2;
 export const EXECUTION_RELEASE_SET_BYTES = 336;
 export const ARTIFACT_RELEASE_BYTES = 216;
 export const ACTIVATION_CACHE_BYTES = 1_288;
 export const REGISTRY_INSTRUCTION_BYTES = 16;
 /// Exact account frame of one `ActivateRole` instruction, mirroring
 /// `REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1` in `dclutch-registry::svm`.
-/// Activation admits ONE role per transaction: whole-ELF hashing costs about one
-/// compute unit per two bytes, so a five-role instruction exceeds the chain
-/// maximum outright, and `process_activate_role` refuses any other width before
-/// it reads a byte.
+/// Activation resumes the existing cache one exact role at a time. Registry
+/// authenticates the finalized code commitment through native Loader slot and
+/// authority continuity; it does not hash the deployed code again.
 export const REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT = 10;
 export const REGISTRY_REAUTH_ACCOUNT_COUNT = 3;
 export const REGISTRY_ACTIVATION_CACHE_ROLES_OFFSET = 48;
@@ -99,10 +101,6 @@ export const EXECUTION_RELEASE_SET_SCHEMA_ID_V1 = Uint8Array.from([
   0x8b, 0xa3, 0xbc, 0x19, 0x7f, 0xea, 0xa1, 0x87, 0xa0, 0xa3, 0x92, 0x7b, 0x16, 0xb2, 0x5d, 0x83,
   0x79, 0x2c, 0x5f, 0x33, 0x5a, 0xf2, 0x43, 0x39, 0xa5, 0x4c, 0x38, 0xcc, 0x07, 0x23, 0x03, 0x58,
 ]);
-export const ARTIFACT_RELEASE_SCHEMA_ID_V1 = Uint8Array.from([
-  0xae, 0x19, 0xa6, 0x0d, 0xb5, 0x50, 0xb1, 0xa8, 0xa5, 0x1d, 0x46, 0x18, 0xc7, 0x7d, 0xea, 0x54,
-  0x21, 0x17, 0x4a, 0x2a, 0x85, 0x5e, 0xe6, 0x77, 0x89, 0x4f, 0xa9, 0x1b, 0x3c, 0xfd, 0x3b, 0x6c,
-]);
 
 export const REGISTRY_ROLES = ['core', 'claims', 'trading', 'resolution', 'custody'] as const;
 export type RegistryRole = typeof REGISTRY_ROLES[number];
@@ -113,7 +111,7 @@ export type RegistryRole = typeof REGISTRY_ROLES[number];
  *
  * Decision 0012 (`docs/decisions/0012-devnet-iteration-substrate.md`) made this
  * a live distinction rather than a formality. Before it, only `immutable` was
- * admitted anywhere: the fast path reused the activation-bound ELF digest
+ * admitted anywhere: the fast path reused the finalization-bound code commitment
  * because irrevocability meant the bytes could never move. That bought
  * soundness at a price the project refused to keep paying — every iteration of
  * the devnet substrate cost ~31.7 SOL of unrecoverable rent, and devnet SOL
@@ -130,13 +128,13 @@ export type RegistryRole = typeof REGISTRY_ROLES[number];
  */
 export type ArtifactUpgradePolicyV1 = 'immutable' | 'exact-authority';
 
-export type ArtifactReleaseV1 = Readonly<{
+export type ArtifactReleaseV2 = Readonly<{
   bytes: Uint8Array;
   program: string;
   loader: string;
   programData: string;
   semanticReleaseId: string;
-  elfDigest: string;
+  codeCommitment: string;
   deploymentSlot: bigint;
   upgradePolicy: ArtifactUpgradePolicyV1;
   upgradeAuthority: string | null;
@@ -156,14 +154,14 @@ export type ArtifactReleaseV1 = Readonly<{
  *   only by an `Upgrade` signed by that key, and every such move breaks the
  *   slot pin and refuses every dependent open market by name.
  *
- * A decoded release is already canonical in this respect: `decodeArtifactReleaseV1`
+ * A decoded release is already canonical in this respect: `decodeArtifactReleaseV2`
  * refuses a mismatched policy/authority pairing before anything reaches here.
  * This predicate exists so the browser states its admission out loud in one
  * greppable place rather than by the absence of a check — the same reason the
  * contract states it — and so a hand-constructed release cannot slip a
  * non-canonical pairing past a caller that skipped `decode`.
  */
-export function requireSlotPinnedReleaseV1(artifact: ArtifactReleaseV1, field: string): void {
+export function requireSlotPinnedReleaseV1(artifact: ArtifactReleaseV2, field: string): void {
   const canonical = (artifact.upgradePolicy === 'immutable' && artifact.upgradeAuthority === null)
     || (artifact.upgradePolicy === 'exact-authority' && artifact.upgradeAuthority !== null);
   if (canonical) return;
@@ -177,7 +175,7 @@ export type SlotPinRefusalV1 = 'ReleaseSupersededByUpgrade' | 'DeploymentSlotMis
 /**
  * Name a slot mismatch: superseded by an upgrade, or plain staleness.
  *
- * The exact mirror of `ArtifactReleaseV1::slot_pin_refusal`
+ * The exact mirror of `ArtifactReleaseV2::slot_pin_refusal`
  * (`crates/dclutch-registry/src/artifact.rs`). An `immutable` release
  * pins a slot nothing can move, so any mismatch is a substituted or
  * wrong-generation observation. An `exact-authority` release pins a slot the
@@ -185,7 +183,7 @@ export type SlotPinRefusalV1 = 'ReleaseSupersededByUpgrade' | 'DeploymentSlotMis
  * later observed slot is exactly one event, and it gets its own name so a
  * reader gets a remedy instead of a mystery.
  */
-export function slotPinRefusalV1(artifact: ArtifactReleaseV1, observedDeploymentSlot: bigint): SlotPinRefusalV1 {
+export function slotPinRefusalV1(artifact: ArtifactReleaseV2, observedDeploymentSlot: bigint): SlotPinRefusalV1 {
   return artifact.upgradePolicy === 'exact-authority' && observedDeploymentSlot > artifact.deploymentSlot
     ? 'ReleaseSupersededByUpgrade'
     : 'DeploymentSlotMismatch';
@@ -201,7 +199,7 @@ export function slotPinRefusalV1(artifact: ArtifactReleaseV1, observedDeployment
  * is not evidence, and numbers without the story make the reader do the
  * protocol reasoning themselves.
  */
-export function slotPinRefusalSentenceV1(artifact: ArtifactReleaseV1, programAddress: string, observedDeploymentSlot: bigint): string {
+export function slotPinRefusalSentenceV1(artifact: ArtifactReleaseV2, programAddress: string, observedDeploymentSlot: bigint): string {
   const pinned = `the artifact release pins deployment slot ${artifact.deploymentSlot}, and the chain reports slot ${observedDeploymentSlot}`;
   if (slotPinRefusalV1(artifact, observedDeploymentSlot) === 'ReleaseSupersededByUpgrade') {
     return `ReleaseSupersededByUpgrade: ${programAddress} has been upgraded since this release authenticated it — ${pinned}. ${releaseSupersededMeaningV1()}`;
@@ -213,7 +211,7 @@ export function slotPinRefusalSentenceV1(artifact: ArtifactReleaseV1, programAdd
 }
 
 /** Render a changed upgrade authority the way the chain names it. */
-export function upgradeAuthorityMismatchSentenceV1(artifact: ArtifactReleaseV1, programAddress: string, observedAuthority: string | null): string {
+export function upgradeAuthorityMismatchSentenceV1(artifact: ArtifactReleaseV2, programAddress: string, observedAuthority: string | null): string {
   const observed = observedAuthority === null ? 'no upgrade authority' : `the upgrade authority ${observedAuthority}`;
   const bound = artifact.upgradeAuthority === null ? 'none' : artifact.upgradeAuthority;
   return `UpgradeAuthorityMismatch: ${programAddress} now carries ${observed}, and the artifact release binds ${bound}. A release is an identity contract over one deployment, and who may replace its bytes is part of that identity, so a changed authority is refused whether or not any byte has moved yet.`;
@@ -234,11 +232,12 @@ export type CheckedSemanticKindV1 = 'capability' | 'pyth-v1' | 'unowned';
 
 const SEMANTIC_KIND_BY_TAG: ReadonlyArray<CheckedSemanticKindV1> = Object.freeze(['capability', 'pyth-v1', 'unowned']);
 
-export type CheckedReleaseV1 = Readonly<{
+export type CheckedReleaseV2 = Readonly<{
   bytes: Uint8Array;
   checkedReleaseId: string;
   semanticKind: CheckedSemanticKindV1;
-  artifact: ArtifactReleaseV1;
+  artifact: ArtifactReleaseV2;
+  artifactDigest: string;
   programDigest: string;
   programDataDigest: string;
   programBytes: bigint;
@@ -260,7 +259,7 @@ export type CheckedMultiprogramV1 = Readonly<{
   bytes: Uint8Array;
   checkedId: string;
   releaseSet: ExecutionReleaseSetV1;
-  artifacts: Readonly<Record<RegistryRole, ArtifactReleaseV1>>;
+  artifacts: Readonly<Record<RegistryRole, ArtifactReleaseV2>>;
   checkedReleaseIds: Readonly<Record<RegistryRole, string>>;
 }>;
 
@@ -274,12 +273,13 @@ export type RegistryRoleAddressesV1 = Readonly<{
 /// One role's unsigned ten-account activation transaction.
 ///
 /// `alreadyActivated` reports that the observed Registry-owned cache already
-/// holds this exact role. A repeat is idempotent on chain and still pays the
-/// full ELF hash, so a caller wanting the cheapest walk-up skips it.
+/// holds this exact role. A repeat is idempotent and still incurs transaction
+/// fees. Code bytes are verified by this client; activation checks Loader continuity.
 export type RegistryRoleActivationPacketV1 = Readonly<{
   role: RegistryRole;
   alreadyActivated: boolean;
-  elfBytesHashed: number;
+  /** Bytes authenticated locally while preparing this packet, not onchain CU work. */
+  codeBytesVerifiedOffchain: number;
   addresses: RegistryRoleAddressesV1;
   transaction: VersionedTransaction;
   wireBytes: Uint8Array;
@@ -307,7 +307,7 @@ export type RegistryActivationPlanV1 = Readonly<{
   roles: Readonly<Record<RegistryRole, RegistryRoleAddressesV1>>;
   evidence: CheckedMultiprogramV1;
   packets: ReadonlyArray<RegistryRoleActivationPacketV1>;
-  totalElfBytesHashed: number;
+  totalCodeBytesVerifiedOffchain: number;
   computeUnitLimit: number;
 }>;
 
@@ -319,7 +319,7 @@ export type RegistryReauthenticationPlanV1 = Readonly<{
   role: RegistryRole;
   releaseSetId: string;
   artifactReleaseId: string;
-  artifact: ArtifactReleaseV1;
+  artifact: ArtifactReleaseV2;
   transaction: VersionedTransaction;
   wireBytes: Uint8Array;
   requiredSigners: ReadonlyArray<string>;
@@ -374,22 +374,22 @@ function asciiText(bytes: Uint8Array, offset: number, field: string): Readonly<{
 
 function artifactBytesFromChecked(bytes: Uint8Array): Uint8Array {
   const output = new Uint8Array(ARTIFACT_RELEASE_BYTES);
-  output.set(new TextEncoder().encode(ARTIFACT_RELEASE_MAGIC_V1), 0);
-  new DataView(output.buffer).setUint16(8, 1, true);
-  new DataView(output.buffer).setUint16(10, 1, true);
+  output.set(new TextEncoder().encode(ARTIFACT_RELEASE_MAGIC_V2), 0);
+  new DataView(output.buffer).setUint16(8, ARTIFACT_RELEASE_SCHEMA_VERSION_V2, true);
+  new DataView(output.buffer).setUint16(10, ARTIFACT_RELEASE_PROFILE_V2, true);
   output[12] = bytes[12] === 0 ? 0 : 1;
   output.set(slice(bytes, 196, 32), 16);
   output.set(slice(bytes, 260, 32), 48);
   output.set(slice(bytes, 228, 32), 80);
   output.set(slice(bytes, 100, 32), 112);
-  output.set(slice(bytes, 68, 32), 144);
+  output.set(slice(bytes, CHECKED_RELEASE_CODE_COMMITMENT_OFFSET_V2, 32), 144);
   output.set(slice(bytes, 52, 8), 176);
   output.set(slice(bytes, 292, 32), 184);
   return output;
 }
 
-export function decodeArtifactReleaseV1(bytes: Uint8Array): ArtifactReleaseV1 {
-  if (bytes.length !== ARTIFACT_RELEASE_BYTES || ascii(bytes, 0, 8) !== ARTIFACT_RELEASE_MAGIC_V1 || u16(bytes, 8) !== 1 || u16(bytes, 10) !== 1) {
+export function decodeArtifactReleaseV2(bytes: Uint8Array): ArtifactReleaseV2 {
+  if (bytes.length !== ARTIFACT_RELEASE_BYTES || ascii(bytes, 0, 8) !== ARTIFACT_RELEASE_MAGIC_V2 || u16(bytes, 8) !== ARTIFACT_RELEASE_SCHEMA_VERSION_V2 || u16(bytes, 10) !== ARTIFACT_RELEASE_PROFILE_V2) {
     throw new Error('artifact release has the wrong exact width, magic, schema, or profile');
   }
   requireZero(bytes, 13, 3, 'artifact release header');
@@ -406,14 +406,14 @@ export function decodeArtifactReleaseV1(bytes: Uint8Array): ArtifactReleaseV1 {
   if ((policy === 0 && !isZero(authority)) || (policy === 1 && isZero(authority))) throw new Error('artifact release upgrade authority is noncanonical');
   return Object.freeze({
     bytes: new Uint8Array(bytes), program: new PublicKey(program).toBase58(), loader: new PublicKey(loader).toBase58(),
-    programData: new PublicKey(programData).toBase58(), semanticReleaseId: hex(semantic), elfDigest: hex(elf),
+    programData: new PublicKey(programData).toBase58(), semanticReleaseId: hex(semantic), codeCommitment: hex(elf),
     deploymentSlot: u64(bytes, 176), upgradePolicy: policy === 0 ? 'immutable' : 'exact-authority',
     upgradeAuthority: policy === 0 ? null : new PublicKey(authority).toBase58(),
   });
 }
 
-export async function decodeCheckedReleaseV1(bytes: Uint8Array): Promise<CheckedReleaseV1> {
-  if (bytes.length < CHECKED_RELEASE_FIXED_BYTES || ascii(bytes, 0, 8) !== CHECKED_RELEASE_MAGIC_V1 || u16(bytes, 8) !== 1) throw new Error('checked release has the wrong fixed header');
+export async function decodeCheckedReleaseV2(bytes: Uint8Array): Promise<CheckedReleaseV2> {
+  if (bytes.length < CHECKED_RELEASE_FIXED_BYTES || ascii(bytes, 0, 8) !== CHECKED_RELEASE_MAGIC_V2 || u16(bytes, 8) !== CHECKED_RELEASE_SCHEMA_V2) throw new Error('checked release has the wrong fixed header');
   // Semantic kind 2 is `unowned`, which is what EVERY checked release the
   // pipeline produces for the seven role programs carries — no first-party
   // contract decodes a role-program release preimage, so no other kind is
@@ -426,21 +426,21 @@ export async function decodeCheckedReleaseV1(bytes: Uint8Array): Promise<Checked
   if (new DataView(bytes.buffer, bytes.byteOffset + 16, 4).getUint32(0, true) !== bytes.length) throw new Error('checked release declared length does not equal its exact bytes');
   const elfBytes = u64(bytes, 28); const programBytes = u64(bytes, 36); const programDataBytes = u64(bytes, 44);
   if (u64(bytes, 20) === 0n || elfBytes < 64n || programBytes !== 36n || u64(bytes, 60) !== 45n || programDataBytes < 45n + elfBytes || programDataBytes > 10_485_760n) throw new Error('checked release carries unsupported Loader-v3 geometry');
-  const identities = [68, 100, 132, 164, 196, 228, 260, 324, 356].map((offset) => slice(bytes, offset, 32));
+  const identities = [68, 100, 132, 164, 196, 228, 260, 324, 356, CHECKED_RELEASE_CODE_COMMITMENT_OFFSET_V2].map((offset) => slice(bytes, offset, 32));
   allNonzero(identities, 'checked release identity');
   if (same(identities[4], identities[5]) || same(identities[4], identities[6]) || same(identities[5], identities[6])) throw new Error('checked release aliases Loader identities');
   const authority = slice(bytes, 292, 32);
   if ((bytes[12] === 0 && !isZero(authority)) || (bytes[12] === 1 && isZero(authority))) throw new Error('checked release upgrade authority is noncanonical');
-  let offset = CHECKED_RELEASE_FIXED_BYTES;
+  let offset: number = CHECKED_RELEASE_FIXED_BYTES;
   const texts: string[] = [];
   for (let index = 0; index < 6; index += 1) { const decoded = asciiText(bytes, offset, `checked release metadata ${index}`); texts.push(decoded.value); offset = decoded.next; }
   const assumptions: string[] = [];
   for (let index = 0; index < bytes[13]; index += 1) { const decoded = asciiText(bytes, offset, `checked release assumption ${index}`); assumptions.push(decoded.value); offset = decoded.next; }
   if (offset !== bytes.length || assumptions.length === 0 || assumptions.some((value, index) => index > 0 && value <= assumptions[index - 1])) throw new Error('checked release assumptions or trailing bytes are noncanonical');
-  const artifact = decodeArtifactReleaseV1(artifactBytesFromChecked(bytes));
+  const artifact = decodeArtifactReleaseV2(artifactBytesFromChecked(bytes));
   return Object.freeze({
     bytes: new Uint8Array(bytes), checkedReleaseId: hex(await sha256(bytes)), semanticKind: SEMANTIC_KIND_BY_TAG[semanticTag], artifact,
-    programDigest: hex(identities[2]), programDataDigest: hex(identities[3]), programBytes, programDataBytes, elfBytes,
+    artifactDigest: hex(identities[0]), programDigest: hex(identities[2]), programDataDigest: hex(identities[3]), programBytes, programDataBytes, elfBytes,
     sourceRevision: texts[0], buildCommand: texts[5], assumptions: Object.freeze(assumptions),
   });
 }
@@ -464,11 +464,11 @@ export async function decodeCheckedMultiprogramV1(bytes: Uint8Array, checkedByte
   if (bytes.length !== CHECKED_MULTIPROGRAM_BYTES || ascii(bytes, 0, 8) !== CHECKED_MULTIPROGRAM_MAGIC_V1 || u16(bytes, 8) !== 1 || u16(bytes, 10) !== 5) throw new Error('checked multiprogram has the wrong exact header');
   requireZero(bytes, 12, 4, 'checked multiprogram header');
   const releaseSet = await decodeExecutionReleaseSetV1(slice(bytes, 16, EXECUTION_RELEASE_SET_BYTES));
-  const artifacts: ArtifactReleaseV1[] = []; const checkedReleaseIds: string[] = [];
-  const checked = await Promise.all(REGISTRY_ROLES.map((role) => decodeCheckedReleaseV1(checkedBytes[role])));
+  const artifacts: ArtifactReleaseV2[] = []; const checkedReleaseIds: string[] = [];
+  const checked = await Promise.all(REGISTRY_ROLES.map((role) => decodeCheckedReleaseV2(checkedBytes[role])));
   for (let index = 0; index < REGISTRY_ROLES.length; index += 1) {
     const role = REGISTRY_ROLES[index]; const offset = 352 + index * 248;
-    const artifact = decodeArtifactReleaseV1(slice(bytes, offset, ARTIFACT_RELEASE_BYTES));
+    const artifact = decodeArtifactReleaseV2(slice(bytes, offset, ARTIFACT_RELEASE_BYTES));
     const artifactId = hex(await sha256(artifact.bytes)); const checkedReleaseId = hex(slice(bytes, offset + ARTIFACT_RELEASE_BYTES, 32));
     if (artifact.program !== releaseSet.roles[role].program || artifactId !== releaseSet.roles[role].artifactReleaseId) throw new Error(`${role} artifact does not implement its release-set binding`);
     if (checked[index].checkedReleaseId !== checkedReleaseId || !same(checked[index].artifact.bytes, artifact.bytes)) throw new Error(`${role} full checked release does not rebuild the multiprogram evidence`);
@@ -557,16 +557,16 @@ export function activatedRoleProgramV1(bytes: Uint8Array, role: RegistryRole): s
   if (index < 0) throw new Error('activation cache does not name this execution role');
   requireActivationCacheHeader(bytes);
   const offset = REGISTRY_ACTIVATION_CACHE_ROLES_OFFSET + index * REGISTRY_ACTIVATED_ROLE_BYTES;
-  return decodeArtifactReleaseV1(slice(bytes, offset + 32, ARTIFACT_RELEASE_BYTES)).program;
+  return decodeArtifactReleaseV2(slice(bytes, offset + 32, ARTIFACT_RELEASE_BYTES)).program;
 }
 
-function parseCache(bytes: Uint8Array, registryProgram: string, cacheAddress: string): Readonly<{ releaseSetId: string; artifacts: Readonly<Record<RegistryRole, ArtifactReleaseV1>>; artifactIds: Readonly<Record<RegistryRole, string>> }> {
+function parseCache(bytes: Uint8Array, registryProgram: string, cacheAddress: string): Readonly<{ releaseSetId: string; artifacts: Readonly<Record<RegistryRole, ArtifactReleaseV2>>; artifactIds: Readonly<Record<RegistryRole, string>> }> {
   requireActivationCacheHeader(bytes);
   const releaseSetId = hex(slice(bytes, 16, 32)); requireNonzero(slice(bytes, 16, 32), 'activation release-set identity');
   const registry = key(registryProgram, 'Registry program'); const derived = PublicKey.findProgramAddressSync([ACTIVATION_SEED, slice(bytes, 16, 32)], registry)[0].toBase58();
   if (derived !== cacheAddress) throw new Error('activation cache is not the release-derived Registry PDA');
-  const artifacts: ArtifactReleaseV1[] = []; const artifactIds: string[] = [];
-  for (let index = 0; index < REGISTRY_ROLES.length; index += 1) { const offset = REGISTRY_ACTIVATION_CACHE_ROLES_OFFSET + index * REGISTRY_ACTIVATED_ROLE_BYTES; const id = slice(bytes, offset, 32); requireNonzero(id, 'cached artifact release identity'); const artifact = decodeArtifactReleaseV1(slice(bytes, offset + 32, ARTIFACT_RELEASE_BYTES)); artifacts.push(artifact); artifactIds.push(hex(id)); }
+  const artifacts: ArtifactReleaseV2[] = []; const artifactIds: string[] = [];
+  for (let index = 0; index < REGISTRY_ROLES.length; index += 1) { const offset = REGISTRY_ACTIVATION_CACHE_ROLES_OFFSET + index * REGISTRY_ACTIVATED_ROLE_BYTES; const id = slice(bytes, offset, 32); requireNonzero(id, 'cached artifact release identity'); const artifact = decodeArtifactReleaseV2(slice(bytes, offset + 32, ARTIFACT_RELEASE_BYTES)); artifacts.push(artifact); artifactIds.push(hex(id)); }
   // The Core role's program is deliberately NOT compared to the Registry
   // program. `initialize_activation_cache_v1` in `dclutch-registry`
   // states the boundary: "Registry identity is an account-ownership boundary,
@@ -582,7 +582,7 @@ function parseCache(bytes: Uint8Array, registryProgram: string, cacheAddress: st
   return Object.freeze({ releaseSetId, artifacts: Object.freeze(roleRecord(artifacts)), artifactIds: Object.freeze(roleRecord(artifactIds)) });
 }
 
-function programDataView(program: RpcAccount, programAddress: string, programData: RpcAccount, programDataAddress: string, artifact: ArtifactReleaseV1): Uint8Array {
+function programDataView(program: RpcAccount, programAddress: string, programData: RpcAccount, programDataAddress: string, artifact: ArtifactReleaseV2): Uint8Array {
   if (program.owner !== UPGRADEABLE_LOADER_ID || !program.executable || program.data.length !== LOADER_V3_PROGRAM_BYTES || new DataView(program.data.buffer, program.data.byteOffset, 4).getUint32(0, true) !== 2) throw new Error(`${programAddress} is not an exact Loader-v3 Program account`);
   const link = new PublicKey(slice(program.data, 4, 32)).toBase58(); const derived = PublicKey.findProgramAddressSync([key(programAddress, 'role Program').toBytes()], key(UPGRADEABLE_LOADER_ID, 'Upgradeable Loader'))[0].toBase58();
   if (link !== programDataAddress || derived !== programDataAddress || artifact.program !== programAddress || artifact.programData !== programDataAddress || artifact.loader !== UPGRADEABLE_LOADER_ID) throw new Error('ProgramData link, PDA, or artifact Loader identity does not join');
@@ -610,19 +610,21 @@ function programDataView(program: RpcAccount, programAddress: string, programDat
   return slice(programData.data, LOADER_V3_PROGRAMDATA_OFFSET, programData.data.length - LOADER_V3_PROGRAMDATA_OFFSET);
 }
 
-async function authenticateDeployment(program: RpcAccount, programAddress: string, programData: RpcAccount, programDataAddress: string, artifact: ArtifactReleaseV1, checked?: CheckedReleaseV1): Promise<number> {
+async function authenticateDeployment(program: RpcAccount, programAddress: string, programData: RpcAccount, programDataAddress: string, artifact: ArtifactReleaseV2, checked?: CheckedReleaseV2): Promise<number> {
   const elf = programDataView(program, programAddress, programData, programDataAddress, artifact);
-  if (hex(await sha256(elf)) !== artifact.elfDigest) throw new Error(`${programAddress} current ELF differs from the finalized artifact release`);
+  if (hex(await codeCommitmentV2(elf)) !== artifact.codeCommitment) throw new Error(`${programAddress} current code commitment differs from the finalized artifact release`);
   if (checked !== undefined) {
-    if (BigInt(program.data.length) !== checked.programBytes || BigInt(programData.data.length) !== checked.programDataBytes || BigInt(elf.length) !== checked.elfBytes) throw new Error(`${programAddress} account geometry differs from its complete checked release`);
+    if (BigInt(program.data.length) !== checked.programBytes || BigInt(programData.data.length) !== checked.programDataBytes || BigInt(elf.length) < checked.elfBytes) throw new Error(`${programAddress} account geometry differs from its complete checked release`);
+    const artifactLength = Number(checked.elfBytes);
+    if (elf.subarray(artifactLength).some((byte) => byte !== 0) || hex(await sha256(elf.subarray(0, artifactLength))) !== checked.artifactDigest) throw new Error(`${programAddress} code differs from checked artifact bytes or zero padding`);
     if (hex(await sha256(program.data)) !== checked.programDigest || hex(await sha256(programData.data)) !== checked.programDataDigest) throw new Error(`${programAddress} current Loader account digest differs from its complete checked release`);
   }
   return elf.length;
 }
 
-export async function authenticateArtifactDeploymentV1(program: RpcAccount, programAddress: string, programData: RpcAccount, programDataAddress: string, artifact: ArtifactReleaseV1): Promise<Readonly<{ elfBytes: number; elfDigest: string }>> {
+export async function authenticateArtifactDeploymentV1(program: RpcAccount, programAddress: string, programData: RpcAccount, programDataAddress: string, artifact: ArtifactReleaseV2): Promise<Readonly<{ elfBytes: number; codeCommitment: string }>> {
   const elfBytes = await authenticateDeployment(program, programAddress, programData, programDataAddress, artifact);
-  return Object.freeze({ elfBytes, elfDigest: artifact.elfDigest });
+  return Object.freeze({ elfBytes, codeCommitment: artifact.codeCommitment });
 }
 
 function accountMap(observations: Awaited<ReturnType<RegistryRpc['multipleAccounts']>>): ReadonlyMap<string, RpcAccount | null> {
@@ -710,7 +712,7 @@ export async function prepareRegistryActivation(client: RegistryRpc, input: Read
   const evidence = await decodeCheckedMultiprogramV1(input.multiprogram, input.checkedReleases);
   const releaseDigest = await sha256(evidence.releaseSet.bytes); const releasePdas = recordPdas(registry, EXECUTION_RELEASE_SET_SCHEMA_ID_V1, releaseDigest);
   const roleAddresses = await Promise.all(REGISTRY_ROLES.map(async (role): Promise<RegistryRoleAddressesV1> => {
-    const artifact = evidence.artifacts[role]; const digest = await sha256(artifact.bytes); const pdas = recordPdas(registry, ARTIFACT_RELEASE_SCHEMA_ID_V1, digest);
+    const artifact = evidence.artifacts[role]; const digest = await sha256(artifact.bytes); const pdas = recordPdas(registry, ARTIFACT_RELEASE_SCHEMA_ID_V2, digest);
     return Object.freeze({ ...pdas, program: artifact.program, programData: artifact.programData });
   }));
   const roles = Object.freeze(roleRecord(roleAddresses)); const cache = PublicKey.findProgramAddressSync([ACTIVATION_SEED, releaseDigest], registry)[0].toBase58();
@@ -747,7 +749,7 @@ export async function prepareRegistryActivation(client: RegistryRpc, input: Read
     const addressesForRole = roles[role]; const artifact = evidence.artifacts[role]; const record = required(accounts, addressesForRole.record, `${role} artifact record`);
     if (record.owner !== input.registryProgram || record.executable || !same(record.data, artifact.bytes) || BigInt(record.lamports) < artifactRent) throw new Error(`${role} finalized artifact record bytes, owner, or rent reserve differ from checked evidence`);
     vacancy(accounts, addressesForRole.staging, `${role} staging cursor`);
-    const hashed = await authenticateDeployment(required(loaderAccounts, addressesForRole.program, `${role} Program`), addressesForRole.program, required(loaderAccounts, addressesForRole.programData, `${role} ProgramData`), addressesForRole.programData, artifact, await decodeCheckedReleaseV1(input.checkedReleases[role]));
+    const hashed = await authenticateDeployment(required(loaderAccounts, addressesForRole.program, `${role} Program`), addressesForRole.program, required(loaderAccounts, addressesForRole.programData, `${role} ProgramData`), addressesForRole.programData, artifact, await decodeCheckedReleaseV2(input.checkedReleases[role]));
     elfBytesByRole.push(hashed); elfBytes += hashed;
   }
   if (!Number.isSafeInteger(elfBytes)) throw new Error('aggregate ELF byte count exceeds browser integer precision');
@@ -763,9 +765,9 @@ export async function prepareRegistryActivation(client: RegistryRpc, input: Read
   const blockhash = await client.latestMutationBlockhash(observation.slot);
   const packets = REGISTRY_ROLES.map((role, index) => {
     const compiled = compileRegistryRoleActivationTransaction({ payer: input.payer, registryProgram: input.registryProgram, recentBlockhash: blockhash.blockhash, computeUnitLimit: input.computeUnitLimit, cache, releaseSetRecord: releasePdas.record, releaseSetStaging: releasePdas.staging, role, addresses: roles[role] });
-    return Object.freeze({ role, alreadyActivated: activated.includes(role), elfBytesHashed: elfBytesByRole[index], addresses: roles[role], transaction: compiled.transaction, wireBytes: compiled.wireBytes, requiredSigners: compiled.requiredSigners });
+    return Object.freeze({ role, alreadyActivated: activated.includes(role), codeBytesVerifiedOffchain: elfBytesByRole[index], addresses: roles[role], transaction: compiled.transaction, wireBytes: compiled.wireBytes, requiredSigners: compiled.requiredSigners });
   });
-  return Object.freeze({ observedSlot: observation.slot, registryProgram: input.registryProgram, payer: input.payer, cache, mode, activatedRoles: activated, remainingRoles: remaining, cacheRentDebitLamports: debit.toString(), releaseSetRecord: releasePdas.record, releaseSetStaging: releasePdas.staging, roles, evidence, packets: Object.freeze(packets), totalElfBytesHashed: elfBytes, computeUnitLimit: input.computeUnitLimit });
+  return Object.freeze({ observedSlot: observation.slot, registryProgram: input.registryProgram, payer: input.payer, cache, mode, activatedRoles: activated, remainingRoles: remaining, cacheRentDebitLamports: debit.toString(), releaseSetRecord: releasePdas.record, releaseSetStaging: releasePdas.staging, roles, evidence, packets: Object.freeze(packets), totalCodeBytesVerifiedOffchain: elfBytes, computeUnitLimit: input.computeUnitLimit });
 }
 
 export async function prepareRegistryReauthentication(client: RegistryRpc, input: Readonly<{ registryProgram: string; payer: string; cache: string; role: RegistryRole; computeUnitLimit: number }>): Promise<RegistryReauthenticationPlanV1> {

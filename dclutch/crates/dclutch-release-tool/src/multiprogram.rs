@@ -1,8 +1,8 @@
 //! Checked evidence for one complete five-role execution release set.
 //!
 //! The onchain Registry remains the sole runtime authority. This module binds
-//! its canonical release-set preimage to five exact `CheckedReleaseV1`
-//! manifests and the five compact `ArtifactReleaseV1` records derived from
+//! its canonical release-set preimage to five exact `CheckedReleaseV2`
+//! manifests and the five compact `ArtifactReleaseV2` records derived from
 //! them. It performs no RPC, signing, deployment, or account mutation.
 
 use dclutch_core_contract::ContentId;
@@ -10,9 +10,9 @@ use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, EXECUTION_RELEASE_SET_BYTES_V1, EXECUTION_ROLE_COUNT_V1,
     ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1, ProgramIdentityV1,
 };
-use dclutch_registry::{ARTIFACT_RELEASE_BYTES_V1, ArtifactReleaseV1, ArtifactUpgradePolicyV1};
+use dclutch_registry::{ARTIFACT_RELEASE_BYTES_V2, ArtifactReleaseV2, ArtifactUpgradePolicyV1};
 
-use crate::{CheckedReleaseV1, Error, Result, encode_hex, sha256};
+use crate::{CheckedReleaseV2, Error, Result, encode_hex, sha256};
 
 /// Canonical checked multiprogram-manifest magic.
 pub const CHECKED_MULTIPROGRAM_MAGIC_V1: [u8; 8] = *b"DCLTMPR1";
@@ -21,7 +21,7 @@ pub const CHECKED_MULTIPROGRAM_SCHEMA_V1: u16 = 1;
 /// Fixed header before the release set and role evidence.
 pub const CHECKED_MULTIPROGRAM_HEADER_BYTES_V1: usize = 16;
 /// Bytes in one role's compact artifact record and checked-release identity.
-pub const CHECKED_MULTIPROGRAM_ROLE_BYTES_V1: usize = ARTIFACT_RELEASE_BYTES_V1 + 32;
+pub const CHECKED_MULTIPROGRAM_ROLE_BYTES_V1: usize = ARTIFACT_RELEASE_BYTES_V2 + 32;
 /// Exact width of one checked five-role execution-set manifest.
 pub const CHECKED_MULTIPROGRAM_BYTES_V1: usize = CHECKED_MULTIPROGRAM_HEADER_BYTES_V1
     + EXECUTION_RELEASE_SET_BYTES_V1
@@ -46,7 +46,7 @@ const ROLES: [ExecutionRoleV1; EXECUTION_ROLE_COUNT_V1] = [
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CheckedExecutionReleaseSetV1 {
     release_set: ExecutionReleaseSetV1,
-    artifacts: [ArtifactReleaseV1; EXECUTION_ROLE_COUNT_V1],
+    artifacts: [ArtifactReleaseV2; EXECUTION_ROLE_COUNT_V1],
     checked_release_ids: [ContentId; EXECUTION_ROLE_COUNT_V1],
 }
 
@@ -85,10 +85,10 @@ impl CheckedExecutionReleaseSetV1 {
         {
             let offset = role_offset(index)?;
             let artifact =
-                ArtifactReleaseV1::decode(subslice(bytes, offset, ARTIFACT_RELEASE_BYTES_V1)?)
+                ArtifactReleaseV2::decode(subslice(bytes, offset, ARTIFACT_RELEASE_BYTES_V2)?)
                     .map_err(|_| Error::InvalidArtifactRelease)?;
             let checked_release_id =
-                ContentId::new(read_array(bytes, offset + ARTIFACT_RELEASE_BYTES_V1)?)
+                ContentId::new(read_array(bytes, offset + ARTIFACT_RELEASE_BYTES_V2)?)
                     .map_err(|_| Error::ZeroIdentifier)?;
             validate_role_binding(release_set, role, artifact)?;
             *artifact_slot = artifact;
@@ -134,7 +134,7 @@ impl CheckedExecutionReleaseSetV1 {
             copy(&mut output, offset, &artifact.to_bytes());
             copy(
                 &mut output,
-                offset + ARTIFACT_RELEASE_BYTES_V1,
+                offset + ARTIFACT_RELEASE_BYTES_V2,
                 checked_release_id.as_bytes(),
             );
         }
@@ -199,7 +199,7 @@ impl CheckedExecutionReleaseSetV1 {
     }
 
     /// Return the role-ordered compact artifact-release records.
-    pub const fn artifacts(self) -> [ArtifactReleaseV1; EXECUTION_ROLE_COUNT_V1] {
+    pub const fn artifacts(self) -> [ArtifactReleaseV2; EXECUTION_ROLE_COUNT_V1] {
         self.artifacts
     }
 
@@ -213,7 +213,7 @@ impl CheckedExecutionReleaseSetV1 {
 /// artifact manifests and the Registry release set they must implement.
 pub fn build_checked_execution_release_set(
     release_set: ExecutionReleaseSetV1,
-    checked: [&CheckedReleaseV1; EXECUTION_ROLE_COUNT_V1],
+    checked: [&CheckedReleaseV2; EXECUTION_ROLE_COUNT_V1],
 ) -> Result<CheckedExecutionReleaseSetV1> {
     let mut artifacts = [artifact_placeholder()?; EXECUTION_ROLE_COUNT_V1];
     let mut checked_release_ids = [content_placeholder()?; EXECUTION_ROLE_COUNT_V1];
@@ -240,14 +240,14 @@ pub fn build_checked_execution_release_set(
 /// artifact manifests already determine.
 ///
 /// The release set is not free evidence: every binding is a pure function of the
-/// role's `ArtifactReleaseV1`, which is itself a pure function of that role's
+/// role's `ArtifactReleaseV2`, which is itself a pure function of that role's
 /// checked manifest. Without this derivation a caller has to hand-assemble the
 /// 336-byte preimage that [`build_checked_execution_release_set`] will then
 /// insist on, which is a transcription step with no independent authority and a
 /// real chance of silent divergence. Deriving it adds no new authority: the
 /// onchain Registry activation cache remains the sole runtime authority.
 pub fn derive_execution_release_set(
-    checked: [&CheckedReleaseV1; EXECUTION_ROLE_COUNT_V1],
+    checked: [&CheckedReleaseV2; EXECUTION_ROLE_COUNT_V1],
 ) -> Result<ExecutionReleaseSetV1> {
     let mut bindings = Vec::with_capacity(EXECUTION_ROLE_COUNT_V1);
     for release in checked {
@@ -273,11 +273,11 @@ pub fn verify_checked_execution_release_set(
     let expected = CheckedExecutionReleaseSetV1::decode(manifest)?;
     let [core, claims, trading, resolution, custody] = checked_manifests;
     let checked = [
-        CheckedReleaseV1::decode(core)?,
-        CheckedReleaseV1::decode(claims)?,
-        CheckedReleaseV1::decode(trading)?,
-        CheckedReleaseV1::decode(resolution)?,
-        CheckedReleaseV1::decode(custody)?,
+        CheckedReleaseV2::decode(core)?,
+        CheckedReleaseV2::decode(claims)?,
+        CheckedReleaseV2::decode(trading)?,
+        CheckedReleaseV2::decode(resolution)?,
+        CheckedReleaseV2::decode(custody)?,
     ];
     let rebuilt = build_checked_execution_release_set(expected.release_set, checked.each_ref())?;
     if rebuilt != expected {
@@ -289,7 +289,7 @@ pub fn verify_checked_execution_release_set(
 /// Derive the sole compact onchain artifact-release record from one complete
 /// checked build manifest. The returned bytes are suitable for content hashing
 /// and finalized-record publication; this function performs no publication.
-pub fn artifact_release_from_checked(checked: &CheckedReleaseV1) -> Result<ArtifactReleaseV1> {
+pub fn artifact_release_from_checked(checked: &CheckedReleaseV2) -> Result<ArtifactReleaseV2> {
     let program =
         ProgramIdentityV1::new(checked.program_id()).map_err(|_| Error::InvalidArtifactRelease)?;
     let loader = ProgramIdentityV1::new(checked.loader_program_id())
@@ -298,12 +298,12 @@ pub fn artifact_release_from_checked(checked: &CheckedReleaseV1) -> Result<Artif
         None => (ArtifactUpgradePolicyV1::Immutable, None),
         Some(authority) => (ArtifactUpgradePolicyV1::ExactAuthority, Some(authority)),
     };
-    ArtifactReleaseV1::new(
+    ArtifactReleaseV2::new(
         program,
         loader,
         checked.programdata_id(),
         checked.semantic_release_id(),
-        checked.artifact_digest(),
+        checked.code_commitment(),
         checked.deployment_slot(),
         policy,
         authority,
@@ -314,7 +314,7 @@ pub fn artifact_release_from_checked(checked: &CheckedReleaseV1) -> Result<Artif
 fn validate_role_binding(
     release_set: ExecutionReleaseSetV1,
     role: ExecutionRoleV1,
-    artifact: ArtifactReleaseV1,
+    artifact: ArtifactReleaseV2,
 ) -> Result<()> {
     let expected = release_set.binding(role);
     let artifact_id = ArtifactReleaseIdV1::new(sha256(&artifact.to_bytes()))
@@ -332,8 +332,8 @@ fn role_offset(index: usize) -> Result<usize> {
         .ok_or(Error::ArithmeticOverflow)
 }
 
-fn artifact_placeholder() -> Result<ArtifactReleaseV1> {
-    ArtifactReleaseV1::new(
+fn artifact_placeholder() -> Result<ArtifactReleaseV2> {
+    ArtifactReleaseV2::new(
         ProgramIdentityV1::new([1; 32]).map_err(|_| Error::InvalidArtifactRelease)?,
         ProgramIdentityV1::new([2; 32]).map_err(|_| Error::InvalidArtifactRelease)?,
         [3; 32],
@@ -398,8 +398,8 @@ mod tests {
     use super::*;
     use crate::SemanticPreimageKindV1;
 
-    fn checked(seed: u8) -> CheckedReleaseV1 {
-        CheckedReleaseV1 {
+    fn checked(seed: u8) -> CheckedReleaseV2 {
+        CheckedReleaseV2 {
             semantic_kind: SemanticPreimageKindV1::Capability,
             semantic_preimage_len: 16,
             elf_len: 64,
@@ -408,6 +408,7 @@ mod tests {
             deployment_slot: u64::from(seed),
             programdata_elf_offset: 45,
             artifact_digest: [seed.wrapping_add(4); 32],
+            code_commitment: [seed.wrapping_add(10); 32],
             semantic_release_id: ContentId::new([seed.wrapping_add(5); 32]).expect("semantic"),
             program_account_digest: [seed.wrapping_add(6); 32],
             programdata_account_digest: [seed.wrapping_add(7); 32],
@@ -429,7 +430,7 @@ mod tests {
 
     fn fixture() -> (
         ExecutionReleaseSetV1,
-        [CheckedReleaseV1; EXECUTION_ROLE_COUNT_V1],
+        [CheckedReleaseV2; EXECUTION_ROLE_COUNT_V1],
     ) {
         let checked = [
             checked(11),
@@ -502,7 +503,7 @@ mod tests {
             .expect("checked set");
         let mut bytes = built.encode();
         *bytes
-            .get_mut(ROLES_OFFSET + ARTIFACT_RELEASE_BYTES_V1)
+            .get_mut(ROLES_OFFSET + ARTIFACT_RELEASE_BYTES_V2)
             .expect("checked-release identity byte") ^= 1;
         assert!(CheckedExecutionReleaseSetV1::decode(&bytes).is_ok());
 

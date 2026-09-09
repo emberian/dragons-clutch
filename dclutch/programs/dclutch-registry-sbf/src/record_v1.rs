@@ -17,16 +17,20 @@
 
 use core::convert::TryFrom;
 
+use dclutch_registry::artifact_code_commitment_v2::{
+    CODE_COMMITMENT_CHUNK_BYTES_V2, CodeCommitmentProgressV2,
+};
 use dclutch_registry::record::{
-    AbortObservationV1, AbortRecordV1, AccountCloseV1, AccountId, AddressDerivationObligationV1,
-    AppendPageV1, BeginRecordV1, CANONICAL_RECORD_DEPLOYMENT_PROFILE_V1, FinalizeRecordV1,
-    PageEnvelopeV1, RAW_RECORD_PDA_SEED_V1, RawRecordValidationModeV1,
-    RawRecordValidationObligationV1, RecordAdapterV1, RecordKeyV1, STAGING_CURSOR_BYTES_V1,
-    STAGING_CURSOR_PDA_SEED_V1, StagingCursorV1, StagingLivenessPolicyV1, prepare_abort_v1,
-    prepare_append_page_v1, prepare_begin_v1, prepare_finalize_v1,
+    ARTIFACT_STAGING_CURSOR_BYTES_V2, AbortObservationV1, AbortRecordV1, AccountCloseV1, AccountId,
+    AddressDerivationObligationV1, AppendPageV1, BeginRecordV1,
+    CANONICAL_RECORD_DEPLOYMENT_PROFILE_V1, FinalizeRecordV1, PageEnvelopeV1,
+    RAW_RECORD_PDA_SEED_V1, RawRecordValidationModeV1, RawRecordValidationObligationV1,
+    RecordAdapterV1, RecordKeyV1, STAGING_CURSOR_BYTES_V1, STAGING_CURSOR_PDA_SEED_V1,
+    StagingCursorV1, StagingLivenessPolicyV1, artifact_verification_progress_v2, prepare_abort_v1,
+    prepare_append_page_v1, prepare_begin_v1, prepare_finalize_v1, staging_cursor_bytes_v1,
 };
 use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
-use dclutch_registry::{ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1, DeploymentObservationV1};
+use dclutch_registry::{ARTIFACT_RELEASE_SCHEMA_ID_V2, ArtifactReleaseV2};
 use solana_program::{
     account_info::AccountInfo,
     clock::Clock,
@@ -310,7 +314,8 @@ fn process_begin(
         return Err(record_error());
     }
 
-    let cursor_space = u64::try_from(STAGING_CURSOR_BYTES_V1).map_err(|_| record_error())?;
+    let cursor_space =
+        u64::try_from(staging_cursor_bytes_v1(plan.cursor.key())).map_err(|_| record_error())?;
     let cursor_bump = [plan.cursor_bump];
     let cursor_signer = [
         STAGING_CURSOR_PDA_SEED_V1,
@@ -338,7 +343,7 @@ fn process_begin(
                 .ok_or_else(record_error)?
         || frame.cursor.lamports() < plan.cursor_balance
         || frame.cursor.owner != program_id
-        || frame.cursor.data_len() != STAGING_CURSOR_BYTES_V1
+        || frame.cursor.data_len() != staging_cursor_bytes_v1(plan.cursor.key())
     {
         return Err(record_error());
     }
@@ -347,7 +352,9 @@ fn process_begin(
             .cursor
             .try_borrow_mut_data()
             .map_err(|_| record_error())?;
-        data.copy_from_slice(&plan.cursor.to_bytes());
+        data.get_mut(..STAGING_CURSOR_BYTES_V1)
+            .ok_or_else(record_error)?
+            .copy_from_slice(&plan.cursor.to_bytes());
     }
     if decode_cursor(frame.cursor)? != plan.cursor {
         return Err(record_error());
@@ -371,7 +378,7 @@ fn authenticate_begin(
     let clock = Clock::from_account_info(frame.clock).map_err(|_| record_error())?;
     let raw_length = usize::try_from(request.exact_length()).map_err(|_| record_error())?;
     let raw_rent = rent.minimum_balance(raw_length);
-    let cursor_rent = rent.minimum_balance(STAGING_CURSOR_BYTES_V1);
+    let cursor_rent = rent.minimum_balance(staging_cursor_bytes_v1(request.key()));
     let cursor_balance = cursor_rent
         .checked_add(request.cleanup_bounty_lamports())
         .ok_or_else(record_error)?;
@@ -402,7 +409,7 @@ fn authenticate_begin(
         || allocation.raw_data_length() != request.exact_length()
         || allocation.staging_account() != account_id(frame.cursor.key)?
         || allocation.staging_data_length()
-            != u64::try_from(STAGING_CURSOR_BYTES_V1).map_err(|_| record_error())?
+            != u64::try_from(staging_cursor_bytes_v1(request.key())).map_err(|_| record_error())?
         || allocation.sponsor_rent_refund() != account_id(frame.sponsor.key)?
         || allocation.cleanup_bounty_lamports() != request.cleanup_bounty_lamports()
     {
@@ -472,7 +479,10 @@ fn process_append(
         raw.get_mut(start..end)
             .ok_or_else(record_error)?
             .copy_from_slice(transition.write().page());
-        cursor_data.copy_from_slice(&next);
+        cursor_data
+            .get_mut(..STAGING_CURSOR_BYTES_V1)
+            .ok_or_else(record_error)?
+            .copy_from_slice(&next);
     }
     if decode_cursor(frame.cursor)? != transition.next_cursor() {
         return Err(record_error());
@@ -500,7 +510,6 @@ fn process_finalize(
     // Before the cursor is closed, because a release whose deployment does not
     // check must stay unfinalized: a finalized record is permanent, and this is
     // the one moment the protocol can still say no.
-    observe_artifact_release_deployment_v1(cursor, &frame)?;
     let cursor_balance = frame.cursor.lamports();
     let wallet_before = frame.refund_wallet.lamports();
     let close = {
@@ -522,6 +531,9 @@ fn process_finalize(
         }
         transition.staging_close()
     };
+    if !advance_artifact_release_verification_v2(cursor, &frame)? {
+        return Ok(());
+    }
     preflight_lamports(frame.refund_wallet)?;
     preflight_mutable(frame.cursor)?;
     close_full_to_wallet(program_id, frame.cursor, frame.refund_wallet, close)?;
@@ -777,7 +789,7 @@ impl RecordAdapterV1 for SbfRecordAdapter<'_, '_> {
             && self.cursor.owner == self.program_id
             && self.cursor.is_writable
             && !self.cursor.executable
-            && self.cursor.data_len() == STAGING_CURSOR_BYTES_V1
+            && self.cursor.data_len() == staging_cursor_bytes_v1(obligation.key())
             && self.cursor.lamports() > 0
     }
 }
@@ -830,7 +842,10 @@ fn require_live_record_accounts(
         || cursor.owner != program_id
         || raw.executable
         || cursor.executable
-        || cursor.data_len() != STAGING_CURSOR_BYTES_V1
+        || !matches!(
+            cursor.data_len(),
+            STAGING_CURSOR_BYTES_V1 | ARTIFACT_STAGING_CURSOR_BYTES_V2
+        )
         || cursor.lamports() == 0
     {
         return Err(record_error());
@@ -1066,62 +1081,25 @@ fn account_id(key: &Pubkey) -> Result<AccountId, ProgramError> {
     AccountId::new(key.to_bytes()).map_err(map_record_error)
 }
 
-/// Observe the live deployment an `ArtifactRelease` record claims, once.
-///
-/// # Why the Registry pays for this and no hot route does
-///
-/// `ArtifactReleaseV1` carries an `elf_digest`, a `deployment_slot` and an
-/// upgrade authority for a Program it names. Until this route existed, nothing
-/// ever compared those three against the accounts they describe: a finalized
-/// record proved `hash(bytes) == digest` about ITSELF, which says nothing about
-/// the address inside it. So every reader that needed the artifact to be the
-/// admitted one hashed the complete observed ELF, and
-/// `dclutch-trading::shadow_accelerator_auth`'s own doc said exactly why -- *"nothing
-/// has bound its `elf_digest` to the account being observed."*
-///
-/// Measured on real ELFs 2026-09-02: that hash cost the Dealer equity Add
-/// **370,983 CU** of a 1,399,700 budget, on 744,840 bytes, inside a strategy
-/// authentication that was 30% of the whole transaction -- and it was paid
-/// again on every action, forever, to learn a fact that never changes.
-///
-/// Decision 0012 already owns the argument that makes it unnecessary
-/// (`slot_pinned_release_elf_digest_v1`): a Loader V3 deployment cannot move
-/// while its ProgramData still carries the slot the release bound. That
-/// argument was sound and unusable, because it starts from a bound digest
-/// somebody checked. Role ACTIVATION checked one; a certificate-pinned artifact
-/// had no such moment. This is that moment, moved to where it costs once per
-/// release instead of once per action.
-///
-/// The comparison is `ArtifactReleaseV1::authenticate_deployment`, which owns
-/// all seven conjuncts and is decided by the Lean corpus in
-/// `ProtocolInfrastructure.lean`; this function only supplies it with facts
-/// read out of the live accounts in this very invocation.
-fn observe_artifact_release_deployment_v1(
+/// Verify one syscall-sized chunk under the existing Registry staging owner.
+/// Returns true only when code coverage is complete and its commitment matches.
+#[inline(never)]
+fn advance_artifact_release_verification_v2(
     cursor: StagingCursorV1,
     frame: &FinalizeFrame<'_, '_>,
-) -> Result<(), ProgramError> {
-    let is_release = cursor.key().schema_release_id().to_bytes() == ARTIFACT_RELEASE_SCHEMA_ID_V1;
+) -> Result<bool, ProgramError> {
+    let is_release = cursor.key().schema_release_id().to_bytes() == ARTIFACT_RELEASE_SCHEMA_ID_V2;
     let (program, programdata) = match (is_release, frame.deployment) {
-        (false, None) => return Ok(()),
+        (false, None) => return Ok(true),
         (true, Some(pair)) => pair,
-        // A release without its deployment, or a deployment attached to a
-        // record that names no address. Both are frame errors and neither is a
-        // statement about the bytes, so they are one code and not the other.
         _ => return Err(deployment_frame_error()),
     };
     let data = frame
         .raw
         .try_borrow_data()
         .map_err(|_| not_deployed_error())?;
-    let release = ArtifactReleaseV1::decode(&data).map_err(|_| not_deployed_error())?;
+    let release = ArtifactReleaseV2::decode(&data).map_err(|_| not_deployed_error())?;
     drop(data);
-    if program.key.to_bytes() != release.program().to_bytes()
-        || programdata.key.to_bytes() != release.programdata()
-        || program.owner != &bpf_loader_upgradeable::ID
-        || programdata.owner != &bpf_loader_upgradeable::ID
-    {
-        return Err(not_deployed_error());
-    }
     let program_bytes = program
         .try_borrow_data()
         .map_err(|_| not_deployed_error())?;
@@ -1131,27 +1109,65 @@ fn observe_artifact_release_deployment_v1(
     let programdata_bytes = programdata
         .try_borrow_data()
         .map_err(|_| not_deployed_error())?;
-    let programdata_view =
-        ProgramDataV3View::parse(&programdata_bytes).map_err(|_| not_deployed_error())?;
-    // THE ONE ELF HASH IN THE PROTOCOL'S STEADY STATE. Everything downstream of
-    // a finalized release spends a `u64` slot compare instead of this.
-    let observation = DeploymentObservationV1::new(
-        program.key.to_bytes(),
-        program.owner.to_bytes(),
-        program.executable,
-        programdata.key.to_bytes(),
-        programdata.owner.to_bytes(),
-        programdata.executable,
-        programdata_link,
-        bpf_loader_upgradeable::ID.to_bytes(),
-        programdata_view.deployment_slot(),
-        hash(programdata_view.elf()).to_bytes(),
-        programdata_view.upgrade_authority(),
-    )
-    .map_err(|_| not_deployed_error())?;
+    let view = ProgramDataV3View::parse(&programdata_bytes).map_err(|_| not_deployed_error())?;
     release
-        .authenticate_deployment(observation)
-        .map_err(release_deployment_refusal_v1)
+        .authenticate_loader_envelope(
+            program.key.to_bytes(),
+            program.owner.to_bytes(),
+            program.executable,
+            programdata.key.to_bytes(),
+            programdata.owner.to_bytes(),
+            programdata.executable,
+            programdata_link,
+            bpf_loader_upgradeable::ID.to_bytes(),
+            view.deployment_slot(),
+            view.upgrade_authority(),
+        )
+        .map_err(release_deployment_refusal_v1)?;
+    let length = u64::try_from(view.elf().len()).map_err(|_| record_error())?;
+    let progress = {
+        let bytes = frame.cursor.try_borrow_data().map_err(|_| record_error())?;
+        match artifact_verification_progress_v2(&bytes).map_err(map_record_error)? {
+            Some(progress) => progress,
+            None => CodeCommitmentProgressV2::new(length).map_err(commitment_progress_error)?,
+        }
+    };
+    if progress.total_length() != length {
+        return Err(commitment_progress_error(
+            dclutch_registry::artifact_code_commitment_v2::CodeCommitmentErrorV2::Encoding,
+        ));
+    }
+    let start = usize::try_from(progress.next_offset()).map_err(|_| record_error())?;
+    let end = start
+        .checked_add(CODE_COMMITMENT_CHUNK_BYTES_V2)
+        .ok_or_else(record_error)?
+        .min(view.elf().len());
+    let chunk = view.elf().get(start..end).ok_or_else(record_error)?;
+    let successor = progress
+        .advance(progress.next_offset(), chunk)
+        .map_err(commitment_progress_error)?;
+    if successor.is_complete() {
+        if successor.commitment().map_err(commitment_progress_error)? != release.code_commitment() {
+            return Err(RegistryError::ArtifactReleaseCodeCommitmentMismatch.into());
+        }
+        return Ok(true);
+    }
+    let mut bytes = frame
+        .cursor
+        .try_borrow_mut_data()
+        .map_err(|_| record_error())?;
+    bytes
+        .get_mut(STAGING_CURSOR_BYTES_V1..)
+        .ok_or_else(record_error)?
+        .copy_from_slice(&successor.to_bytes());
+    Ok(false)
+}
+
+fn commitment_progress_error(
+    error: dclutch_registry::artifact_code_commitment_v2::CodeCommitmentErrorV2,
+) -> ProgramError {
+    solana_program::msg!("artifact verification progress: {:?}", error);
+    RegistryError::Record.into()
 }
 
 /// Name what a finalization observation disagreed about.
@@ -1178,7 +1194,7 @@ const fn release_deployment_refusal_v1(error: dclutch_registry::Error) -> Progra
         ReleaseError::ReleaseSupersededByUpgrade => {
             ProgramError::Custom(RegistryError::ReleaseSuperseded as u32)
         }
-        _ => ProgramError::Custom(RegistryError::ArtifactReleaseElfMismatch as u32),
+        _ => ProgramError::Custom(RegistryError::ArtifactReleaseCodeCommitmentMismatch as u32),
     }
 }
 
@@ -1190,7 +1206,8 @@ const fn not_deployed_error() -> ProgramError {
     ProgramError::Custom(RegistryError::ArtifactReleaseNotDeployed as u32)
 }
 
-fn map_record_error(_: dclutch_registry::record::Error) -> ProgramError {
+fn map_record_error(error: dclutch_registry::record::Error) -> ProgramError {
+    solana_program::msg!("Registry record refusal: {:?}", error);
     record_error()
 }
 
@@ -1937,15 +1954,15 @@ mod release_finalization_corpus {
 
     use dclutch_core_contract::ContentId;
     use dclutch_registry::release_set::ProgramIdentityV1;
-    use dclutch_registry::{ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1};
+    use dclutch_registry::{ArtifactReleaseV2, ArtifactUpgradePolicyV1, DeploymentObservationV2};
     use solana_program::program_error::ProgramError;
     use solana_sdk_ids::bpf_loader_upgradeable;
 
     use crate::RegistryError;
     use crate::generated_release_finalization_corpus::{
-        RELEASE_FINALIZATION_OUTCOME_ADMIT, RELEASE_FINALIZATION_OUTCOME_ELF_MISMATCH,
+        RELEASE_FINALIZATION_OUTCOME_ADMIT, RELEASE_FINALIZATION_OUTCOME_CODE_COMMITMENT_MISMATCH,
         RELEASE_FINALIZATION_OUTCOME_NOT_DEPLOYED, RELEASE_FINALIZATION_OUTCOME_SUPERSEDED,
-        RELEASE_FINALIZATION_VECTORS_V1, ReleaseFinalizationVectorV1,
+        RELEASE_FINALIZATION_VECTORS_V2, ReleaseFinalizationVectorV2,
     };
 
     fn fill(value: u8) -> [u8; 32] {
@@ -1958,17 +1975,17 @@ mod release_finalization_corpus {
     /// constructor, `authenticate_deployment`'s eight conjuncts in their own
     /// order, and `release_deployment_refusal_v1`'s partition. Nothing about
     /// the rule is restated here -- only the vector is turned into accounts.
-    fn observed_outcome(vector: ReleaseFinalizationVectorV1) -> u8 {
+    fn observed_outcome(vector: ReleaseFinalizationVectorV2) -> u8 {
         let program = ProgramIdentityV1::new(fill(0x11)).expect("program identity");
         let loader =
             ProgramIdentityV1::new(bpf_loader_upgradeable::ID.to_bytes()).expect("loader identity");
         let programdata = fill(0x22);
-        let release = ArtifactReleaseV1::new(
+        let release = ArtifactReleaseV2::new(
             program,
             loader,
             programdata,
             ContentId::new(fill(0x33)).expect("semantic release"),
-            fill(vector.bound_elf_digest),
+            fill(vector.bound_code_commitment),
             vector.bound_slot,
             if vector.bound_policy_immutable {
                 ArtifactUpgradePolicyV1::Immutable
@@ -1996,7 +2013,7 @@ mod release_finalization_corpus {
         } else {
             fill(0xf0)
         };
-        let observation = DeploymentObservationV1::new(
+        let observation = DeploymentObservationV2::new(
             observed_program,
             observed_owner,
             vector.observed_program_executable,
@@ -2006,7 +2023,7 @@ mod release_finalization_corpus {
             observed_link,
             loader.to_bytes(),
             vector.observed_slot,
-            fill(vector.observed_elf_digest),
+            fill(vector.observed_code_commitment),
             vector.observed_authority.map(fill),
         )
         .expect("canonical observation");
@@ -2022,9 +2039,9 @@ mod release_finalization_corpus {
                     RELEASE_FINALIZATION_OUTCOME_SUPERSEDED
                 }
                 ProgramError::Custom(code)
-                    if code == RegistryError::ArtifactReleaseElfMismatch as u32 =>
+                    if code == RegistryError::ArtifactReleaseCodeCommitmentMismatch as u32 =>
                 {
-                    RELEASE_FINALIZATION_OUTCOME_ELF_MISMATCH
+                    RELEASE_FINALIZATION_OUTCOME_CODE_COMMITMENT_MISMATCH
                 }
                 other => panic!("unpartitioned finalization refusal {other:?}"),
             },
@@ -2033,7 +2050,7 @@ mod release_finalization_corpus {
 
     #[test]
     fn every_lean_decided_finalization_case_replays_through_this_program() {
-        for vector in RELEASE_FINALIZATION_VECTORS_V1 {
+        for vector in RELEASE_FINALIZATION_VECTORS_V2 {
             assert_eq!(
                 observed_outcome(vector),
                 vector.outcome,
@@ -2052,10 +2069,10 @@ mod release_finalization_corpus {
             RELEASE_FINALIZATION_OUTCOME_ADMIT,
             RELEASE_FINALIZATION_OUTCOME_NOT_DEPLOYED,
             RELEASE_FINALIZATION_OUTCOME_SUPERSEDED,
-            RELEASE_FINALIZATION_OUTCOME_ELF_MISMATCH,
+            RELEASE_FINALIZATION_OUTCOME_CODE_COMMITMENT_MISMATCH,
         ] {
             assert!(
-                RELEASE_FINALIZATION_VECTORS_V1
+                RELEASE_FINALIZATION_VECTORS_V2
                     .iter()
                     .any(|vector| vector.outcome == expected),
                 "no vector decides outcome {expected}"
@@ -2093,7 +2110,7 @@ mod devnet_general_accelerator_observation {
 
     use dclutch_core_contract::ContentId;
     use dclutch_registry::release_set::ProgramIdentityV1;
-    use dclutch_registry::{ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1};
+    use dclutch_registry::{ArtifactReleaseV2, ArtifactUpgradePolicyV1, DeploymentObservationV2};
     use solana_program::program_error::ProgramError;
     use solana_sdk_ids::bpf_loader_upgradeable;
 
@@ -2132,8 +2149,8 @@ mod devnet_general_accelerator_observation {
         elf_digest: [u8; 32],
         deployment_slot: u64,
         authority: Option<[u8; 32]>,
-    ) -> ArtifactReleaseV1 {
-        ArtifactReleaseV1::new(
+    ) -> ArtifactReleaseV2 {
+        ArtifactReleaseV2::new(
             ProgramIdentityV1::new(PROGRAM).expect("program identity"),
             ProgramIdentityV1::new(bpf_loader_upgradeable::ID.to_bytes()).expect("loader"),
             PROGRAMDATA,
@@ -2158,8 +2175,8 @@ mod devnet_general_accelerator_observation {
         elf_digest: [u8; 32],
         deployment_slot: u64,
         authority: Option<[u8; 32]>,
-    ) -> DeploymentObservationV1 {
-        DeploymentObservationV1::new(
+    ) -> DeploymentObservationV2 {
+        DeploymentObservationV2::new(
             program,
             bpf_loader_upgradeable::ID.to_bytes(),
             true,
@@ -2176,8 +2193,8 @@ mod devnet_general_accelerator_observation {
     }
 
     fn outcome(
-        release: ArtifactReleaseV1,
-        observed: DeploymentObservationV1,
+        release: ArtifactReleaseV2,
+        observed: DeploymentObservationV2,
     ) -> Result<(), ProgramError> {
         release
             .authenticate_deployment(observed)
@@ -2252,7 +2269,7 @@ mod devnet_general_accelerator_observation {
                 release(ELF_DIGEST, DEPLOYMENT_SLOT, Some(AUTHORITY)),
                 observation(PROGRAM, other_digest, DEPLOYMENT_SLOT, Some(AUTHORITY)),
             ),
-            Err(custom(RegistryError::ArtifactReleaseElfMismatch)),
+            Err(custom(RegistryError::ArtifactReleaseCodeCommitmentMismatch)),
         );
 
         // A record claiming this accelerator is immutable. It is not: an
@@ -2264,7 +2281,7 @@ mod devnet_general_accelerator_observation {
                 release(ELF_DIGEST, DEPLOYMENT_SLOT, None),
                 observation(PROGRAM, ELF_DIGEST, DEPLOYMENT_SLOT, Some(AUTHORITY)),
             ),
-            Err(custom(RegistryError::ArtifactReleaseElfMismatch)),
+            Err(custom(RegistryError::ArtifactReleaseCodeCommitmentMismatch)),
         );
     }
 }

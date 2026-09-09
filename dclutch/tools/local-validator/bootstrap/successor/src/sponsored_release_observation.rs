@@ -46,7 +46,7 @@
 //!
 //! **There is no in-place supersession of a provider release, and the chain
 //! does not admit forward slot movement.** `authenticate_provider_program_pin`
-//! is exact equality in both directions, and `ArtifactReleaseV1::slot_pin_refusal`
+//! is exact equality in both directions, and `ArtifactReleaseV2::slot_pin_refusal`
 //! (`crates/dclutch-registry/src/artifact.rs:272`) turns a strictly
 //! later slot into `ReleaseSupersededByUpgrade` rather than into an admission.
 //! The one "forward movement admits" rule in this tree

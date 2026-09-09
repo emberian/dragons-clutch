@@ -3,6 +3,12 @@
 This is an offline evidence compiler for one checked dClutch SBF release. It
 does not deploy, sign, read RPC state, or declare an address official.
 
+The canonical manifest is `CheckedReleaseV2`: an exact `DCLTREL2`, schema-2
+wire with a 420-byte fixed prefix. Its flat-ELF SHA-256 `artifact_digest` is
+build provenance. Its separate `code_commitment`, at offset 388, covers the
+complete Loader payload and is the value copied into `ArtifactReleaseV2` at
+offset 144 for one-time onchain verification.
+
 It keeps two identities separate:
 
 - the **semantic release ID** is SHA-256 of an exact semantic preimage already
@@ -97,8 +103,8 @@ downstream manifest turns a prediction into a deployment.
 The successor runtime is promoted as one Registry-selected five-role set, not
 as unrelated individually checked programs. `CheckedExecutionReleaseSetV1`
 binds the canonical Core, Claims, Trading, Resolution, and Custody release-set
-preimage to each role's compact onchain `ArtifactReleaseV1` record and complete
-`CheckedReleaseV1` manifest identity.
+preimage to each role's compact onchain `ArtifactReleaseV2` record and complete
+`CheckedReleaseV2` manifest identity.
 
 The 336-byte release-set preimage is not independent evidence: every binding is
 a pure function of the five checked manifests. `derive-set` emits exactly the
@@ -182,7 +188,7 @@ dclutch-release-tool inspect-infrastructure \
 ### From checked evidence to Registry activation
 
 The host-only operator join accepts the verified
-`CheckedExecutionReleaseSetV1`, all five complete `CheckedReleaseV1` values,
+`CheckedExecutionReleaseSetV1`, all five complete `CheckedReleaseV2` values,
 and one finalized snapshot of the canonical release-set record, artifact
 records, Loader V3 Program accounts, and ProgramData accounts. It rebuilds the
 checked set, delegates chain authentication to the existing Registry operator,
@@ -190,8 +196,8 @@ and requires the resulting activated releases to equal the checked artifacts
 exactly before compiling the existing unsigned activation packet.
 
 Its deterministic text projection includes the checked-set identities, the
-finalized observation, activation-cache address and mode, complete ELF bytes
-hashed, packet geometry, compute budget, and a digest of the exact unsigned
+finalized observation, activation-cache address and mode, checked code
+commitments, packet geometry, compute budget, and a digest of the exact unsigned
 message. This projection is evidence, not another release DTO or runtime
 authority. The builder performs no RPC, signing, submission, deployment, or
 account mutation; execution by the Registry is still what creates the
@@ -203,7 +209,7 @@ Shadow and admitted capability strategies execute in separately deployed SBF
 accelerators, so their executable identity is not covered merely by checking
 the five-role release set. `CheckedCapabilityExecutionV1` joins one exact
 `CapabilityProgramV4`, `ExecutionStrategyV2`, `AotCertificateV4`, optional
-`AotAdmissionV4`, immutable accelerator `ArtifactReleaseV1`, and the complete
+`AotAdmissionV4`, immutable accelerator `ArtifactReleaseV2`, and the complete
 checked release manifest for that accelerator.
 
 ```text
@@ -338,7 +344,7 @@ For `pyth-v1` this tool delegates semantic decoding to `dclutch-source::pyth`; i
 does not reimplement or loosen the Pyth release schema.
 
 `unowned` is a **named absence**, not a schema. Every execution role, Registry,
-and Rent persists a `semantic_release_id` inside its `ArtifactReleaseV1`, but no
+and Rent persists a `semantic_release_id` inside its `ArtifactReleaseV2`, but no
 first-party contract in this tree owns or decodes a role-program release
 preimage. Calling such a preimage `capability` would assert a decoder that does
 not exist. `unowned` records the exact bytes and their SHA-256 identity while

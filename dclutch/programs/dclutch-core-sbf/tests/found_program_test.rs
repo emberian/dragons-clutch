@@ -64,8 +64,8 @@ use dclutch_registry::release_set::{
 };
 use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
-    ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactActivationInputV1, ArtifactReleaseV1,
-    ArtifactUpgradePolicyV1, DeploymentObservationV1, activate_execution_role_into_v1,
+    ARTIFACT_RELEASE_SCHEMA_ID_V2, ArtifactActivationInputV1, ArtifactReleaseV2,
+    ArtifactUpgradePolicyV1, DeploymentObservationV2, activate_execution_role_into_v1,
     initialize_activation_cache_v1,
 };
 use dclutch_source::{
@@ -422,7 +422,7 @@ fn release(
     elf: &[u8],
     semantic: u8,
     authority: Option<Pubkey>,
-) -> ArtifactReleaseV1 {
+) -> ArtifactReleaseV2 {
     release_at_slot(program, elf, semantic, authority, GENESIS_DEPLOYMENT_SLOT)
 }
 
@@ -438,7 +438,7 @@ fn release_at_slot(
     semantic: u8,
     authority: Option<Pubkey>,
     deployment_slot: u64,
-) -> ArtifactReleaseV1 {
+) -> ArtifactReleaseV2 {
     let (policy, authority_bytes) = match authority {
         Some(authority) => (
             ArtifactUpgradePolicyV1::ExactAuthority,
@@ -446,12 +446,12 @@ fn release_at_slot(
         ),
         None => (ArtifactUpgradePolicyV1::Immutable, None),
     };
-    ArtifactReleaseV1::new(
+    ArtifactReleaseV2::new(
         program_identity(program),
         program_identity(bpf_loader_upgradeable::ID),
         programdata_address(program).to_bytes(),
         CoreContentId::new([semantic; 32]).expect("semantic release"),
-        hash(elf).to_bytes(),
+        dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(elf).expect("exact fixture code commitment"),
         deployment_slot,
         policy,
         authority_bytes,
@@ -459,19 +459,19 @@ fn release_at_slot(
     .expect("artifact release")
 }
 
-fn artifact_id(value: ArtifactReleaseV1) -> ArtifactReleaseIdV1 {
+fn artifact_id(value: ArtifactReleaseV2) -> ArtifactReleaseIdV1 {
     ArtifactReleaseIdV1::new(hash(&value.to_bytes()).to_bytes()).expect("artifact ID")
 }
 
-fn binding(value: ArtifactReleaseV1) -> ExecutionRoleBindingV1 {
+fn binding(value: ArtifactReleaseV2) -> ExecutionRoleBindingV1 {
     ExecutionRoleBindingV1::new(value.program(), artifact_id(value))
 }
 
-fn activation_input(value: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
+fn activation_input(value: ArtifactReleaseV2) -> ArtifactActivationInputV1 {
     ArtifactActivationInputV1::new(
         artifact_id(value),
         value,
-        DeploymentObservationV1::new(
+        DeploymentObservationV2::new(
             value.program().to_bytes(),
             bpf_loader_upgradeable::ID.to_bytes(),
             true,
@@ -481,7 +481,7 @@ fn activation_input(value: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
             value.programdata(),
             bpf_loader_upgradeable::ID.to_bytes(),
             value.deployment_slot(),
-            value.elf_digest(),
+            value.code_commitment(),
             value.upgrade_authority(),
         )
         .expect("deployment"),
@@ -1365,7 +1365,7 @@ fn series_fixture(fault: SeriesFault) -> SeriesFixture {
 }
 
 /// The generation every program in this fixture is deployed in by default, and
-/// the one every `ArtifactReleaseV1` here pins.
+/// the one every `ArtifactReleaseV2` here pins.
 const GENESIS_DEPLOYMENT_SLOT: u64 = 0;
 /// The Registry's Loader upgrade authority in the worlds that have one.
 ///
@@ -1383,7 +1383,7 @@ const UPGRADED_REGISTRY_DEPLOYMENT_SLOT: u64 = 531;
 /// Which Registry deployment generation the bank observes.
 ///
 /// This is the ruling's §8.1 obligation -- P-008's brick, reproduced rather
-/// than argued. The profile pins the Registry's `ArtifactReleaseV1` BY CONTENT,
+/// than argued. The profile pins the Registry's `ArtifactReleaseV2` BY CONTENT,
 /// deployment slot included, so an upgrade that moves the Registry's bytes to a
 /// new generation supersedes the very selection every consumer authenticates
 /// against, and the write-once profile cannot be re-pointed at the new one.
@@ -1735,18 +1735,18 @@ fn fixture_with(
         release_set_value.to_bytes().to_vec(),
     );
     let registry_artifact = Record::new(
-        ARTIFACT_RELEASE_SCHEMA_ID_V1,
+        ARTIFACT_RELEASE_SCHEMA_ID_V2,
         registry_release.to_bytes().to_vec(),
     );
     let rent_artifact = Record::new(
-        ARTIFACT_RELEASE_SCHEMA_ID_V1,
+        ARTIFACT_RELEASE_SCHEMA_ID_V2,
         rent_release.to_bytes().to_vec(),
     );
     // The same Registry ELF, re-released against the generation the upgrade
     // produced. Everything about it is honest; it is the escape the P-008
     // narrative has to kill.
     let republished_registry_artifact = Record::new(
-        ARTIFACT_RELEASE_SCHEMA_ID_V1,
+        ARTIFACT_RELEASE_SCHEMA_ID_V2,
         release_at_slot(
             REGISTRY_PROGRAM_ID,
             &artifacts.registry,
@@ -3134,7 +3134,7 @@ async fn a_moved_slot_under_no_upgrade_authority_is_substituted_rather_than_supe
 /// The other half of §8.1 — "prove the two escapes dead". The refusal an
 /// operator reads from the brick above points at a re-release, and
 /// `infrastructure.rs:457-462` says so in as many words. So take that advice
-/// exactly: publish a finalized `ArtifactReleaseV1` for the Registry binding the
+/// exactly: publish a finalized `ArtifactReleaseV2` for the Registry binding the
 /// generation that is actually deployed, and present it. It is a perfectly good
 /// record — it authenticates, and its own pin HOLDS, which is what makes this a
 /// real escape attempt rather than a malformed frame. It is refused anyway, at

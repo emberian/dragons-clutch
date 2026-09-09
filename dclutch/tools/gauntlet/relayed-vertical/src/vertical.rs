@@ -18,7 +18,7 @@ use dclutch_product::ResultDomainV2;
 use dclutch_product::admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
 };
-use dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V1;
+use dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V2;
 use dclutch_resolution_core_v3_operator::{
     ObservedAccount, ResolutionAdmitTerminalSnapshotV3, build_resolution_admit_terminal_v3,
     validate_resolution_admit_terminal_report_v3,
@@ -783,7 +783,7 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
         },
         venue: RecordPairV1::derive(
             registry_program,
-            ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            ARTIFACT_RELEASE_SCHEMA_ID_V2,
             facts.venue_release_digest,
         ),
         product: RecordPairV1::derive(

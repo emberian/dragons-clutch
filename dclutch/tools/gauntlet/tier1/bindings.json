@@ -56,7 +56,7 @@
       ],
       "program": "registry",
       "outcome": "executed",
-      "note": "One transaction per ExecutionRoleV1. Five of them: whole-ELF hashing makes a single five-role activation exceed the compute maximum outright (see the activation-is-one-role-per-transaction witness)."
+      "note": "One transaction per ExecutionRoleV1. Five of them: the current activation ABI admits one role per call and rechecks native Loader continuity against code already verified at ArtifactReleaseV2 finalization; activation does not rehash the complete payload."
     },
     {
       "label": "late activation substitution rolls back prior transfer",

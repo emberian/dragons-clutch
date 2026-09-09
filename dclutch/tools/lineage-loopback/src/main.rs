@@ -32,8 +32,8 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use dclutch_core_contract::ContentId;
 use dclutch_registry::activation_auth_v1::activation_cache_address_v1;
 use dclutch_registry::{
-    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ArtifactActivationInputV1, ArtifactReleaseV1,
-    ArtifactUpgradePolicyV1, DeploymentObservationV1, activate_execution_role_into_v1,
+    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ArtifactActivationInputV1, ArtifactReleaseV2,
+    ArtifactUpgradePolicyV1, DeploymentObservationV2, activate_execution_role_into_v1,
     initialize_activation_cache_v1, put_activation_cache_bump_v1,
 };
 use dclutch_registry::release_set::{
@@ -243,7 +243,7 @@ fn build_cache(
     authority: Pubkey,
     specs: [RoleSpec; 5],
 ) -> Result<(ContentId, Pubkey, Vec<u8>), String> {
-    let releases: Vec<ArtifactReleaseV1> = specs
+    let releases: Vec<ArtifactReleaseV2> = specs
         .iter()
         .map(|spec| release_for(*spec, authority))
         .collect::<Result<_, _>>()?;
@@ -284,11 +284,11 @@ fn build_cache(
     Ok((id, address, bytes))
 }
 
-fn release_for(spec: RoleSpec, authority: Pubkey) -> Result<ArtifactReleaseV1, String> {
+fn release_for(spec: RoleSpec, authority: Pubkey) -> Result<ArtifactReleaseV2, String> {
     let program = Pubkey::new_from_array([spec.program; 32]);
     let programdata =
         Pubkey::find_program_address(&[program.as_ref()], &bpf_loader_upgradeable::ID).0;
-    ArtifactReleaseV1::new(
+    ArtifactReleaseV2::new(
         ProgramIdentityV1::new(program.to_bytes()).map_err(|error| format!("{error:?}"))?,
         ProgramIdentityV1::new(bpf_loader_upgradeable::ID.to_bytes())
             .map_err(|error| format!("{error:?}"))?,
@@ -304,15 +304,15 @@ fn release_for(spec: RoleSpec, authority: Pubkey) -> Result<ArtifactReleaseV1, S
     .map_err(|error| format!("artifact release: {error:?}"))
 }
 
-fn artifact_id(release: ArtifactReleaseV1) -> ArtifactReleaseIdV1 {
+fn artifact_id(release: ArtifactReleaseV2) -> ArtifactReleaseIdV1 {
     ArtifactReleaseIdV1::new(hash(&release.to_bytes()).to_bytes()).expect("artifact release id")
 }
 
-fn activation_input(release: ArtifactReleaseV1) -> Result<ArtifactActivationInputV1, String> {
+fn activation_input(release: ArtifactReleaseV2) -> Result<ArtifactActivationInputV1, String> {
     Ok(ArtifactActivationInputV1::new(
         artifact_id(release),
         release,
-        DeploymentObservationV1::new(
+        DeploymentObservationV2::new(
             release.program().to_bytes(),
             bpf_loader_upgradeable::ID.to_bytes(),
             true,
@@ -322,7 +322,7 @@ fn activation_input(release: ArtifactReleaseV1) -> Result<ArtifactActivationInpu
             release.programdata(),
             bpf_loader_upgradeable::ID.to_bytes(),
             release.deployment_slot(),
-            release.elf_digest(),
+            release.code_commitment(),
             release.upgrade_authority(),
         )
         .map_err(|error| format!("deployment observation: {error:?}"))?,

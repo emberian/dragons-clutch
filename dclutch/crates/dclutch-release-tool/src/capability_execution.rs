@@ -19,9 +19,9 @@ use dclutch_market::execution_strategy::v2::{
     validate_admitted_aot_v4,
 };
 use dclutch_registry::release_set::ArtifactReleaseIdV1;
-use dclutch_registry::{ARTIFACT_RELEASE_BYTES_V1, ArtifactReleaseV1, ArtifactUpgradePolicyV1};
+use dclutch_registry::{ARTIFACT_RELEASE_BYTES_V2, ArtifactReleaseV2, ArtifactUpgradePolicyV1};
 
-use crate::{CheckedReleaseV1, Error, Result, artifact_release_from_checked, encode_hex, sha256};
+use crate::{CheckedReleaseV2, Error, Result, artifact_release_from_checked, encode_hex, sha256};
 
 /// The accelerator can never be redeployed at its program id.
 pub const CAPABILITY_EVIDENCE_CLASS_IMMUTABLE_V1: &str = "immutable-accelerator-deployment";
@@ -42,7 +42,7 @@ pub const CHECKED_CAPABILITY_EXECUTION_BYTES_V1: usize =
         + EXECUTION_STRATEGY_PROGRAM_BYTES_V2
         + EXECUTION_STRATEGY_CERTIFICATE_BYTES_V2
         + EXECUTION_STRATEGY_ADMISSION_BYTES_V2
-        + ARTIFACT_RELEASE_BYTES_V1
+        + ARTIFACT_RELEASE_BYTES_V2
         + 32;
 
 const SCHEMA_OFFSET: usize = 8;
@@ -52,7 +52,7 @@ const STRATEGY_OFFSET: usize = DESCRIPTOR_OFFSET + CAPABILITY_PROGRAM_V4_BYTES;
 const CERTIFICATE_OFFSET: usize = STRATEGY_OFFSET + EXECUTION_STRATEGY_PROGRAM_BYTES_V2;
 const ADMISSION_OFFSET: usize = CERTIFICATE_OFFSET + EXECUTION_STRATEGY_CERTIFICATE_BYTES_V2;
 const ARTIFACT_OFFSET: usize = ADMISSION_OFFSET + EXECUTION_STRATEGY_ADMISSION_BYTES_V2;
-const CHECKED_RELEASE_ID_OFFSET: usize = ARTIFACT_OFFSET + ARTIFACT_RELEASE_BYTES_V1;
+const CHECKED_RELEASE_ID_OFFSET: usize = ARTIFACT_OFFSET + ARTIFACT_RELEASE_BYTES_V2;
 
 /// Complete offline evidence for one external capability execution program.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -61,7 +61,7 @@ pub struct CheckedCapabilityExecutionV1 {
     strategy: ExecutionStrategyProgramV2,
     certificate: ExecutionStrategyCertificateV2,
     admission: Option<ExecutionStrategyAdmissionV2>,
-    artifact: ArtifactReleaseV1,
+    artifact: ArtifactReleaseV2,
     checked_release_id: ContentId,
 }
 
@@ -122,7 +122,7 @@ impl CheckedCapabilityExecutionV1 {
             }
         };
         let artifact =
-            ArtifactReleaseV1::decode(subslice(bytes, ARTIFACT_OFFSET, ARTIFACT_RELEASE_BYTES_V1)?)
+            ArtifactReleaseV2::decode(subslice(bytes, ARTIFACT_OFFSET, ARTIFACT_RELEASE_BYTES_V2)?)
                 .map_err(|_| Error::InvalidArtifactRelease)?;
         let checked_release_id = ContentId::new(read_array(bytes, CHECKED_RELEASE_ID_OFFSET)?)
             .map_err(|_| Error::ZeroIdentifier)?;
@@ -202,7 +202,7 @@ impl CheckedCapabilityExecutionV1 {
     }
 
     /// Checked immutable accelerator artifact.
-    pub const fn artifact(self) -> ArtifactReleaseV1 {
+    pub const fn artifact(self) -> ArtifactReleaseV2 {
         self.artifact
     }
 
@@ -386,7 +386,7 @@ pub fn build_checked_capability_execution_v1(
     strategy: ExecutionStrategyProgramV2,
     certificate: ExecutionStrategyCertificateV2,
     admission: Option<ExecutionStrategyAdmissionV2>,
-    checked_release: &CheckedReleaseV1,
+    checked_release: &CheckedReleaseV2,
 ) -> Result<CheckedCapabilityExecutionV1> {
     let value = CheckedCapabilityExecutionV1 {
         descriptor,
@@ -420,7 +420,7 @@ pub fn build_checked_capability_execution_from_bytes_v1(
         .map(ExecutionStrategyAdmissionV2::decode)
         .transpose()
         .map_err(|_| Error::InvalidCapabilityExecutionManifest)?;
-    let checked = CheckedReleaseV1::decode(checked_release_manifest)?;
+    let checked = CheckedReleaseV2::decode(checked_release_manifest)?;
     build_checked_capability_execution_v1(descriptor, strategy, certificate, admission, &checked)
 }
 
@@ -430,7 +430,7 @@ pub fn verify_checked_capability_execution_v1(
     checked_release_manifest: &[u8],
 ) -> Result<CheckedCapabilityExecutionV1> {
     let expected = CheckedCapabilityExecutionV1::decode(manifest)?;
-    let checked = CheckedReleaseV1::decode(checked_release_manifest)?;
+    let checked = CheckedReleaseV2::decode(checked_release_manifest)?;
     let rebuilt = build_checked_capability_execution_v1(
         expected.descriptor,
         expected.strategy,
@@ -444,7 +444,7 @@ pub fn verify_checked_capability_execution_v1(
     Ok(expected)
 }
 
-fn artifact_id(artifact: ArtifactReleaseV1) -> Result<ArtifactReleaseIdV1> {
+fn artifact_id(artifact: ArtifactReleaseV2) -> Result<ArtifactReleaseIdV1> {
     ArtifactReleaseIdV1::new(sha256(&artifact.to_bytes()))
         .map_err(|_| Error::InvalidArtifactRelease)
 }
@@ -506,8 +506,8 @@ mod tests {
         ContentId::new([value; 32]).expect("nonzero content id")
     }
 
-    fn checked(seed: u8, immutable: bool) -> CheckedReleaseV1 {
-        CheckedReleaseV1 {
+    fn checked(seed: u8, immutable: bool) -> CheckedReleaseV2 {
+        CheckedReleaseV2 {
             semantic_kind: SemanticPreimageKindV1::Capability,
             semantic_preimage_len: 16,
             elf_len: 64,
@@ -516,6 +516,7 @@ mod tests {
             deployment_slot: u64::from(seed),
             programdata_elf_offset: 45,
             artifact_digest: [seed.wrapping_add(4); 32],
+            code_commitment: [seed.wrapping_add(10); 32],
             semantic_release_id: id(seed.wrapping_add(5)),
             program_account_digest: [seed.wrapping_add(6); 32],
             programdata_account_digest: [seed.wrapping_add(7); 32],
@@ -542,7 +543,7 @@ mod tests {
         ExecutionStrategyProgramV2,
         ExecutionStrategyCertificateV2,
         Option<ExecutionStrategyAdmissionV2>,
-        CheckedReleaseV1,
+        CheckedReleaseV2,
     ) {
         fixture_over(disposition, checked(31, true))
     }
@@ -557,13 +558,13 @@ mod tests {
     /// only ever have passed on the mutability check it asserted.
     fn fixture_over(
         disposition: StrategyDispositionV2,
-        checked: CheckedReleaseV1,
+        checked: CheckedReleaseV2,
     ) -> (
         CapabilityProgramV4,
         ExecutionStrategyProgramV2,
         ExecutionStrategyCertificateV2,
         Option<ExecutionStrategyAdmissionV2>,
-        CheckedReleaseV1,
+        CheckedReleaseV2,
     ) {
         let artifact = artifact_release_from_checked(&checked).expect("artifact");
         let artifact_release = artifact_id(artifact).expect("artifact id");

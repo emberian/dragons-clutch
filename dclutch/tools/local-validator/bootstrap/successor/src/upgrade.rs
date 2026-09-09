@@ -29,7 +29,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use dclutch_trading::COMPILED_DIRECT_RELEASE_ID_V1;
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry::{
-    ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1, DeploymentObservationV1,
+    ARTIFACT_RELEASE_SCHEMA_ID_V2, ArtifactReleaseV2, DeploymentObservationV2,
     require_slot_pinned_release_v1,
 };
 use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
@@ -3985,7 +3985,7 @@ fn authenticate_carry_forward(
     let registry_raw = Pubkey::find_program_address(
         &[
             RAW_RECORD_PDA_SEED_V1,
-            &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            &ARTIFACT_RELEASE_SCHEMA_ID_V2,
             &registry_artifact_id,
         ],
         &registry_program,
@@ -3994,7 +3994,7 @@ fn authenticate_carry_forward(
     let registry_staging = Pubkey::find_program_address(
         &[
             STAGING_CURSOR_PDA_SEED_V1,
-            &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            &ARTIFACT_RELEASE_SCHEMA_ID_V2,
             &registry_artifact_id,
         ],
         &registry_program,
@@ -4003,7 +4003,7 @@ fn authenticate_carry_forward(
     let rent_raw = Pubkey::find_program_address(
         &[
             RAW_RECORD_PDA_SEED_V1,
-            &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            &ARTIFACT_RELEASE_SCHEMA_ID_V2,
             &rent_artifact_id,
         ],
         &registry_program,
@@ -4012,7 +4012,7 @@ fn authenticate_carry_forward(
     let rent_staging = Pubkey::find_program_address(
         &[
             STAGING_CURSOR_PDA_SEED_V1,
-            &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            &ARTIFACT_RELEASE_SCHEMA_ID_V2,
             &rent_artifact_id,
         ],
         &registry_program,
@@ -4068,7 +4068,7 @@ fn authenticate_carry_forward(
                 "carry-forward {role} raw body does not match the profile artifact ID"
             )));
         }
-        let release = ArtifactReleaseV1::decode(&raw_account.data)
+        let release = ArtifactReleaseV2::decode(&raw_account.data)
             .map_err(|error| Error::new(format!("carry-forward {role} artifact: {error:?}")))?;
         require_slot_pinned_release_v1(release).map_err(|error| {
             Error::new(format!(
@@ -4087,7 +4087,7 @@ fn authenticate_carry_forward(
             )));
         }
         let live_sha: [u8; 32] = Sha256::digest(programdata_view.elf()).into();
-        let observation = DeploymentObservationV1::new(
+        let observation = DeploymentObservationV2::new(
             program.to_bytes(),
             program_account.owner.to_bytes(),
             program_account.executable,
@@ -12178,7 +12178,7 @@ mod tests {
                     let slot = 200 + u64::from(byte);
                     let (program_account, programdata_account) =
                         mixed_loader_accounts(programdata, authority, slot, &raw_elf);
-                    let release = ArtifactReleaseV1::new(
+                    let release = ArtifactReleaseV2::new(
                         dclutch_registry::release_set::ProgramIdentityV1::new(program.to_bytes())
                             .expect("program identity"),
                         dclutch_registry::release_set::ProgramIdentityV1::new(
@@ -12187,7 +12187,7 @@ mod tests {
                         .expect("loader identity"),
                         programdata.to_bytes(),
                         dclutch_core_contract::ContentId::new([30 + byte; 32]).expect("semantic"),
-                        Sha256::digest(&raw_elf).into(),
+                        dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(&raw_elf).expect("exact fixture code commitment"),
                         slot,
                         dclutch_registry::ArtifactUpgradePolicyV1::ExactAuthority,
                         Some(authority.to_bytes()),
@@ -12443,7 +12443,7 @@ mod tests {
             let registry_raw = Pubkey::find_program_address(
                 &[
                     RAW_RECORD_PDA_SEED_V1,
-                    &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+                    &ARTIFACT_RELEASE_SCHEMA_ID_V2,
                     &registry.6,
                 ],
                 &registry.0,
@@ -12452,7 +12452,7 @@ mod tests {
             let registry_staging = Pubkey::find_program_address(
                 &[
                     STAGING_CURSOR_PDA_SEED_V1,
-                    &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+                    &ARTIFACT_RELEASE_SCHEMA_ID_V2,
                     &registry.6,
                 ],
                 &registry.0,
@@ -12461,7 +12461,7 @@ mod tests {
             let rent_raw = Pubkey::find_program_address(
                 &[
                     RAW_RECORD_PDA_SEED_V1,
-                    &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+                    &ARTIFACT_RELEASE_SCHEMA_ID_V2,
                     &rent.6,
                 ],
                 &registry.0,
@@ -12470,7 +12470,7 @@ mod tests {
             let rent_staging = Pubkey::find_program_address(
                 &[
                     STAGING_CURSOR_PDA_SEED_V1,
-                    &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+                    &ARTIFACT_RELEASE_SCHEMA_ID_V2,
                     &rent.6,
                 ],
                 &registry.0,
@@ -13022,7 +13022,7 @@ mod tests {
             ]
         );
         for role in &pin.roles[..2] {
-            let release = ArtifactReleaseV1::decode(
+            let release = ArtifactReleaseV2::decode(
                 &crate::runtime::decode_hex(
                     role.artifact_release_body_hex
                         .as_deref()
@@ -13270,7 +13270,7 @@ mod tests {
         *bytes.last_mut().expect("ELF tail") ^= 1;
         live.rewrite_snapshot_data(1, &bytes);
         let error = authenticate_carry_forward(&live.journal).expect_err("stale live tail");
-        assert!(error.to_string().contains("ElfDigestMismatch"), "{error}");
+        assert!(error.to_string().contains("CodeCommitmentMismatch"), "{error}");
     }
 
     #[test]

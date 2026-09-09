@@ -35,7 +35,7 @@ use dclutch_program_test_evidence::TransactionEvidence;
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1, ArtifactActivationInputV1,
-    ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1,
+    ArtifactReleaseV2, ArtifactUpgradePolicyV1, DeploymentObservationV2,
     activate_execution_role_into_v1, initialize_activation_cache_v1,
 };
 use dclutch_registry::release_set::{
@@ -205,7 +205,7 @@ fn add_program(
     );
 }
 
-fn release(program: Pubkey, semantic: [u8; 32], elf: &[u8]) -> ArtifactReleaseV1 {
+fn release(program: Pubkey, semantic: [u8; 32], elf: &[u8]) -> ArtifactReleaseV2 {
     release_with_pin(
         program,
         semantic,
@@ -223,13 +223,14 @@ fn release_with_pin(
     deployment_slot: u64,
     upgrade_policy: ArtifactUpgradePolicyV1,
     upgrade_authority: Option<[u8; 32]>,
-) -> ArtifactReleaseV1 {
-    ArtifactReleaseV1::new(
+) -> ArtifactReleaseV2 {
+    ArtifactReleaseV2::new(
         program_identity(program),
         program_identity(bpf_loader_upgradeable::ID),
         programdata(program).to_bytes(),
         content(semantic),
-        hash(elf).to_bytes(),
+        dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(elf)
+            .expect("exact ProgramData ELF commitment"),
         deployment_slot,
         upgrade_policy,
         upgrade_authority,
@@ -237,19 +238,37 @@ fn release_with_pin(
     .expect("pinned release")
 }
 
-fn artifact_id(value: ArtifactReleaseV1) -> ArtifactReleaseIdV1 {
+#[test]
+fn fixture_release_commits_exact_elf_bytes_v2() {
+    // A synthetic nonempty tail exercises this fixture constructor's argument
+    // semantics; actual SBF campaigns supply the exact loaded ELF bytes here.
+    let elf = b"\x7fELFfixture-code-commitment-v2";
+    let observed = release(Pubkey::new_unique(), [7; 32], elf);
+    let expected = dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(elf)
+        .expect("nonempty exact tail");
+    assert_eq!(observed.code_commitment(), expected);
+    assert_ne!(observed.code_commitment(), hash(elf).to_bytes());
+    let mut changed = elf.to_vec();
+    changed[elf.len() - 1] ^= 1;
+    assert_ne!(
+        observed.code_commitment(),
+        release(observed.program().to_bytes().into(), [7; 32], &changed).code_commitment()
+    );
+}
+
+fn artifact_id(value: ArtifactReleaseV2) -> ArtifactReleaseIdV1 {
     ArtifactReleaseIdV1::new(hash(&value.to_bytes()).to_bytes()).expect("artifact identity")
 }
 
-fn binding(value: ArtifactReleaseV1) -> ExecutionRoleBindingV1 {
+fn binding(value: ArtifactReleaseV2) -> ExecutionRoleBindingV1 {
     ExecutionRoleBindingV1::new(value.program(), artifact_id(value))
 }
 
-fn activation_input(value: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
+fn activation_input(value: ArtifactReleaseV2) -> ArtifactActivationInputV1 {
     ArtifactActivationInputV1::new(
         artifact_id(value),
         value,
-        DeploymentObservationV1::new(
+        DeploymentObservationV2::new(
             value.program().to_bytes(),
             bpf_loader_upgradeable::ID.to_bytes(),
             true,
@@ -259,7 +278,7 @@ fn activation_input(value: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
             value.programdata(),
             bpf_loader_upgradeable::ID.to_bytes(),
             value.deployment_slot(),
-            value.elf_digest(),
+            value.code_commitment(),
             value.upgrade_authority(),
         )
         .expect("deployment observation"),

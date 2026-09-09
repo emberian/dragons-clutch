@@ -57,11 +57,11 @@ const outputUrl = new URL('../lib/generated/protocolConstantsV1.ts', import.meta
 const ROWS = [
   // --- record magics -------------------------------------------------------
   ['ACTIVATION_CACHE_MAGIC_V1', 'crates/dclutch-registry/src/activation.rs', 'ACTIVATED_EXECUTION_RELEASE_SET_MAGIC_V1', 'record'],
-  ['ARTIFACT_RELEASE_MAGIC_V1', 'crates/dclutch-registry/src/artifact.rs', 'ARTIFACT_RELEASE_MAGIC_V1', 'record'],
+  ['ARTIFACT_RELEASE_MAGIC_V2', 'crates/dclutch-registry/src/artifact.rs', 'ARTIFACT_RELEASE_MAGIC_V2', 'record'],
   ['CAPABILITY_SEAL_MAGIC_V1', 'crates/dclutch-vm/src/capability_seal/mod.rs', 'CAPABILITY_SEAL_MAGIC_V1', 'record'],
   ['CHECKED_INFRASTRUCTURE_MAGIC_V1', 'crates/dclutch-release-tool/src/infrastructure.rs', 'CHECKED_INFRASTRUCTURE_MAGIC_V1', 'record'],
   ['CHECKED_MULTIPROGRAM_MAGIC_V1', 'crates/dclutch-release-tool/src/multiprogram.rs', 'CHECKED_MULTIPROGRAM_MAGIC_V1', 'record'],
-  ['CHECKED_RELEASE_MAGIC_V1', 'crates/dclutch-release-tool/src/lib.rs', 'CHECKED_RELEASE_MAGIC_V1', 'record'],
+  ['CHECKED_RELEASE_MAGIC_V2', 'crates/dclutch-release-tool/src/lib.rs', 'CHECKED_RELEASE_MAGIC_V2', 'record'],
   ['EXECUTION_RELEASE_SET_MAGIC_V1', 'crates/dclutch-registry/src/release_set/mod.rs', 'EXECUTION_RELEASE_SET_MAGIC_V1', 'record'],
   ['PRODUCT_RUNTIME_DOMAIN_MAGIC_V2', 'crates/dclutch-product/src/generated.rs', 'DOMAIN_MAGIC', 'record'],
   ['PRODUCT_RUNTIME_PORTFOLIO_MAGIC_V2', 'crates/dclutch-product/src/generated.rs', 'PORTFOLIO_MAGIC', 'record'],
@@ -81,6 +81,8 @@ const ROWS = [
   ['RELEASE_LINEAGE_PDA_DOMAIN_V1', 'crates/dclutch-registry/src/lineage.rs', 'RELEASE_LINEAGE_PDA_DOMAIN_V1', 'seed'],
   // --- digest domains, as the bytes a hash preimage is prefixed with -------
   ['FAMILY_REQUEST_DIGEST_DOMAIN_V3', 'crates/dclutch-market/src/execution_strategy/shadow_digest_v3.rs', 'FAMILY_REQUEST_DIGEST_DOMAIN_V3', 'digest'],
+  ['CODE_COMMITMENT_INITIAL_DOMAIN_V2', 'crates/dclutch-registry/src/artifact_code_commitment_v2.rs', 'INITIAL_DOMAIN', 'digest'],
+  ['CODE_COMMITMENT_CHUNK_DOMAIN_V2', 'crates/dclutch-registry/src/artifact_code_commitment_v2.rs', 'CHUNK_DOMAIN', 'digest'],
   // --- envelope kinds and formats, as the text a JSON document carries -----
   ['DIRECT_TICKET_KIND_V1', 'crates/dclutch-direct-ticket/src/envelope.rs', 'PORTABLE_DIRECT_TICKET_KIND_V1', 'text'],
   ['GENERAL_SUCCESSOR_PLAN_FORMAT_V5', 'crates/dclutch-operator/src/general_successor.rs', 'PLAN_FORMAT_V5', 'text'],

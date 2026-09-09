@@ -458,6 +458,7 @@ mod tests {
             observed_owner: None,
             observed_executable: Some(false),
             observed_live_elf_sha256: live_elf_sha256.map(str::to_owned),
+            observed_code_commitment: None,
             pinned_live_elf_sha256: String::new(),
             checked_candidate_elf_sha256: String::new(),
             live_elf_padding_bytes: 0,

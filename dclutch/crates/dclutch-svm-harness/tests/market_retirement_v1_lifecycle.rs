@@ -150,12 +150,12 @@ async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
     );
     let registry_artifact = add_record(
         test,
-        ARTIFACT_RELEASE_SCHEMA_ID_V1,
+        ARTIFACT_RELEASE_SCHEMA_ID_V2,
         registry_release.to_bytes().to_vec(),
     );
     let rent_artifact = add_record(
         test,
-        ARTIFACT_RELEASE_SCHEMA_ID_V1,
+        ARTIFACT_RELEASE_SCHEMA_ID_V2,
         rent_release.to_bytes().to_vec(),
     );
     let infrastructure_profile = Pubkey::find_program_address(

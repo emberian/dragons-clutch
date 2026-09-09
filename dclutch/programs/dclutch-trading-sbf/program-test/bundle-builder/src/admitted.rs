@@ -27,7 +27,7 @@ use dclutch_market::execution_strategy::{
 use dclutch_registry::release_set::{ArtifactReleaseIdV1, CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_registry::{
-    ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1, DeploymentObservationV1,
+    ARTIFACT_RELEASE_SCHEMA_ID_V2, ArtifactReleaseV2, DeploymentObservationV2,
     require_slot_pinned_release_v1,
 };
 use sha2::{Digest, Sha256};
@@ -180,7 +180,7 @@ pub fn derive_admitted_evidence_v1(
         .map_err(|_| BuilderError::Artifact)?;
     let admission = ExecutionStrategyAdmissionV2::decode(admission_bytes)
         .map_err(|_| BuilderError::Artifact)?;
-    let release = ArtifactReleaseV1::decode(artifact_bytes).map_err(|_| BuilderError::Artifact)?;
+    let release = ArtifactReleaseV2::decode(artifact_bytes).map_err(|_| BuilderError::Artifact)?;
     require_slot_pinned_release_v1(release).map_err(|_| BuilderError::Artifact)?;
 
     let strategy_id = content(digest(set.strategy))?;
@@ -221,7 +221,7 @@ pub fn derive_admitted_evidence_v1(
         ),
         artifact_release: derive_record(
             registry_program,
-            ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            ARTIFACT_RELEASE_SCHEMA_ID_V2,
             artifact_bytes,
         ),
         accelerator_program: accelerator_program.clone(),
@@ -483,7 +483,7 @@ pub fn validate_admitted_authority_keys_v1(
 }
 
 fn authenticate_deployment(
-    release: ArtifactReleaseV1,
+    release: ArtifactReleaseV2,
     program: &BuiltAccountV1,
     programdata: &BuiltAccountV1,
 ) -> Result<(), BuilderError> {
@@ -507,7 +507,7 @@ fn authenticate_deployment(
     if program_view.programdata() != programdata.key.to_bytes() {
         return Err(BuilderError::Artifact);
     }
-    let observation = DeploymentObservationV1::new(
+    let observation = DeploymentObservationV2::new(
         program.key.to_bytes(),
         program_view_account.owner.to_bytes(),
         program_view_account.executable,
@@ -517,7 +517,8 @@ fn authenticate_deployment(
         program_view.programdata(),
         bpf_loader_upgradeable::ID.to_bytes(),
         programdata_view.deployment_slot(),
-        hash(programdata_view.elf()).to_bytes(),
+        dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(programdata_view.elf())
+            .map_err(|_| BuilderError::Artifact)?,
         programdata_view.upgrade_authority(),
     )
     .map_err(|_| BuilderError::Artifact)?;
@@ -639,12 +640,13 @@ mod tests {
         let slot = 77_u64;
         let program = built(program_key, loader_program_bytes(programdata_key), true);
         let programdata = built(programdata_key, loader_programdata_bytes(slot, &elf), false);
-        let artifact_release = ArtifactReleaseV1::new(
+        let artifact_release = ArtifactReleaseV2::new(
             ProgramIdentityV1::new(program_key.to_bytes()).expect("program"),
             ProgramIdentityV1::new(bpf_loader_upgradeable::ID.to_bytes()).expect("loader"),
             programdata_key.to_bytes(),
             id(0x83),
-            hash(&elf).to_bytes(),
+            dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(&elf)
+                .expect("code commitment"),
             slot,
             ArtifactUpgradePolicyV1::Immutable,
             None,
@@ -796,12 +798,13 @@ mod tests {
         )
         .to_bytes();
         let substituted_admission = ExecutionStrategyAdmissionV2::new(id(0x66)).to_bytes();
-        let substituted_release = ArtifactReleaseV1::new(
+        let substituted_release = ArtifactReleaseV2::new(
             ProgramIdentityV1::new(fixture.program.key.to_bytes()).expect("program"),
             ProgramIdentityV1::new(bpf_loader_upgradeable::ID.to_bytes()).expect("loader"),
             fixture.programdata.key.to_bytes(),
             id(0x84),
-            hash(&[0xa5_u8; 128]).to_bytes(),
+            dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(&[0xa5_u8; 128])
+                .expect("code commitment"),
             77,
             ArtifactUpgradePolicyV1::Immutable,
             None,

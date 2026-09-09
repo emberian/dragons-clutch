@@ -16,9 +16,9 @@ use dclutch_registry::record::{
     APPEND_PAGE_HEADER_BYTES_V1, AppendPageV1, BeginRecordV1,
     CANONICAL_RECORD_DEPLOYMENT_PROFILE_V1, ContentDigest, FinalizeRecordV1,
     RAW_RECORD_PDA_SEED_V1, RecordKeyV1, STAGING_CURSOR_BYTES_V1, STAGING_CURSOR_PDA_SEED_V1,
-    SchemaReleaseId, StagingCursorV1,
+    SchemaReleaseId, StagingCursorV1, artifact_verification_progress_v2, staging_cursor_bytes_v1,
 };
-use dclutch_registry::{ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1};
+use dclutch_registry::{ARTIFACT_RELEASE_SCHEMA_ID_V2, ArtifactReleaseV2};
 use solana_program::{
     account_info::AccountInfo,
     clock::Clock,
@@ -113,8 +113,9 @@ pub struct RecordPublicationPlanV1 {
     pub byte_offset: u64,
     /// Exact current sponsor debit for Begin; zero otherwise.
     pub sponsor_debit: u64,
-    /// Exact cursor balance returned on Finalize; zero otherwise.
-    pub cursor_refund: u64,
+    /// Exact known cursor refund. Artifact Finalize is `None` until chain
+    /// readback decides whether that bounded step finalized or made progress.
+    pub cursor_refund: Option<u64>,
     /// Finalized RPC observation shared by every input account.
     pub observation_slot: u64,
 }
@@ -330,7 +331,7 @@ fn build_begin(
     let rent = decode_rent(state.rent)?;
     let clock = decode_clock(state.clock)?;
     let raw_rent = rent.minimum_balance(content.content.len());
-    let cursor_rent = rent.minimum_balance(STAGING_CURSOR_BYTES_V1);
+    let cursor_rent = rent.minimum_balance(staging_cursor_bytes_v1(key));
     let cursor_balance = cursor_rent
         .checked_add(cursor_rent)
         .ok_or(PublicationErrorV1::ArithmeticOverflow)?;
@@ -398,14 +399,16 @@ fn build_live(
         || state.raw_record.data.len() != content.content.len()
         || state.staging_cursor.owner != registry_program
         || state.staging_cursor.executable
-        || state.staging_cursor.data.len() != STAGING_CURSOR_BYTES_V1
+        || state.staging_cursor.data.len() != staging_cursor_bytes_v1(key)
         || state.staging_cursor.lamports == 0
     {
         return Err(PublicationErrorV1::AccountAuthority);
     }
     let cursor = StagingCursorV1::decode(state.staging_cursor.data)
         .map_err(PublicationErrorV1::RecordContract)?;
-    if cursor.to_bytes().as_slice() != state.staging_cursor.data
+    artifact_verification_progress_v2(state.staging_cursor.data)
+        .map_err(PublicationErrorV1::RecordContract)?;
+    if cursor.to_bytes().as_slice() != &state.staging_cursor.data[..STAGING_CURSOR_BYTES_V1]
         || cursor.key() != key
         || cursor.raw_record_account().to_bytes() != state.raw_record.key.to_bytes()
         || cursor.staging_account().to_bytes() != state.staging_cursor.key.to_bytes()
@@ -438,9 +441,9 @@ fn build_live(
             AccountMeta::new(state.staging_cursor.key, false),
             AccountMeta::new(state.sponsor.key, false),
         ];
-        if content.schema_release_id == ARTIFACT_RELEASE_SCHEMA_ID_V1 {
+        if content.schema_release_id == ARTIFACT_RELEASE_SCHEMA_ID_V2 {
             let release =
-                ArtifactReleaseV1::decode(content.content).map_err(PublicationErrorV1::Registry)?;
+                ArtifactReleaseV2::decode(content.content).map_err(PublicationErrorV1::Registry)?;
             accounts.push(AccountMeta::new_readonly(
                 Pubkey::new_from_array(release.program().to_bytes()),
                 false,
@@ -450,7 +453,7 @@ fn build_live(
                 false,
             ));
         }
-        return Ok(plan(
+        let mut result = plan(
             RecordPublicationActionV1::Finalize,
             Some(Instruction {
                 program_id: registry_program,
@@ -464,7 +467,11 @@ fn build_live(
             0,
             state.staging_cursor.lamports,
             slot,
-        ));
+        );
+        if content.schema_release_id == ARTIFACT_RELEASE_SCHEMA_ID_V2 {
+            result.cursor_refund = None;
+        }
+        return Ok(result);
     }
     let start = usize::try_from(cursor.next_offset())
         .map_err(|_| PublicationErrorV1::ArithmeticOverflow)?;
@@ -566,7 +573,7 @@ fn plan(
         page_index,
         byte_offset,
         sponsor_debit,
-        cursor_refund,
+        cursor_refund: Some(cursor_refund),
         observation_slot,
     }
 }

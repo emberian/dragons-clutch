@@ -160,13 +160,13 @@ pub enum Error {
     IncoherentVenueBody,
     /// The observed venue deployment was not the release-pinned one.
     VenueDeploymentMismatch,
-    /// A `LoaderV3` row was interpreted with no pinned `ArtifactReleaseV1`.
+    /// A `LoaderV3` row was interpreted with no pinned `ArtifactReleaseV2`.
     ///
     /// The cross-cluster deployment check IS the defense for a venue that can
     /// be upgraded under a market, so a caller that omits the release has not
     /// presented a weaker observation, it has presented an unauthenticated one.
     VenueReleaseAbsent,
-    /// A `Native` row was handed a pinned `ArtifactReleaseV1`.
+    /// A `Native` row was handed a pinned `ArtifactReleaseV2`.
     ///
     /// A program the runtime itself implements has no `ProgramData`, no ELF
     /// digest and no upgrade authority, so a release offered for it pins

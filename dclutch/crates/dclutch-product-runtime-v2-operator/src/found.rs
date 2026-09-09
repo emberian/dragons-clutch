@@ -36,8 +36,8 @@ use dclutch_registry::release_set::{
 };
 use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_registry::{
-    ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetViewV1,
-    ArtifactReleaseV1, DeploymentObservationV1, require_slot_pinned_release_v1,
+    ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_SCHEMA_ID_V2, ActivatedExecutionReleaseSetViewV1,
+    ArtifactReleaseV2, DeploymentObservationV2, require_slot_pinned_release_v1,
 };
 use dclutch_source::{
     ContentId as SourceContentId, MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1, ManipulationFloorV1,
@@ -786,8 +786,8 @@ fn authenticate_artifact(
     programdata: AccountObservationV2<'_>,
 ) -> Result<ExecutionRoleBindingV1> {
     let coordinate =
-        authenticate_product_record(registry, ARTIFACT_RELEASE_SCHEMA_ID_V1, observation)?;
-    let release = ArtifactReleaseV1::decode(observation.raw.data).map_err(Error::Registry)?;
+        authenticate_product_record(registry, ARTIFACT_RELEASE_SCHEMA_ID_V2, observation)?;
+    let release = ArtifactReleaseV2::decode(observation.raw.data).map_err(Error::Registry)?;
     if release.program().to_bytes() != program.key.to_bytes() {
         return Err(Error::CrossRecordMismatch);
     }
@@ -810,7 +810,7 @@ fn authenticate_artifact(
 fn authenticate_current_deployment(
     program: AccountObservationV2<'_>,
     programdata: AccountObservationV2<'_>,
-    release: ArtifactReleaseV1,
+    release: ArtifactReleaseV2,
 ) -> Result<()> {
     require_slot_pinned_release_v1(release).map_err(Error::Registry)?;
     if release.loader_program().to_bytes() != bpf_loader_upgradeable::ID.to_bytes()
@@ -833,7 +833,7 @@ fn authenticate_current_deployment(
     }
     let programdata_view =
         ProgramDataV3View::parse(programdata.data).map_err(Error::RegistrySvm)?;
-    let deployment = DeploymentObservationV1::new(
+    let deployment = DeploymentObservationV2::new(
         program.key.to_bytes(),
         program.owner.to_bytes(),
         program.executable,
@@ -843,7 +843,8 @@ fn authenticate_current_deployment(
         program_view.programdata(),
         bpf_loader_upgradeable::ID.to_bytes(),
         programdata_view.deployment_slot(),
-        hash(programdata_view.elf()).to_bytes(),
+        dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(programdata_view.elf())
+            .map_err(|_| Error::AccountAuthority)?,
         programdata_view.upgrade_authority(),
     )
     .map_err(Error::Registry)?;

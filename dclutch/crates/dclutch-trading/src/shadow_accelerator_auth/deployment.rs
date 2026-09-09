@@ -7,23 +7,24 @@
 
 use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_registry::{
-    ArtifactReleaseV1, DeploymentObservationV1, Error as RegistryContractError,
-    require_slot_pinned_release_v1, slot_pinned_release_elf_digest_v1,
+    ArtifactReleaseV2, DeploymentObservationV2, Error as RegistryContractError,
+    require_slot_pinned_release_v1, slot_pinned_release_code_commitment_v2,
 };
-use solana_program::{account_info::AccountInfo, hash::hash};
+use solana_program::account_info::AccountInfo;
 use solana_sdk_ids::bpf_loader_upgradeable;
 
 use crate::shadow_accelerator_auth::ShadowAcceleratorAuthErrorV4;
 
-/// Reauthenticate one current Loader V3 deployment by hashing its exact ELF.
+/// Reauthenticate one current Loader V3 deployment from its exact ELF.
 ///
 /// A finalized `ArtifactRelease` record proves only its own content identity.
-/// Nothing has bound its `elf_digest` to the account being observed, so this
-/// path always hashes the complete observed ELF.  Use
+/// Nothing has bound its code commitment to the account being observed, so
+/// this path always computes the canonical commitment over the complete
+/// observed ELF. Use
 /// `authenticate_activated_current_deployment` only where the Registry
 /// activation cache already carries that binding.
 pub fn authenticate_current_deployment(
-    release: ArtifactReleaseV1,
+    release: ArtifactReleaseV2,
     program: &AccountInfo<'_>,
     programdata: &AccountInfo<'_>,
 ) -> Result<(), ShadowAcceleratorAuthErrorV4> {
@@ -34,14 +35,14 @@ pub fn authenticate_current_deployment(
 ///
 /// `release` must come from the Registry activation cache, where
 /// `activate_execution_role_into_v1` already authenticated a chain-observed
-/// deployment — including the complete ELF digest — before persisting it. That
-/// admitted digest is reused while the release's PIN still holds: an
+/// deployment — including the complete code commitment — before persisting it.
+/// That admitted commitment is reused while the release's pin still holds: an
 /// `Immutable` deployment can never be redeployed at all, and an
 /// `ExactAuthority` deployment cannot have moved while its observed ProgramData
 /// still carries the exact slot the activation bound (decision 0012). Either
 /// way, hashing a megabyte-scale ELF on every hot action would recompute an
 /// already-authenticated fact.
-/// `dclutch_registry::slot_pinned_release_elf_digest_v1` owns that
+/// `dclutch_registry::slot_pinned_release_code_commitment_v2` owns that
 /// argument and the Registry role batch already relies on it. Identity,
 /// ProgramData link, Loader ownership, executability, the exact deployment
 /// slot, and the exact upgrade authority are still checked here and again by
@@ -49,7 +50,7 @@ pub fn authenticate_current_deployment(
 /// falls back to hashing, because on any state the Loader can actually reach
 /// the hash would only confirm what the slot already said.
 pub fn authenticate_activated_current_deployment(
-    release: ArtifactReleaseV1,
+    release: ArtifactReleaseV2,
     program: &AccountInfo<'_>,
     programdata: &AccountInfo<'_>,
 ) -> Result<(), ShadowAcceleratorAuthErrorV4> {
@@ -57,7 +58,7 @@ pub fn authenticate_activated_current_deployment(
 }
 
 fn authenticate_deployment_v2(
-    release: ArtifactReleaseV1,
+    release: ArtifactReleaseV2,
     program: &AccountInfo<'_>,
     programdata: &AccountInfo<'_>,
     activation_bound_elf: bool,
@@ -94,8 +95,8 @@ fn authenticate_deployment_v2(
     let programdata_view = ProgramDataV3View::parse(&programdata_bytes)
         .map_err(|_| ShadowAcceleratorAuthErrorV4::Content)?;
     require_slot_pinned_release_v1(release).map_err(|_| ShadowAcceleratorAuthErrorV4::Content)?;
-    let elf_digest = if activation_bound_elf {
-        slot_pinned_release_elf_digest_v1(
+    let code_commitment = if activation_bound_elf {
+        slot_pinned_release_code_commitment_v2(
             release,
             programdata_view.upgrade_authority(),
             programdata_view.deployment_slot(),
@@ -107,9 +108,10 @@ fn authenticate_deployment_v2(
             _ => ShadowAcceleratorAuthErrorV4::Content,
         })?
     } else {
-        hash(programdata_view.elf()).to_bytes()
+        dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(programdata_view.elf())
+            .map_err(|_| ShadowAcceleratorAuthErrorV4::Content)?
     };
-    let observation = DeploymentObservationV1::new(
+    let observation = DeploymentObservationV2::new(
         program.key.to_bytes(),
         program.owner.to_bytes(),
         program.executable,
@@ -119,7 +121,7 @@ fn authenticate_deployment_v2(
         program_view.programdata(),
         bpf_loader_upgradeable::ID.to_bytes(),
         programdata_view.deployment_slot(),
-        elf_digest,
+        code_commitment,
         programdata_view.upgrade_authority(),
     )
     .map_err(|_| ShadowAcceleratorAuthErrorV4::Content)?;

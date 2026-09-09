@@ -1,0 +1,36 @@
+{
+  "chunk_bytes": 1048576,
+  "generator": "crates/dclutch-release-tool/examples/code_commitment_vectors.rs",
+  "input_pattern": "byte[i] = i % 251",
+  "schema": "dclutch-code-commitment-native-vectors-v2",
+  "vectors": [
+    {
+      "code_commitment": "3a6c8ac2ab00fc0ae4f1fd9c2377abfee5b494b8d338612e7caa16dce3764fe8",
+      "length": 1
+    },
+    {
+      "code_commitment": "f105512e46adae571d1415121e6a995b3f11760ad68ce46cf98d9c48281132d0",
+      "length": 64
+    },
+    {
+      "code_commitment": "4100d157c6d7995400808288d4d16fbe8725be530f644ba613fa8bac52c08ff1",
+      "length": 1048575
+    },
+    {
+      "code_commitment": "cb63bde5c6187f0b2f52ccbe9a215c50ce389b2b1bb5b81274dccae3fcdf1c91",
+      "length": 1048576
+    },
+    {
+      "code_commitment": "b1d0cbaadce607af9b188659a7ae1b9d08ffcdfeb2e4c44d2afe3df7ebe3f839",
+      "length": 1048577
+    },
+    {
+      "code_commitment": "8b3bd706a0f03e2aa6312ba7e598e2341968ad29d26a5d82e1a41a7a07ac195d",
+      "length": 2735824
+    },
+    {
+      "code_commitment": "5e2e96dcb5c776fe497867f21480b651fea40d5b8b0caf4a5b9e39ee42f1d86d",
+      "length": 10485715
+    }
+  ]
+}

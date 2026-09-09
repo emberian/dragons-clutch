@@ -106,7 +106,7 @@ import {
   SYSTEM_PROGRAM_ID,
   authenticateArtifactDeploymentV1,
   deriveFinalizedRecordAddressesV1,
-  type ArtifactReleaseV1,
+  type ArtifactReleaseV2,
 } from './releaseRegistry';
 import { decodeCheckedInfrastructureV1 } from './infrastructure';
 import { type RpcAccount, type SolanaRpcClient } from './rpc';
@@ -170,7 +170,7 @@ export type DirectHotRouteInspectionV3 = Readonly<{
 }>;
 
 export type DirectHotDeploymentObservationV3 = Readonly<{
-  artifact: ArtifactReleaseV1;
+  artifact: ArtifactReleaseV2;
   programAddress: string;
   program: RpcAccount;
   programDataAddress: string;

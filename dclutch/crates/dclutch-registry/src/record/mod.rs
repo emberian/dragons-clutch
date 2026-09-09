@@ -10,6 +10,9 @@
 //! account data, or close accounts. Those operations are explicit obligations
 //! of a composing [`RecordAdapterV1`].
 
+use crate::artifact_code_commitment_v2::{
+    CODE_COMMITMENT_PROGRESS_BYTES_V2, CodeCommitmentErrorV2, CodeCommitmentProgressV2,
+};
 use core::convert::TryFrom;
 
 /// Exact width of an opaque schema/release identity or content digest.
@@ -18,6 +21,56 @@ pub const ID_BYTES: usize = 32;
 pub const ACCOUNT_ID_BYTES: usize = 32;
 /// Exact encoded width of the temporary V1 staging cursor.
 pub const STAGING_CURSOR_BYTES_V1: usize = 296;
+/// Exact schema-selected artifact cursor, including its temporary verification tail.
+pub const ARTIFACT_STAGING_CURSOR_BYTES_V2: usize =
+    STAGING_CURSOR_BYTES_V1 + CODE_COMMITMENT_PROGRESS_BYTES_V2;
+
+/// Exact staging allocation selected by the immutable raw-record schema.
+pub fn staging_cursor_bytes_v1(key: RecordKeyV1) -> usize {
+    if key.schema_release_id().to_bytes() == crate::ARTIFACT_RELEASE_SCHEMA_ID_V2 {
+        ARTIFACT_STAGING_CURSOR_BYTES_V2
+    } else {
+        STAGING_CURSOR_BYTES_V1
+    }
+}
+
+/// Read artifact coverage from the one authenticated staging-account encoding.
+///
+/// `None` means ordinary record staging or the all-zero unstarted artifact tail.
+/// No finalized record may be inferred from a successful progress transition;
+/// finalization is still the cursor's actual closure.
+pub fn artifact_verification_progress_v2(bytes: &[u8]) -> Result<Option<CodeCommitmentProgressV2>> {
+    let cursor = StagingCursorV1::decode(bytes)?;
+    decode_verification_tail_v2(cursor.key(), bytes)
+}
+
+fn decode_verification_tail_v2(
+    key: RecordKeyV1,
+    bytes: &[u8],
+) -> Result<Option<CodeCommitmentProgressV2>> {
+    if bytes.len() != staging_cursor_bytes_v1(key) {
+        return Err(Error::InvalidLength);
+    }
+    if bytes.len() == STAGING_CURSOR_BYTES_V1 {
+        return Ok(None);
+    }
+    let tail = bytes
+        .get(STAGING_CURSOR_BYTES_V1..)
+        .ok_or(Error::InvalidLength)?;
+    if tail.iter().all(|byte| *byte == 0) {
+        return Ok(None);
+    }
+    let progress =
+        CodeCommitmentProgressV2::decode(tail).map_err(Error::ArtifactVerificationProgress)?;
+    // Only proper partial coverage is persisted. The last step closes staging
+    // atomically; the all-zero tail is the only unstarted representation.
+    if progress.next_offset() == 0 || progress.is_complete() {
+        return Err(Error::ArtifactVerificationProgress(
+            CodeCommitmentErrorV2::Encoding,
+        ));
+    }
+    Ok(Some(progress))
+}
 /// Exact encoded width of a Begin request.
 pub const BEGIN_RECORD_BYTES_V1: usize = 176;
 /// Exact fixed header width before one Append page's semantic bytes.
@@ -163,6 +216,8 @@ pub enum Error {
     InvalidCursorStatus,
     /// An output buffer did not have its exact required width.
     OutputLength,
+    /// Artifact verification progress was not the canonical schema-selected state.
+    ArtifactVerificationProgress(CodeCommitmentErrorV2),
 }
 
 /// Result alias for record-contract operations.
@@ -833,7 +888,8 @@ pub struct StagingCursorV1 {
 impl StagingCursorV1 {
     /// Decode one exact hostile cursor and recheck all derived geometry.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        if bytes.len() != STAGING_CURSOR_BYTES_V1 {
+        if bytes.len() != STAGING_CURSOR_BYTES_V1 && bytes.len() != ARTIFACT_STAGING_CURSOR_BYTES_V2
+        {
             return Err(Error::InvalidLength);
         }
         if read_array::<8>(bytes, 0)? != STAGING_CURSOR_MAGIC_V1 {
@@ -849,6 +905,7 @@ impl StagingCursorV1 {
             SchemaReleaseId::decode(slice(bytes, CURSOR_SCHEMA_ID_OFFSET, ID_BYTES)?)?,
             ContentDigest::decode(slice(bytes, CURSOR_DIGEST_OFFSET, ID_BYTES)?)?,
         );
+        let verification = decode_verification_tail_v2(key, bytes)?;
         let page_envelope = PageEnvelopeV1::new(
             PageEnvelopeKindV1::decode(read_u8(bytes, CURSOR_ENVELOPE_KIND_OFFSET)?)?,
             read_u32(bytes, CURSOR_PAGE_BYTES_OFFSET)?,
@@ -885,7 +942,7 @@ impl StagingCursorV1 {
             return Err(Error::GeometryMismatch);
         }
         let expected_offset = offset_after_pages(page_envelope, exact_length, next_page)?;
-        if next_offset != expected_offset {
+        if next_offset != expected_offset || (verification.is_some() && next_page != page_count) {
             return Err(Error::GeometryMismatch);
         }
         Ok(Self {
@@ -905,7 +962,9 @@ impl StagingCursorV1 {
         })
     }
 
-    /// Encode exact canonical cursor bytes.
+    /// Encode the generic upload prefix. ArtifactV2 account allocation appends
+    /// its schema-selected verification tail; `staging_cursor_bytes_v1` owns
+    /// that complete allocation width.
     pub fn to_bytes(self) -> [u8; STAGING_CURSOR_BYTES_V1] {
         let mut output = [0; STAGING_CURSOR_BYTES_V1];
         put(&mut output, 0, &STAGING_CURSOR_MAGIC_V1);
@@ -1276,8 +1335,8 @@ pub fn prepare_begin_v1<A: RecordAdapterV1>(
         expiry_slot: request.expiry_slot,
         cleanup_bounty_lamports: request.cleanup_bounty_lamports,
     };
-    let staging_data_length =
-        u64::try_from(STAGING_CURSOR_BYTES_V1).map_err(|_| Error::ArithmeticOverflow)?;
+    let staging_data_length = u64::try_from(staging_cursor_bytes_v1(request.key))
+        .map_err(|_| Error::ArithmeticOverflow)?;
     Ok(BeginTransitionV1 {
         cursor,
         allocation: RecordAllocationV1 {

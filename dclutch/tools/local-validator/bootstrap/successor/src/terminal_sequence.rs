@@ -59,7 +59,7 @@ use dclutch_operator::{
 };
 use dclutch_product::payoff::registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3;
 use dclutch_registry::{
-    ARTIFACT_RELEASE_SCHEMA_ID_V1,
+    ARTIFACT_RELEASE_SCHEMA_ID_V2,
     record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1},
     release_set::{ExecutionRoleBindingV1, ExecutionRoleV1, ProtocolInfrastructureProfileV2},
 };
@@ -7095,7 +7095,7 @@ fn profile_artifact_record_pair_v1(
         Pubkey::find_program_address(
             &[
                 RAW_RECORD_PDA_SEED_V1,
-                &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+                &ARTIFACT_RELEASE_SCHEMA_ID_V2,
                 &digest,
             ],
             &registry,
@@ -7104,7 +7104,7 @@ fn profile_artifact_record_pair_v1(
         Pubkey::find_program_address(
             &[
                 STAGING_CURSOR_PDA_SEED_V1,
-                &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+                &ARTIFACT_RELEASE_SCHEMA_ID_V2,
                 &digest,
             ],
             &registry,

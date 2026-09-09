@@ -1488,7 +1488,7 @@ fn live_registry_artifact_pair_v1(
     let profile = ProtocolInfrastructureProfileV2::decode(&account.data)
         .map_err(|error| Error::new(format!("infrastructure profile: {error:?}")))?;
     let digest = profile.registry().artifact_release().to_bytes();
-    let schema = dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V1;
+    let schema = dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V2;
     let raw =
         Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &schema, &digest], &registry).0;
     let staging =
@@ -1561,8 +1561,8 @@ fn authenticate_frame_records_v1(
     use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
     let schemas: [(&str, [u8; 32]); 6] = [
         (
-            "ArtifactReleaseV1",
-            dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            "ArtifactReleaseV2",
+            dclutch_registry::ARTIFACT_RELEASE_SCHEMA_ID_V2,
         ),
         (
             "SourceMaterialV3",

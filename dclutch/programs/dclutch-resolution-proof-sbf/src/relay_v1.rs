@@ -27,7 +27,7 @@
 
 use dclutch_product::ResultDomainV2;
 use dclutch_product::svm_reader::AuthenticatedProductRuntimeV2;
-use dclutch_registry::ArtifactReleaseV1;
+use dclutch_registry::ArtifactReleaseV2;
 use dclutch_source::relay::{
     Error as RelayContractError,
     decode::{
@@ -135,10 +135,10 @@ pub struct AuthenticatedRelaySourceRecordsV1 {
 /// One authenticated venue artifact release and the identity that named it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AuthenticatedVenueReleaseV1 {
-    /// `ArtifactReleaseV1` content identity, from `SourceSpecV1.adapter_config_id`.
+    /// `ArtifactReleaseV2` content identity, from `SourceSpecV1.adapter_config_id`.
     pub id: SourceContentId,
     /// The authenticated release, carrying the deployment the row pins.
-    pub release: ArtifactReleaseV1,
+    pub release: ArtifactReleaseV2,
 }
 
 /// The exact coordinates the outer authenticated before calling.
@@ -192,7 +192,7 @@ fn authenticate_graph(
     }
     // The per-market adapter slot names what this market's venue is pinned to,
     // and the two kinds pin different things.  A LoaderV3 row pins a
-    // deployment, so the slot names the `ArtifactReleaseV1` the frame carried.
+    // deployment, so the slot names the `ArtifactReleaseV2` the frame carried.
     // A native row has no deployment; what it pins is the ordered account set,
     // and naming it here binds the Source spec to that set independently of the
     // provider release — a second, differently rooted commitment to the same

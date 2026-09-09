@@ -75,22 +75,22 @@ use std::{
 };
 
 use base64::Engine as _;
-use dclutch_source::pyth::devnet_release_v1;
-use dclutch_registry::{
-    ACTIVATION_CACHE_BUMP_OFFSET_V1, ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1,
-    ActivatedExecutionReleaseSetV1, ActivatedExecutionReleaseSetViewV1, ActivationCacheProgressV1,
-    ArtifactReleaseV1, ArtifactUpgradePolicyV1, activation_cache_progress_v1,
-};
-use dclutch_registry::svm::{
-    LOADER_V3_PROGRAMDATA_METADATA_BYTES, ProgramDataMetadataV3View, ProgramDataV3View,
-    ProgramV3View,
-};
 use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, EXECUTION_ROLE_ORDER_V1, ExecutionRoleBindingV1, ExecutionRoleV1,
     PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1,
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, ProtocolInfrastructureProfileV1,
     ProtocolInfrastructureProfileV2,
 };
+use dclutch_registry::svm::{
+    LOADER_V3_PROGRAMDATA_METADATA_BYTES, ProgramDataMetadataV3View, ProgramDataV3View,
+    ProgramV3View,
+};
+use dclutch_registry::{
+    ACTIVATION_CACHE_BUMP_OFFSET_V1, ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_SCHEMA_ID_V2,
+    ActivatedExecutionReleaseSetV1, ActivatedExecutionReleaseSetViewV1, ActivationCacheProgressV1,
+    ArtifactReleaseV2, ArtifactUpgradePolicyV1, activation_cache_progress_v1,
+};
+use dclutch_source::pyth::devnet_release_v1;
 use serde::{
     Deserialize,
     de::{DeserializeSeed, MapAccess, SeqAccess, Visitor},
@@ -790,6 +790,8 @@ pub(crate) struct ObservedRoleV1 {
     /// the executable half of the Loader V3 pair.
     pub(crate) observed_executable: Option<bool>,
     pub(crate) observed_live_elf_sha256: Option<String>,
+    /// Native ArtifactReleaseV2 commitment over the actual observed ELF tail.
+    pub(crate) observed_code_commitment: Option<String>,
     pub(crate) pinned_live_elf_sha256: String,
     pub(crate) checked_candidate_elf_sha256: String,
     pub(crate) live_elf_padding_bytes: usize,
@@ -857,7 +859,7 @@ impl ObservedRoleV1 {
         }
         if self.observed_live_elf_sha256.as_deref() != Some(self.pinned_live_elf_sha256.as_str()) {
             conflicts.push(format!(
-                "{} observed complete live ELF SHA-256 {} but the release binds {}",
+                "{} observed complete live ELF SHA-256 {} but the checked deployment pin records {}",
                 self.role,
                 self.observed_live_elf_sha256.as_deref().unwrap_or("none"),
                 self.pinned_live_elf_sha256
@@ -1161,8 +1163,7 @@ fn authenticate_graduation_market_input_v1(input: &GraduationMarketInputV1) -> R
         .map_err(|error| Error::new(format!("graduation SourceSpecV1: {error:?}")))?;
     if source.domain_id().to_bytes() != coordinate_domain
         || source.unit_id().to_bytes() != result_unit
-        || source.access_profile()
-            != dclutch_source::SourceAccessProfile::RelayedObservationRecord
+        || source.access_profile() != dclutch_source::SourceAccessProfile::RelayedObservationRecord
     {
         return Err(Error::new(
             "graduation source body is not the relayed profile-v1 Product source",
@@ -1259,15 +1260,14 @@ fn authenticate_graduation_market_input_v1(input: &GraduationMarketInputV1) -> R
     }
 
     let venue_bytes = runtime::decode_hex(&input.market.pyth_adapter_config_hex)?;
-    let venue = dclutch_registry::ArtifactReleaseV1::decode(&venue_bytes)
-        .map_err(|error| Error::new(format!("graduation venue ArtifactReleaseV1: {error:?}")))?;
+    let venue = dclutch_registry::ArtifactReleaseV2::decode(&venue_bytes)
+        .map_err(|error| Error::new(format!("graduation venue ArtifactReleaseV2: {error:?}")))?;
     if venue.to_bytes().as_slice() != venue_bytes
         || venue.loader_program().to_bytes()
             != dclutch_source::relay::identity::LOADER_V3_PROGRAM_ID
         || venue.semantic_release_id().to_bytes()
             != crate::market::demo_id("relayed/venue-semantic-release/meteora-dbc", &[])
-        || venue.upgrade_policy()
-            != dclutch_registry::ArtifactUpgradePolicyV1::ExactAuthority
+        || venue.upgrade_policy() != dclutch_registry::ArtifactUpgradePolicyV1::ExactAuthority
         || venue.upgrade_authority().is_none()
         || digest_hex(&venue_bytes) != input.venue_release_digest
         || source.adapter_config_id().to_bytes()
@@ -1297,10 +1297,8 @@ fn authenticate_graduation_market_input_v1(input: &GraduationMarketInputV1) -> R
             &[],
         ))
         .map_err(|error| Error::new(format!("graduation capacity verifier: {error:?}")))?,
-        dclutch_source::ContentId::new(
-            dclutch_source::PRINCIPAL_CAPACITY_LIFTING_PLAN_ID_V1,
-        )
-        .map_err(|error| Error::new(format!("graduation capacity lifting plan: {error:?}")))?,
+        dclutch_source::ContentId::new(dclutch_source::PRINCIPAL_CAPACITY_LIFTING_PLAN_ID_V1)
+            .map_err(|error| Error::new(format!("graduation capacity lifting plan: {error:?}")))?,
         512,
         4,
     )
@@ -1337,10 +1335,8 @@ fn authenticate_graduation_market_input_v1(input: &GraduationMarketInputV1) -> R
             &[],
         ))
         .map_err(|error| Error::new(format!("graduation collateral unit: {error:?}")))?,
-        dclutch_source::ContentId::new(
-            dclutch_source::BONDING_CURVE_FLOOR_DERIVATION_ID_V1,
-        )
-        .map_err(|error| Error::new(format!("graduation floor derivation: {error:?}")))?,
+        dclutch_source::ContentId::new(dclutch_source::BONDING_CURVE_FLOOR_DERIVATION_ID_V1)
+            .map_err(|error| Error::new(format!("graduation floor derivation: {error:?}")))?,
         dclutch_source::BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1,
     );
     if floor.to_bytes().as_slice() != floor_bytes || floor != expected_floor {
@@ -2050,26 +2046,28 @@ pub(crate) fn substrate_state(
     for (role, pin) in runtime::role_pins(plan) {
         let programdata = pubkey(&pin.programdata_id)?;
         let account = rpc.account(programdata)?;
-        let (slot, authority, owner, executable, live_elf_sha256, data_len) = match &account {
-            None => (None, None, None, None, None, None),
-            Some(account) => {
-                let view = ProgramDataV3View::parse(&account.data).map_err(|error| {
-                    Error::new(format!(
-                        "{role} ProgramData at {programdata} does not parse as a Loader V3 \
+        let (slot, authority, owner, executable, live_elf_sha256, code_commitment, data_len) =
+            match &account {
+                None => (None, None, None, None, None, None, None),
+                Some(account) => {
+                    let view = ProgramDataV3View::parse(&account.data).map_err(|error| {
+                        Error::new(format!(
+                            "{role} ProgramData at {programdata} does not parse as a Loader V3 \
                          ProgramData account: {error:?}"
-                    ))
-                })?;
-                (
-                    Some(view.deployment_slot()),
-                    view.upgrade_authority()
-                        .map(|key| Pubkey::from(key).to_string()),
-                    Some(account.owner.to_string()),
-                    Some(account.executable),
-                    Some(hex(&<sha2::Sha256 as sha2::Digest>::digest(view.elf()))),
-                    Some(account.data.len()),
-                )
-            }
-        };
+                        ))
+                    })?;
+                    (
+                        Some(view.deployment_slot()),
+                        view.upgrade_authority()
+                            .map(|key| Pubkey::from(key).to_string()),
+                        Some(account.owner.to_string()),
+                        Some(account.executable),
+                        Some(hex(&<sha2::Sha256 as sha2::Digest>::digest(view.elf()))),
+                        Some(hex(&crate::plan::code_commitment_v2(view.elf())?)),
+                        Some(account.data.len()),
+                    )
+                }
+            };
         let row = ObservedRoleV1 {
             role: role.to_owned(),
             program_id: pin.program_id.clone(),
@@ -2081,6 +2079,7 @@ pub(crate) fn substrate_state(
             observed_owner: owner,
             observed_executable: executable,
             observed_live_elf_sha256: live_elf_sha256,
+            observed_code_commitment: code_commitment,
             pinned_live_elf_sha256: pin.live_elf_sha256.clone(),
             checked_candidate_elf_sha256: pin.checked_candidate_elf_sha256.clone(),
             live_elf_padding_bytes: pin.live_elf_padding_bytes,
@@ -2339,7 +2338,7 @@ fn born_at_v2_succession_state_v1(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result
 }
 
 struct SuccessionProjectionV1 {
-    registry_release: ArtifactReleaseV1,
+    registry_release: ArtifactReleaseV2,
     registry_artifact_id: ArtifactReleaseIdV1,
     profile: ProtocolInfrastructureProfileV2,
 }
@@ -2354,7 +2353,7 @@ fn succession_projection_v1(
         .get("registry_artifact_release")
         .ok_or_else(|| Error::new("plan omitted predecessor Registry artifact record"))?;
     let predecessor_bytes = runtime::decode_hex(&pair.body_hex)?;
-    let predecessor_release = ArtifactReleaseV1::decode(&predecessor_bytes)
+    let predecessor_release = ArtifactReleaseV2::decode(&predecessor_bytes)
         .map_err(|error| Error::new(format!("predecessor Registry artifact: {error:?}")))?;
     if sha256_bytes(&predecessor_bytes) != predecessor.registry().artifact_release().to_bytes()
         || observed_registry_slot <= predecessor_release.deployment_slot()
@@ -2363,12 +2362,12 @@ fn succession_projection_v1(
             "Registry succession did not move strictly forward from V1's pinned artifact",
         ));
     }
-    let registry_release = ArtifactReleaseV1::new(
+    let registry_release = ArtifactReleaseV2::new(
         predecessor_release.program(),
         predecessor_release.loader_program(),
         predecessor_release.programdata(),
         predecessor_release.semantic_release_id(),
-        predecessor_release.elf_digest(),
+        predecessor_release.code_commitment(),
         observed_registry_slot,
         predecessor_release.upgrade_policy(),
         predecessor_release.upgrade_authority(),
@@ -2504,7 +2503,7 @@ pub(crate) fn succession_state(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<St
     let raw = Pubkey::find_program_address(
         &[
             dclutch_registry::record::RAW_RECORD_PDA_SEED_V1,
-            &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            &ARTIFACT_RELEASE_SCHEMA_ID_V2,
             &digest,
         ],
         &registry,
@@ -2513,7 +2512,7 @@ pub(crate) fn succession_state(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<St
     let staging = Pubkey::find_program_address(
         &[
             dclutch_registry::record::STAGING_CURSOR_PDA_SEED_V1,
-            &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            &ARTIFACT_RELEASE_SCHEMA_ID_V2,
             &digest,
         ],
         &registry,
@@ -2608,7 +2607,7 @@ fn infrastructure_role_label_v1(role: ExecutionRoleV1) -> &'static str {
     }
 }
 
-fn artifact_release_evidence_v1(id: ArtifactReleaseIdV1, release: ArtifactReleaseV1) -> Value {
+fn artifact_release_evidence_v1(id: ArtifactReleaseIdV1, release: ArtifactReleaseV2) -> Value {
     let policy = match release.upgrade_policy() {
         ArtifactUpgradePolicyV1::Immutable => "immutable",
         ArtifactUpgradePolicyV1::ExactAuthority => "exact-authority",
@@ -2619,7 +2618,7 @@ fn artifact_release_evidence_v1(id: ArtifactReleaseIdV1, release: ArtifactReleas
         "loaderProgram": Pubkey::new_from_array(release.loader_program().to_bytes()).to_string(),
         "programData": Pubkey::new_from_array(release.programdata()).to_string(),
         "semanticReleaseId": hex(release.semantic_release_id().as_bytes()),
-        "elfSha256": hex(&release.elf_digest()),
+        "codeCommitment": hex(&release.code_commitment()),
         "deploymentSlot": release.deployment_slot(),
         "upgradePolicy": policy,
         "upgradeAuthority": release
@@ -2634,11 +2633,11 @@ fn finalized_artifact_release_evidence_v1(
     registry: Pubkey,
     id: ArtifactReleaseIdV1,
     label: &str,
-) -> Result<(ArtifactReleaseV1, Value)> {
+) -> Result<(ArtifactReleaseV2, Value)> {
     let raw = Pubkey::find_program_address(
         &[
             dclutch_registry::record::RAW_RECORD_PDA_SEED_V1,
-            &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            &ARTIFACT_RELEASE_SCHEMA_ID_V2,
             id.as_bytes(),
         ],
         &registry,
@@ -2647,7 +2646,7 @@ fn finalized_artifact_release_evidence_v1(
     let staging = Pubkey::find_program_address(
         &[
             dclutch_registry::record::STAGING_CURSOR_PDA_SEED_V1,
-            &ARTIFACT_RELEASE_SCHEMA_ID_V1,
+            &ARTIFACT_RELEASE_SCHEMA_ID_V2,
             id.as_bytes(),
         ],
         &registry,
@@ -2673,7 +2672,7 @@ fn finalized_artifact_release_evidence_v1(
             "infrastructure lineage {label} record is absent, partial, or not at its content identity"
         )));
     }
-    let release = ArtifactReleaseV1::decode(&raw_account.data)
+    let release = ArtifactReleaseV2::decode(&raw_account.data)
         .map_err(|error| Error::new(format!("infrastructure lineage {label}: {error:?}")))?;
     Ok((
         release,
@@ -2821,7 +2820,7 @@ fn infrastructure_lineage_evidence_v1(
     if predecessor_registry.program() != successor_registry.program()
         || predecessor_registry.programdata() != successor_registry.programdata()
         || predecessor_registry.semantic_release_id() != successor_registry.semantic_release_id()
-        || predecessor_registry.elf_digest() != successor_registry.elf_digest()
+        || predecessor_registry.code_commitment() != successor_registry.code_commitment()
         || predecessor_registry.upgrade_authority() != successor_registry.upgrade_authority()
         || successor_registry.deployment_slot() <= predecessor_registry.deployment_slot()
         || rent_release.program().to_bytes() != v2.rent().program().to_bytes()
@@ -3536,14 +3535,14 @@ fn authenticate_checked_plan_role_projection(
         .records
         .get(record_label)
         .ok_or_else(|| Error::new(format!("saved plan omitted {record_label}")))?;
-    if pair.schema_id != hex(&ARTIFACT_RELEASE_SCHEMA_ID_V1) {
+    if pair.schema_id != hex(&ARTIFACT_RELEASE_SCHEMA_ID_V2) {
         return Err(Error::new(format!(
             "saved plan {record_label} substituted the ArtifactRelease schema"
         )));
     }
     let body = runtime::decode_hex(&pair.body_hex)?;
     let body_sha = hex(&<sha2::Sha256 as sha2::Digest>::digest(&body));
-    let release = ArtifactReleaseV1::decode(&body).map_err(|error| {
+    let release = ArtifactReleaseV2::decode(&body).map_err(|error| {
         Error::new(format!(
             "saved plan {record_label} is not an ArtifactRelease: {error:?}"
         ))
@@ -3555,7 +3554,7 @@ fn authenticate_checked_plan_role_projection(
         || release.loader_program().to_bytes() != bpf_loader_upgradeable::ID.to_bytes()
         || release.semantic_release_id().as_bytes()
             != &crate::plan::hex32(&pin.semantic_release_id)?
-        || release.elf_digest() != crate::plan::hex32(&pin.live_elf_sha256)?
+        || release.code_commitment() != crate::plan::pinned_code_commitment_v2(pin)?
         || release.deployment_slot() != pin.deployment_slot
         || release.upgrade_authority() != Some(retained_authority.to_bytes())
     {
@@ -4045,6 +4044,7 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
             "loader_owner_holds": row.loader_owner_holds(),
             "observed_programdata_executable": row.observed_executable,
             "observed_live_elf_sha256": row.observed_live_elf_sha256,
+            "observed_code_commitment": row.observed_code_commitment,
             "release_binds_live_elf_sha256": row.pinned_live_elf_sha256,
             "checked_candidate_elf_sha256": row.checked_candidate_elf_sha256,
             "live_elf_padding_bytes": row.live_elf_padding_bytes,
@@ -4883,7 +4883,7 @@ fn execute_succession_stage_v1(
         rpc,
         registry,
         authority,
-        ARTIFACT_RELEASE_SCHEMA_ID_V1,
+        ARTIFACT_RELEASE_SCHEMA_ID_V2,
         &successor_bytes,
         None,
         transactions,
@@ -5426,11 +5426,11 @@ mod tests {
     }
 
     use dclutch_core_contract::ContentId;
+    use dclutch_registry::release_set::{ExecutionReleaseSetV1, ProgramIdentityV1};
     use dclutch_registry::{
-        ArtifactActivationInputV1, DeploymentObservationV1, ExecutionReleaseActivationInputsV1,
+        ArtifactActivationInputV1, DeploymentObservationV2, ExecutionReleaseActivationInputsV1,
         activate_execution_release_set_v1,
     };
-    use dclutch_registry::release_set::{ExecutionReleaseSetV1, ProgramIdentityV1};
 
     fn activation_test_content(seed: u8) -> ContentId {
         ContentId::new([seed; 32]).expect("nonzero content identity")
@@ -5444,8 +5444,8 @@ mod tests {
         ArtifactReleaseIdV1::new([seed; 32]).expect("nonzero artifact identity")
     }
 
-    fn activation_test_release(seed: u8) -> ArtifactReleaseV1 {
-        ArtifactReleaseV1::new(
+    fn activation_test_release(seed: u8) -> ArtifactReleaseV2 {
+        ArtifactReleaseV2::new(
             activation_test_program(seed),
             activation_test_program(200),
             [seed.wrapping_add(20); 32],
@@ -5460,10 +5460,10 @@ mod tests {
 
     fn activation_test_input(
         artifact: ArtifactReleaseIdV1,
-        release: ArtifactReleaseV1,
+        release: ArtifactReleaseV2,
     ) -> ArtifactActivationInputV1 {
         let loader = release.loader_program().to_bytes();
-        let observation = DeploymentObservationV1::new(
+        let observation = DeploymentObservationV2::new(
             release.program().to_bytes(),
             loader,
             true,
@@ -5473,7 +5473,7 @@ mod tests {
             release.programdata(),
             loader,
             release.deployment_slot(),
-            release.elf_digest(),
+            release.code_commitment(),
             release.upgrade_authority(),
         )
         .expect("valid immutable deployment observation");
@@ -5482,7 +5482,7 @@ mod tests {
 
     fn activation_test_binding(
         artifact: ArtifactReleaseIdV1,
-        release: ArtifactReleaseV1,
+        release: ArtifactReleaseV2,
     ) -> ExecutionRoleBindingV1 {
         ExecutionRoleBindingV1::new(release.program(), artifact)
     }
@@ -5749,7 +5749,8 @@ mod tests {
             program: [0x51; 32],
             programdata: [0x52; 32],
             pool: [0x53; 32],
-            elf_digest: [0x54; 32],
+            code_commitment: crate::plan::code_commitment_v2(&[0x54; 32])
+                .expect("venue fixture commitment"),
             deployment_slot: 99,
             upgrade_authority: [0x55; 32],
         };
@@ -6090,8 +6091,8 @@ mod tests {
                 .expect("floor hex"),
         )
         .expect("floor bytes");
-        let floor = dclutch_source::ManipulationFloorV1::decode(&floor_bytes)
-            .expect("canonical floor");
+        let floor =
+            dclutch_source::ManipulationFloorV1::decode(&floor_bytes).expect("canonical floor");
         let substituted_floor = dclutch_source::ManipulationFloorV1::new(
             floor.basis(),
             dclutch_source::ContentId::new([0x91; 32]).expect("hostile source"),
@@ -6269,8 +6270,10 @@ mod tests {
             "logs": [],
             "instructions": [{"program_id": Pubkey::new_unique().to_string(), "data_hex": ""}],
         }]);
-        parse_campaign_terminal_evidence_v1(&serde_json::to_vec(&current).expect("current report JSON"))
-            .expect("current admission instruction evidence is accepted");
+        parse_campaign_terminal_evidence_v1(
+            &serde_json::to_vec(&current).expect("current report JSON"),
+        )
+        .expect("current admission instruction evidence is accepted");
     }
 
     #[test]
@@ -6557,6 +6560,7 @@ mod tests {
             observed_owner: Some(bpf_loader_upgradeable::ID.to_string()),
             observed_executable: Some(false),
             observed_live_elf_sha256: Some("ab".repeat(32)),
+            observed_code_commitment: Some("cd".repeat(32)),
             pinned_live_elf_sha256: "ab".repeat(32),
             checked_candidate_elf_sha256: "cd".repeat(32),
             live_elf_padding_bytes: 17,

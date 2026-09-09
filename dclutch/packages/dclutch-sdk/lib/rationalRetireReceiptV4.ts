@@ -69,7 +69,7 @@ import {
   RENT_SYSVAR_ID,
   SYSTEM_PROGRAM_ID,
   UPGRADEABLE_LOADER_ID,
-  decodeArtifactReleaseV1,
+  decodeArtifactReleaseV2,
   decodeExecutionReleaseSetV1,
   deriveFinalizedRecordAddressesV1,
   REGISTRY_ACTIVATION_PDA_SEED_V1 as ACTIVATION_SEED,
@@ -721,7 +721,7 @@ export async function authenticateRationalHotActivationV4(
     const offset = 48 + role * (32 + ARTIFACT_RELEASE_BYTES);
     const artifactId = slice(cache.data, offset, 32); const artifactBytes = slice(cache.data, offset + 32, ARTIFACT_RELEASE_BYTES);
     if (!same(await sha256(artifactBytes), artifactId)) throw new Error(`activation cache role ${role} artifact differs from its content identity`);
-    const artifact = decodeArtifactReleaseV1(artifactBytes); artifacts.push(artifact);
+    const artifact = decodeArtifactReleaseV2(artifactBytes); artifacts.push(artifact);
     releaseBytes.set(key(artifact.program, `activated role ${role}`).toBytes(), 16 + role * 64);
     releaseBytes.set(artifactId, 48 + role * 64);
   }

@@ -1753,6 +1753,7 @@ mod tests {
             compute_units_consumed: Some(1),
             error: None,
             logs: Vec::new(),
+            publication_poststate: None,
             instructions: Vec::new(),
         });
         let second = journal(
@@ -1904,6 +1905,7 @@ mod tests {
             compute_units_consumed: Some(100_000),
             error: None,
             logs: Vec::new(),
+            publication_poststate: None,
             instructions: Vec::new(),
         }
     }

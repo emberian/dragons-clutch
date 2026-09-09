@@ -8,13 +8,7 @@ use std::{
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use dclutch_core_contract::ContentId as CoreContentId;
-use dclutch_source::pyth::local_validator_release_v1;
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry::{
-    ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1,
-    ArtifactUpgradePolicyV1,
-};
-use dclutch_registry::svm::ProgramDataV3View;
 use dclutch_registry::release_set::{
     ArtifactReleaseIdV1, EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1, ExecutionReleaseSetV1,
     ExecutionRoleBindingV1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1,
@@ -22,6 +16,12 @@ use dclutch_registry::release_set::{
     PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V2, ProgramIdentityV1,
     ProtocolInfrastructureProfileV1, ProtocolInfrastructureProfileV2,
 };
+use dclutch_registry::svm::ProgramDataV3View;
+use dclutch_registry::{
+    ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_SCHEMA_ID_V2, ArtifactReleaseV2,
+    ArtifactUpgradePolicyV1,
+};
+use dclutch_source::pyth::local_validator_release_v1;
 use dclutch_source::resolution::{
     PYTH_RELEASE_RECORD_SCHEMA_ID_V1, RESOLUTION_CONTROLLER_RELEASE_ID_V7,
 };
@@ -109,8 +109,8 @@ pub(crate) struct PrepareArgs {
 /// The slot is **never** a number a caller hands the plan. It is hostile-decoded
 /// out of a Loader V3 `ProgramData` account image by exactly the
 /// [`ProgramDataV3View`] parse that `require_loader_linkage` runs on chain
-/// before building the `DeploymentObservationV1` that
-/// `ArtifactReleaseV1::authenticate_deployment` checks. One encoding, one
+/// before building the `DeploymentObservationV2` that
+/// `ArtifactReleaseV2::authenticate_deployment` checks. One encoding, one
 /// reader, on both sides of the refusal. What a caller chooses is *which
 /// account image* that is, and this enum records which it chose.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -175,10 +175,10 @@ pub(crate) struct RoleDeploymentInputV1 {
 /// the `ExecutionReleaseSetV1` whose digest is the release set, and are what an
 /// activation ladder activates. The accelerator is admitted through an
 /// `ExecutionStrategyCertificateV2` instead and no cohort's release set names
-/// it. What it shares with a role is exactly one thing: its `ArtifactReleaseV1`
+/// it. What it shares with a role is exactly one thing: its `ArtifactReleaseV2`
 /// must be published and FINALIZED in the cohort's Registry, because since
 /// `90a8563f` that finalization IS the deployment observation --
-/// `build_record_publication_step_v1` sees `ARTIFACT_RELEASE_SCHEMA_ID_V1` and
+/// `build_record_publication_step_v1` sees `ARTIFACT_RELEASE_SCHEMA_ID_V2` and
 /// derives the Program and ProgramData metas from the record's own content,
 /// and `observe_artifact_release_deployment_v1` compares them before the
 /// staging cursor closes. That is a publication-stage fact, so it belongs in
@@ -220,6 +220,7 @@ struct RoleDeployment {
     image: Vec<u8>,
     deployment_slot: u64,
     live_elf_sha256: [u8; 32],
+    code_commitment: [u8; 32],
     live_elf_padding_bytes: usize,
     /// The upgrade authority the image actually carries, hostile-decoded by
     /// the same reader the on-chain authenticator runs. Never a caller's
@@ -344,6 +345,7 @@ fn role_deployment(
             ))
         })?;
     let live_elf_sha256 = sha256_bytes(view.elf());
+    let code_commitment = code_commitment_v2(view.elf())?;
     let expected_live = match source {
         DeploymentSourceV1::ObservedAccount => input
             .expected_live_elf_sha256
@@ -383,6 +385,7 @@ fn role_deployment(
         image,
         deployment_slot,
         live_elf_sha256,
+        code_commitment,
         live_elf_padding_bytes,
         upgrade_authority,
         source,
@@ -698,7 +701,7 @@ impl RecordPublicationV1 {
 
 #[derive(Clone, Copy)]
 pub(crate) struct ReleaseFacts {
-    pub(crate) release: ArtifactReleaseV1,
+    pub(crate) release: ArtifactReleaseV2,
     pub(crate) id: ArtifactReleaseIdV1,
 }
 
@@ -1019,7 +1022,7 @@ fn prepare_inner(
             let facts = release_facts(
                 accelerator.program,
                 hex32(&accelerator.semantic_release_id)?,
-                deployment.live_elf_sha256,
+                deployment.code_commitment,
                 deployment.deployment_slot,
                 deployment.upgrade_authority,
             )?;
@@ -1125,28 +1128,28 @@ fn prepare_inner(
     let registry = release_facts(
         args.registry_program,
         hex32(&args.registry_semantic_release_id)?,
-        registry_deployment.live_elf_sha256,
+        registry_deployment.code_commitment,
         registry_deployment.deployment_slot,
         registry_deployment.upgrade_authority,
     )?;
     let core = release_facts(
         args.core_program,
         hex32(&args.core_semantic_release_id)?,
-        core_deployment.live_elf_sha256,
+        core_deployment.code_commitment,
         core_deployment.deployment_slot,
         core_activation_upgrade_authority,
     )?;
     let claims = release_facts(
         args.claims_program,
         hex32(&args.claims_semantic_release_id)?,
-        claims_deployment.live_elf_sha256,
+        claims_deployment.code_commitment,
         claims_deployment.deployment_slot,
         claims_deployment.upgrade_authority,
     )?;
     let trading = release_facts(
         args.trading_program,
         hex32(&args.trading_semantic_release_id)?,
-        trading_deployment.live_elf_sha256,
+        trading_deployment.code_commitment,
         trading_deployment.deployment_slot,
         trading_deployment.upgrade_authority,
     )?;
@@ -1159,21 +1162,21 @@ fn prepare_inner(
     let resolution = release_facts(
         args.resolution_program,
         resolution_semantic,
-        resolution_deployment.live_elf_sha256,
+        resolution_deployment.code_commitment,
         resolution_deployment.deployment_slot,
         resolution_deployment.upgrade_authority,
     )?;
     let custody = release_facts(
         args.custody_program,
         hex32(&args.custody_semantic_release_id)?,
-        custody_deployment.live_elf_sha256,
+        custody_deployment.code_commitment,
         custody_deployment.deployment_slot,
         custody_deployment.upgrade_authority,
     )?;
     let rent = release_facts(
         args.rent_credit_program,
         hex32(&args.rent_credit_semantic_release_id)?,
-        rent_deployment.live_elf_sha256,
+        rent_deployment.code_commitment,
         rent_deployment.deployment_slot,
         rent_deployment.upgrade_authority,
     )?;
@@ -1404,7 +1407,7 @@ fn prepare_inner(
             writer.finalized_record(
                 label,
                 args.registry_program,
-                ARTIFACT_RELEASE_SCHEMA_ID_V1,
+                ARTIFACT_RELEASE_SCHEMA_ID_V2,
                 &facts.release.to_bytes(),
                 publication,
             )?,
@@ -1413,7 +1416,7 @@ fn prepare_inner(
     if let Some((facts, _)) = general_accelerator.as_ref() {
         // Under `90a8563f` this row's FINALIZATION is the deployment
         // observation: `build_record_publication_step_v1` recognises
-        // `ARTIFACT_RELEASE_SCHEMA_ID_V1` and derives the Program and
+        // `ARTIFACT_RELEASE_SCHEMA_ID_V2` and derives the Program and
         // ProgramData metas from the record's own content, and
         // `observe_artifact_release_deployment_v1` compares them against the
         // chain before the staging cursor closes. So publishing this record is
@@ -1425,7 +1428,7 @@ fn prepare_inner(
             writer.finalized_record(
                 "general_accelerator_artifact_release",
                 args.registry_program,
-                ARTIFACT_RELEASE_SCHEMA_ID_V1,
+                ARTIFACT_RELEASE_SCHEMA_ID_V2,
                 &facts.release.to_bytes(),
                 publication,
             )?,
@@ -1708,7 +1711,7 @@ fn accelerator_pin(
     }
 }
 
-/// Mint one role's `ArtifactReleaseV1` from facts decoded off its deployment.
+/// Mint one role's `ArtifactReleaseV2` from facts decoded off its deployment.
 ///
 /// The upgrade policy is DERIVED from the authority that role's `ProgramData`
 /// will carry at activation, never asserted: an authority present means
@@ -1720,7 +1723,7 @@ fn accelerator_pin(
 pub(crate) fn release_facts(
     program: Pubkey,
     semantic_release: [u8; 32],
-    elf_sha256: [u8; 32],
+    code_commitment: [u8; 32],
     deployment_slot: u64,
     upgrade_authority: Option<[u8; 32]>,
 ) -> Result<ReleaseFacts> {
@@ -1729,12 +1732,12 @@ pub(crate) fn release_facts(
     } else {
         ArtifactUpgradePolicyV1::Immutable
     };
-    let release = ArtifactReleaseV1::new(
+    let release = ArtifactReleaseV2::new(
         program_identity(program)?,
         program_identity(bpf_loader_upgradeable::ID)?,
         programdata(program).to_bytes(),
         content_id(semantic_release)?,
-        elf_sha256,
+        code_commitment,
         deployment_slot,
         upgrade_policy,
         upgrade_authority,
@@ -2134,15 +2137,15 @@ fn programdata(program: Pubkey) -> Pubkey {
     Pubkey::find_program_address(&[program.as_ref()], &bpf_loader_upgradeable::ID).0
 }
 
-/// Mint one chain-derived `DeploymentObservationV1` beside `release_facts`.
+/// Mint one chain-derived `DeploymentObservationV2` beside `release_facts`.
 ///
 /// It lives here, next to the release minter, because the two are one
 /// argument: a release is a claim about a deployment and an observation is
-/// what the claim is checked against, and `ArtifactReleaseV1::authenticate_deployment`
+/// what the claim is checked against, and `ArtifactReleaseV2::authenticate_deployment`
 /// is only as sound as their sharing a single spelling of the same eleven
 /// facts.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn deployment_observation_v1(
+pub(crate) fn deployment_observation_v2(
     program: Pubkey,
     program_owner: Pubkey,
     program_executable: bool,
@@ -2151,10 +2154,10 @@ pub(crate) fn deployment_observation_v1(
     programdata_executable: bool,
     programdata_link: [u8; 32],
     deployment_slot: u64,
-    elf_digest: [u8; 32],
+    code_commitment: [u8; 32],
     upgrade_authority: Option<[u8; 32]>,
-) -> Result<dclutch_registry::DeploymentObservationV1> {
-    dclutch_registry::DeploymentObservationV1::new(
+) -> Result<dclutch_registry::DeploymentObservationV2> {
+    dclutch_registry::DeploymentObservationV2::new(
         program.to_bytes(),
         program_owner.to_bytes(),
         program_executable,
@@ -2164,7 +2167,7 @@ pub(crate) fn deployment_observation_v1(
         programdata_link,
         bpf_loader_upgradeable::ID.to_bytes(),
         deployment_slot,
-        elf_digest,
+        code_commitment,
         upgrade_authority,
     )
     .map_err(debug_error("deployment observation"))
@@ -2180,6 +2183,44 @@ fn content_id(bytes: [u8; 32]) -> Result<CoreContentId> {
 
 fn debug_error<E: core::fmt::Debug>(label: &'static str) -> impl FnOnce(E) -> Error {
     move |error| Error::new(format!("{label}: {error:?}"))
+}
+
+/// Derive the native code commitment from the exact live Loader ELF tail.
+pub(crate) fn code_commitment_v2(elf: &[u8]) -> Result<[u8; 32]> {
+    dclutch_registry::artifact_code_commitment_v2::code_commitment_v2(elf)
+        .map_err(debug_error("artifact code commitment"))
+}
+
+/// Reconstruct only the already authenticated candidate and zero allocation suffix.
+/// Flat SHA-256 remains build/deployment provenance; the returned value is the
+/// independent protocol commitment over those exact live bytes.
+pub(crate) fn pinned_code_commitment_v2(pin: &ProgramPin) -> Result<[u8; 32]> {
+    let mut elf = fs::read(&pin.checked_candidate_elf_path)?;
+    if sha256_bytes(&elf) != hex32(&pin.checked_candidate_elf_sha256)? {
+        return Err(Error::new(
+            "code commitment candidate SHA-256 differs from its checked pin",
+        ));
+    }
+    let length = elf
+        .len()
+        .checked_add(pin.live_elf_padding_bytes)
+        .ok_or_else(|| Error::new("code commitment live ELF length overflow"))?;
+    // Solana's chain-defined maximum account allocation, including Loader metadata.
+    let maximum = usize::try_from(solana_system_interface::MAX_PERMITTED_DATA_LENGTH)
+        .map_err(debug_error("chain account length"))?;
+    if length > maximum.saturating_sub(dclutch_registry::svm::LOADER_V3_PROGRAMDATA_METADATA_BYTES)
+    {
+        return Err(Error::new(
+            "code commitment live ELF exceeds the chain account allocation limit",
+        ));
+    }
+    elf.resize(length, 0);
+    if sha256_bytes(&elf) != hex32(&pin.live_elf_sha256)? {
+        return Err(Error::new(
+            "code commitment live ELF SHA-256 differs from its deployment pin",
+        ));
+    }
+    code_commitment_v2(&elf)
 }
 
 fn sha256_bytes(bytes: &[u8]) -> [u8; 32] {
@@ -2393,12 +2434,20 @@ mod tests {
             plan.registry.checked_candidate_elf_sha256,
             plan.registry.live_elf_sha256
         );
-        let release = ArtifactReleaseV1::decode(
+        let release = ArtifactReleaseV2::decode(
             &hex32_bytes(&plan.records["registry_artifact_release"].body_hex)
                 .expect("artifact body"),
         )
         .expect("artifact release");
-        assert_eq!(release.elf_digest(), sha256_bytes(&live));
+        assert_eq!(
+            release.code_commitment(),
+            code_commitment_v2(&live).expect("live code commitment")
+        );
+        assert_ne!(release.code_commitment(), sha256_bytes(&live));
+        assert_eq!(
+            pinned_code_commitment_v2(&plan.registry).expect("exact padded pin commitment"),
+            release.code_commitment()
+        );
         let serialized: serde_json::Value = serde_json::from_slice(
             &fs::read(root.join("plan.json")).expect("serialized infrastructure plan"),
         )
@@ -2754,7 +2803,7 @@ mod tests {
     /// THE EIGHTH PUBLICATION, and the seven are byte-for-byte where they were.
     ///
     /// A cohort that founds a General market must finalize the accelerator's
-    /// `ArtifactReleaseV1` in its own Registry, because since `90a8563f` that
+    /// `ArtifactReleaseV2` in its own Registry, because since `90a8563f` that
     /// finalization IS the deployment observation. This asserts the row exists,
     /// carries the accelerator's own release body, and -- the part that could
     /// silently go wrong -- that adding it moved nothing about the seven roles:
@@ -2806,10 +2855,10 @@ mod tests {
             .as_ref()
             .expect("the accelerator's pin");
         let record = &with_accelerator.records["general_accelerator_artifact_release"];
-        assert_eq!(record.schema_id, hex(&ARTIFACT_RELEASE_SCHEMA_ID_V1));
+        assert_eq!(record.schema_id, hex(&ARTIFACT_RELEASE_SCHEMA_ID_V2));
         let body = crate::runtime::decode_hex(&record.body_hex).expect("record body hex");
         assert_eq!(body.len(), 216);
-        let release = ArtifactReleaseV1::decode(&body).expect("the accelerator's release body");
+        let release = ArtifactReleaseV2::decode(&body).expect("the accelerator's release body");
         assert_eq!(
             release.program().to_bytes(),
             pubkey(&pin.program_id).expect("program").to_bytes(),
@@ -2944,7 +2993,7 @@ mod tests {
         assert_eq!(plan.trading.deployment_source, "genesis-install");
 
         // The slot is in the record body the chain will authenticate against,
-        // at ArtifactReleaseV1's fixed offset 176.
+        // at ArtifactReleaseV2's fixed offset 176.
         let body =
             hex32_bytes(&plan.records["registry_artifact_release"].body_hex).expect("record body");
         assert_eq!(

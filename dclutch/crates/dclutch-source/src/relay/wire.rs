@@ -39,8 +39,11 @@ use crate::relay::{MAX_RELAYED_ACCOUNTS_V1, MAX_RELAYED_INLINE_BYTES_V1};
 
 /// One account as the relayer read it, committing to the complete account.
 ///
-/// `inline` is a release-pinned prefix and the digest covers `data[inline..]`,
-/// so omitting bytes is a carriage decision and never a content decision.  A
+/// `inline` is a release-pinned prefix and the tail authenticator commits to
+/// `data[inline..]`, so omitting bytes is a carriage decision and never a
+/// content decision. Generic positions use flat SHA-256; the Loader V3
+/// ProgramData position uses the Registry's V2 code commitment over its ELF.
+/// A
 /// fully inline body is not a variant: it is the case `inline.len() == data_len`
 /// with the empty-string digest, which [`Self::expected_tail_digest_is_empty`]
 /// reports and the adapter recomputes like any other.
@@ -186,8 +189,17 @@ impl<'a> AccountObservationV1<'a> {
     pub const fn executable(self) -> bool {
         self.executable
     }
-    /// The attested SHA-256 over `data[inline.len()..data_len]`.
+    /// The attested tail authenticator under the position's pinned scheme.
     pub const fn tail_digest(self) -> [u8; 32] {
+        self.tail_digest
+    }
+
+    /// The V2 code commitment carried by a Loader V3 ProgramData position.
+    ///
+    /// Callers must first prove that this body is the exact 45-byte metadata
+    /// prefix of the pinned ProgramData account. The wire cannot infer a
+    /// position's semantic role by itself.
+    pub const fn tail_authenticator(self) -> [u8; 32] {
         self.tail_digest
     }
 

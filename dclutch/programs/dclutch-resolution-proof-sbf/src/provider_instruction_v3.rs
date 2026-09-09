@@ -34,8 +34,8 @@ use dclutch_registry::release_set::{
 };
 use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_registry::{
-    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_BYTES_V1,
-    ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1,
+    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_BYTES_V2,
+    ARTIFACT_RELEASE_SCHEMA_ID_V2, ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV2,
     require_slot_pinned_release_v1,
 };
 use dclutch_source::pyth::{
@@ -604,12 +604,12 @@ fn authenticate_market_and_infrastructure(
         frame.registry_program().key,
         frame.account(9),
         frame.account(10),
-        ARTIFACT_RELEASE_SCHEMA_ID_V1,
+        ARTIFACT_RELEASE_SCHEMA_ID_V2,
         profile.registry().artifact_release().to_bytes(),
         &artifact_data,
-        ARTIFACT_RELEASE_BYTES_V1,
+        ARTIFACT_RELEASE_BYTES_V2,
     )?;
-    let artifact = ArtifactReleaseV1::decode(&artifact_data)
+    let artifact = ArtifactReleaseV2::decode(&artifact_data)
         .map_err(|_| ResolutionError::InfrastructureProfile)?;
     if artifact.program().to_bytes() != frame.registry_program().key.to_bytes() {
         return Err(ResolutionError::InfrastructureProfile.into());
@@ -1335,8 +1335,8 @@ mod tests {
     #[test]
     fn finalized_profile_release_identity_refuses_before_cached_deployment_auth() {
         let registry = Pubkey::new_from_array([0xd1; 32]);
-        let schema = ARTIFACT_RELEASE_SCHEMA_ID_V1;
-        let artifact_bytes = std::vec![0x44; ARTIFACT_RELEASE_BYTES_V1];
+        let schema = ARTIFACT_RELEASE_SCHEMA_ID_V2;
+        let artifact_bytes = std::vec![0x44; ARTIFACT_RELEASE_BYTES_V2];
         let digest = hash(&artifact_bytes).to_bytes();
         let raw_key =
             Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &schema, &digest], &registry).0;
@@ -1361,7 +1361,7 @@ mod tests {
                 schema,
                 digest,
                 &artifact_bytes,
-                ARTIFACT_RELEASE_BYTES_V1
+                ARTIFACT_RELEASE_BYTES_V2
             ),
             Ok(()),
         );
@@ -1375,7 +1375,7 @@ mod tests {
                 schema,
                 substituted_profile_release,
                 &artifact_bytes,
-                ARTIFACT_RELEASE_BYTES_V1
+                ARTIFACT_RELEASE_BYTES_V2
             ),
             Err(ProgramError::Custom(
                 ResolutionError::FinalizedRecord as u32

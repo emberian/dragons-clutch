@@ -424,7 +424,7 @@ The 23 campaigns contributing binding claims:
 | `0x1012` | `RegistryError::ReleaseLineageNotForward` | A moved role's successor deployment slot was not strictly later. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:140` |
 | `0x1013` | `RegistryError::ArtifactReleaseDeploymentFrame` | An `ArtifactRelease` was finalized without its deployment in the frame. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:154` |
 | `0x1014` | `RegistryError::ArtifactReleaseNotDeployed` | An `ArtifactRelease` did not describe the deployment at its own address. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:168` |
-| `0x1015` | `RegistryError::ArtifactReleaseElfMismatch` | A deployment is at that address and it is not the release's bytes. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:184` |
+| `0x1015` | `RegistryError::ArtifactReleaseCodeCommitmentMismatch` | A deployment is at that address and it is not the release's bytes. | -- | -- | `programs/dclutch-registry-sbf/src/lib.rs:184` |
 
 ## rent
 

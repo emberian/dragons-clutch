@@ -74,9 +74,9 @@ use crate::release_set::ExecutionRoleV1;
 use crate::svm::{AuthenticatedRoleReceiptV1, ProgramDataV3View, ProgramV3View};
 use crate::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
-    ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1, DeploymentObservationV1,
+    ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV2, DeploymentObservationV2,
     Error as RegistryContractError, RELEASE_LINEAGE_BYTES_V1, RELEASE_LINEAGE_PDA_DOMAIN_V1,
-    require_slot_pinned_release_v1, slot_pinned_release_elf_digest_v1,
+    require_slot_pinned_release_v1, slot_pinned_release_code_commitment_v2,
 };
 use solana_program::{account_info::AccountInfo, program_error::ProgramError, pubkey::Pubkey};
 use solana_sdk_ids::bpf_loader_upgradeable;
@@ -546,7 +546,7 @@ fn authenticate_role_in_view(
         .role(role)
         .map_err(|_| ActivationAuthErrorV1::ActivationCache)?;
     let release = activated_role.release();
-    let observation = cached_role_deployment_observation_v1(program, programdata, release)?;
+    let observation = cached_role_deployment_observation_v2(program, programdata, release)?;
     activated_role
         .authenticate_current_deployment(observation)
         .map_err(|_| ActivationAuthErrorV1::Deployment)?;
@@ -580,13 +580,13 @@ fn authenticate_role_in_view(
 /// The instant the substrate is upgraded the slot moves, this returns
 /// [`ActivationAuthErrorV1::ReleaseSuperseded`], and every open market on the
 /// superseded generation refuses until a re-release re-authenticates and
-/// re-pins. `crate::slot_pinned_release_elf_digest_v1` owns
+/// re-pins. `crate::slot_pinned_release_code_commitment_v2` owns
 /// that argument; this function only supplies it with chain-observed facts.
-pub fn cached_role_deployment_observation_v1(
+pub fn cached_role_deployment_observation_v2(
     program: &AccountInfo<'_>,
     programdata: &AccountInfo<'_>,
-    release: ArtifactReleaseV1,
-) -> Result<DeploymentObservationV1> {
+    release: ArtifactReleaseV2,
+) -> Result<DeploymentObservationV2> {
     require_slot_pinned_release_v1(release).map_err(|_| ActivationAuthErrorV1::Deployment)?;
     if release.loader_program().to_bytes() != bpf_loader_upgradeable::ID.to_bytes()
         || program.key.to_bytes() != release.program().to_bytes()
@@ -624,14 +624,14 @@ pub fn cached_role_deployment_observation_v1(
         .map_err(|_| ActivationAuthErrorV1::Deployment)?;
     let observed_authority = programdata_view.upgrade_authority();
     let observed_slot = programdata_view.deployment_slot();
-    let elf_digest = slot_pinned_release_elf_digest_v1(release, observed_authority, observed_slot)
+    let code_commitment = slot_pinned_release_code_commitment_v2(release, observed_authority, observed_slot)
         .map_err(|error| match error {
             RegistryContractError::ReleaseSupersededByUpgrade => {
                 ActivationAuthErrorV1::ReleaseSuperseded
             }
             _ => ActivationAuthErrorV1::Deployment,
         })?;
-    DeploymentObservationV1::new(
+    DeploymentObservationV2::new(
         program.key.to_bytes(),
         program.owner.to_bytes(),
         program.executable,
@@ -641,7 +641,7 @@ pub fn cached_role_deployment_observation_v1(
         carried_programdata,
         bpf_loader_upgradeable::ID.to_bytes(),
         observed_slot,
-        elf_digest,
+        code_commitment,
         observed_authority,
     )
     .map_err(|_| ActivationAuthErrorV1::Deployment)

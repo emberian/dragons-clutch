@@ -11,9 +11,9 @@ use dclutch_core_contract::ContentId;
 use crate::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATED_EXECUTION_RELEASE_SET_MAGIC_V1,
     ACTIVATED_EXECUTION_RELEASE_SET_PROFILE_V1, ACTIVATED_EXECUTION_RELEASE_SET_SCHEMA_VERSION_V1,
-    ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_BYTES_V1, ARTIFACT_RELEASE_MAGIC_V1,
+    ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_BYTES_V2, ARTIFACT_RELEASE_MAGIC_V2,
     ActivatedExecutionReleaseSetV1, ActivatedExecutionReleaseSetViewV1, ArtifactActivationInputV1,
-    ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1, Error,
+    ArtifactReleaseV2, ArtifactUpgradePolicyV1, DeploymentObservationV2, Error,
     ExecutionReleaseActivationInputsV1, LINEAGE_WALK_MAX_HOPS_V1, LineageAt, LineageWalkRefusal,
     RELEASE_LINEAGE_BYTES_V1, RELEASE_LINEAGE_MAGIC_V1, RELEASE_LINEAGE_PDA_DOMAIN_V1,
     RELEASE_LINEAGE_PDA_SEED_COUNT_V1, RELEASE_LINEAGE_PROFILE_V1,
@@ -23,7 +23,7 @@ use crate::{
 };
 
 const ROLE_CACHE_HEADER_BYTES: usize = 48;
-const ROLE_CACHE_BYTES: usize = 32 + ARTIFACT_RELEASE_BYTES_V1;
+const ROLE_CACHE_BYTES: usize = 32 + ARTIFACT_RELEASE_BYTES_V2;
 const ARTIFACT_DEPLOYMENT_SLOT_OFFSET: usize = 176;
 
 fn bytes(seed: u8) -> [u8; 32] {
@@ -76,8 +76,8 @@ fn immutable_release(
     program_seed: u8,
     programdata_seed: u8,
     semantic_seed: u8,
-) -> ArtifactReleaseV1 {
-    ArtifactReleaseV1::new(
+) -> ArtifactReleaseV2 {
+    ArtifactReleaseV2::new(
         program(program_seed),
         program(200),
         bytes(programdata_seed),
@@ -101,12 +101,12 @@ struct ObservationParts {
     programdata_link: [u8; 32],
     loader_program: [u8; 32],
     deployment_slot: u64,
-    elf_digest: [u8; 32],
+    code_commitment: [u8; 32],
     upgrade_authority: Option<[u8; 32]>,
 }
 
 impl ObservationParts {
-    fn valid(release: ArtifactReleaseV1) -> Self {
+    fn valid(release: ArtifactReleaseV2) -> Self {
         Self {
             program: release.program().to_bytes(),
             program_owner: release.loader_program().to_bytes(),
@@ -117,13 +117,13 @@ impl ObservationParts {
             programdata_link: release.programdata(),
             loader_program: release.loader_program().to_bytes(),
             deployment_slot: release.deployment_slot(),
-            elf_digest: release.elf_digest(),
+            code_commitment: release.code_commitment(),
             upgrade_authority: release.upgrade_authority(),
         }
     }
 
-    fn build(self) -> DeploymentObservationV1 {
-        DeploymentObservationV1::new(
+    fn build(self) -> DeploymentObservationV2 {
+        DeploymentObservationV2::new(
             self.program,
             self.program_owner,
             self.program_executable,
@@ -133,7 +133,7 @@ impl ObservationParts {
             self.programdata_link,
             self.loader_program,
             self.deployment_slot,
-            self.elf_digest,
+            self.code_commitment,
             self.upgrade_authority,
         )
         .expect("nonzero observation coordinates")
@@ -145,7 +145,7 @@ struct Fixture {
     release_set_id: ContentId,
     release_set: ExecutionReleaseSetV1,
     artifact_ids: [ArtifactReleaseIdV1; 5],
-    releases: [ArtifactReleaseV1; 5],
+    releases: [ArtifactReleaseV2; 5],
 }
 
 impl Fixture {
@@ -185,7 +185,7 @@ impl Fixture {
 
 fn binding(
     artifact_ids: [ArtifactReleaseIdV1; 5],
-    releases: [ArtifactReleaseV1; 5],
+    releases: [ArtifactReleaseV2; 5],
     index: usize,
 ) -> ExecutionRoleBindingV1 {
     ExecutionRoleBindingV1::new(
@@ -196,7 +196,7 @@ fn binding(
 
 fn release_set(
     artifact_ids: [ArtifactReleaseIdV1; 5],
-    releases: [ArtifactReleaseV1; 5],
+    releases: [ArtifactReleaseV2; 5],
 ) -> ExecutionReleaseSetV1 {
     ExecutionReleaseSetV1::new(
         binding(artifact_ids, releases, 0),
@@ -210,7 +210,7 @@ fn release_set(
 
 fn activation_input(
     artifact_release_id: ArtifactReleaseIdV1,
-    release: ArtifactReleaseV1,
+    release: ArtifactReleaseV2,
 ) -> ArtifactActivationInputV1 {
     ArtifactActivationInputV1::new(
         artifact_release_id,
@@ -221,7 +221,7 @@ fn activation_input(
 
 fn activation_inputs(
     artifact_ids: [ArtifactReleaseIdV1; 5],
-    releases: [ArtifactReleaseV1; 5],
+    releases: [ArtifactReleaseV2; 5],
 ) -> ExecutionReleaseActivationInputsV1 {
     ExecutionReleaseActivationInputsV1::new(
         activation_input(artifact_ids[0], releases[0]),
@@ -236,8 +236,8 @@ fn activation_inputs(
 fn artifact_release_has_one_exact_canonical_encoding() {
     let immutable = immutable_release(1, 51, 61);
     let encoded = immutable.to_bytes();
-    assert_eq!(encoded.len(), ARTIFACT_RELEASE_BYTES_V1);
-    assert_eq!(&encoded[..8], &ARTIFACT_RELEASE_MAGIC_V1);
+    assert_eq!(encoded.len(), ARTIFACT_RELEASE_BYTES_V2);
+    assert_eq!(&encoded[..8], &ARTIFACT_RELEASE_MAGIC_V2);
     assert_eq!(&encoded[16..48], immutable.program().as_bytes());
     assert_eq!(&encoded[48..80], immutable.loader_program().as_bytes());
     assert_eq!(&encoded[80..112], &immutable.programdata());
@@ -245,16 +245,16 @@ fn artifact_release_has_one_exact_canonical_encoding() {
         &encoded[112..144],
         immutable.semantic_release_id().as_bytes()
     );
-    assert_eq!(&encoded[144..176], &immutable.elf_digest());
+    assert_eq!(&encoded[144..176], &immutable.code_commitment());
     assert_eq!(
         &encoded[176..184],
         &immutable.deployment_slot().to_le_bytes()
     );
     assert_eq!(&encoded[184..216], &[0; 32]);
-    assert_eq!(ArtifactReleaseV1::decode(&encoded), Ok(immutable));
+    assert_eq!(ArtifactReleaseV2::decode(&encoded), Ok(immutable));
 
     let authority = bytes(77);
-    let upgradeable = ArtifactReleaseV1::new(
+    let upgradeable = ArtifactReleaseV2::new(
         program(6),
         program(200),
         bytes(56),
@@ -268,7 +268,7 @@ fn artifact_release_has_one_exact_canonical_encoding() {
     assert_eq!(upgradeable.to_bytes()[12], 1);
     assert_eq!(&upgradeable.to_bytes()[184..216], &authority);
     assert_eq!(
-        ArtifactReleaseV1::decode(&upgradeable.to_bytes()),
+        ArtifactReleaseV2::decode(&upgradeable.to_bytes()),
         Ok(upgradeable)
     );
 }
@@ -278,13 +278,13 @@ fn artifact_release_decoder_refuses_malformed_or_noncanonical_bytes() {
     let release = immutable_release(1, 51, 61);
     let encoded = release.to_bytes();
     assert_eq!(
-        ArtifactReleaseV1::decode(&encoded[..215]),
+        ArtifactReleaseV2::decode(&encoded[..215]),
         Err(Error::InvalidLength)
     );
     let mut extended = encoded.to_vec();
     extended.push(0);
     assert_eq!(
-        ArtifactReleaseV1::decode(&extended),
+        ArtifactReleaseV2::decode(&extended),
         Err(Error::InvalidLength)
     );
 
@@ -303,25 +303,25 @@ fn artifact_release_decoder_refuses_malformed_or_noncanonical_bytes() {
         } else {
             flip_at(&mut hostile, offset);
         }
-        assert_eq!(ArtifactReleaseV1::decode(&hostile), Err(expected));
+        assert_eq!(ArtifactReleaseV2::decode(&hostile), Err(expected));
     }
 
     let mut authority_on_immutable = encoded;
     authority_on_immutable[184] = 1;
     assert_eq!(
-        ArtifactReleaseV1::decode(&authority_on_immutable),
+        ArtifactReleaseV2::decode(&authority_on_immutable),
         Err(Error::NonCanonicalUpgradeAuthority)
     );
     let mut unsupported_policy = encoded;
     unsupported_policy[12] = 2;
     assert_eq!(
-        ArtifactReleaseV1::decode(&unsupported_policy),
+        ArtifactReleaseV2::decode(&unsupported_policy),
         Err(Error::NonCanonicalUpgradeAuthority)
     );
     let mut missing_exact_authority = encoded;
     missing_exact_authority[12] = 1;
     assert_eq!(
-        ArtifactReleaseV1::decode(&missing_exact_authority),
+        ArtifactReleaseV2::decode(&missing_exact_authority),
         Err(Error::NonCanonicalUpgradeAuthority)
     );
 }
@@ -330,7 +330,7 @@ fn artifact_release_decoder_refuses_malformed_or_noncanonical_bytes() {
 fn artifact_release_constructor_refuses_aliases_and_noncanonical_upgrade_policies() {
     let base = immutable_release(1, 51, 61);
     let create = |program_id, loader_id, programdata, policy, authority| {
-        ArtifactReleaseV1::new(
+        ArtifactReleaseV2::new(
             program_id,
             loader_id,
             programdata,
@@ -468,10 +468,10 @@ fn deployment_authentication_refuses_every_substitution_dimension() {
         ),
         (
             ObservationParts {
-                elf_digest: bytes(9),
+                code_commitment: bytes(9),
                 ..valid
             },
-            Error::ElfDigestMismatch,
+            Error::CodeCommitmentMismatch,
         ),
         (
             ObservationParts {

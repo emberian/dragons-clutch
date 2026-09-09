@@ -1,7 +1,7 @@
 //! Declare the successor of one release set.
 //!
 //! The whole authorization requirement of this route reduces to a single
-//! field. Every other field of every `ArtifactReleaseV1` in a successor set is
+//! field. Every other field of every `ArtifactReleaseV2` in a successor set is
 //! forced by observation at activation time — the program id, the ProgramData,
 //! the whole ELF digest, the deployment slot and the upgrade authority are all
 //! pinned to the truth, and a set that lies about any of them cannot be

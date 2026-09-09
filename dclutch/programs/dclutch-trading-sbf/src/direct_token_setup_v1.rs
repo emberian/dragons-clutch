@@ -387,8 +387,8 @@ fn authenticate_activation(
     market: CoreState,
 ) -> Result<
     (
-        dclutch_registry::ArtifactReleaseV1,
-        dclutch_registry::ArtifactReleaseV1,
+        dclutch_registry::ArtifactReleaseV2,
+        dclutch_registry::ArtifactReleaseV2,
     ),
     ProgramError,
 > {

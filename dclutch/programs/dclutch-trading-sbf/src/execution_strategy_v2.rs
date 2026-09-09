@@ -27,7 +27,7 @@ use dclutch_registry::activation_auth_v1::ActivationAuthErrorV1;
 use dclutch_registry::record::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry::release_set::ArtifactReleaseIdV1;
 use dclutch_registry::{
-    ARTIFACT_RELEASE_BYTES_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1,
+    ARTIFACT_RELEASE_BYTES_V2, ARTIFACT_RELEASE_SCHEMA_ID_V2, ArtifactReleaseV2,
     require_slot_pinned_release_v1,
 };
 use dclutch_trading::shadow_accelerator_auth::{ShadowAcceleratorAuthErrorV4, deployment};
@@ -138,7 +138,7 @@ pub struct AuthenticatedExecutionStrategyV2 {
     certificate: Option<ExecutionStrategyCertificateV2>,
     admission_program_id: Option<ContentId>,
     artifact_release_id: Option<ArtifactReleaseIdV1>,
-    artifact_release: Option<ArtifactReleaseV1>,
+    artifact_release: Option<ArtifactReleaseV2>,
     admitted_authorization: Option<AdmittedAotAuthorizationV2>,
 }
 
@@ -234,7 +234,7 @@ enum CurrentDeploymentAuthenticationV2 {
     /// the bound digest is a chain-observed fact about this exact address
     /// before any hot route reads it. Decision 0012's argument then applies
     /// unchanged, and it is the argument, not this variant, that owns the
-    /// soundness: `slot_pinned_release_elf_digest_v1` proves observed-slot
+    /// soundness: `slot_pinned_release_code_commitment_v2` proves observed-slot
     /// equality means the admitted digest is the exact current digest.
     ///
     /// A hot route therefore never hashes an ELF. An accelerator upgraded in
@@ -297,7 +297,7 @@ impl AuthenticatedExecutionStrategyV2 {
     }
 
     /// Return the exact optional immutable ArtifactRelease.
-    pub const fn artifact_release(self) -> Option<ArtifactReleaseV1> {
+    pub const fn artifact_release(self) -> Option<ArtifactReleaseV2> {
         self.artifact_release
     }
 
@@ -755,7 +755,7 @@ fn authenticate_admission(
 ///
 /// Both bindings end at the same two facts, and neither skips one:
 ///
-/// * the record is a Registry-finalized `ArtifactReleaseV1` -- its content
+/// * the record is a Registry-finalized `ArtifactReleaseV2` -- its content
 ///   digest derives the raw and staging PDAs, so the address proves the bytes;
 /// * that record's `elf_digest` equals the live ProgramData ELF. Normal callers
 ///   prove this by hashing the complete ELF here. The one private admitted
@@ -771,7 +771,7 @@ fn authenticate_admission(
 /// and the Certificate is joined to it by the semantic equality instead.
 ///
 /// The semantic binding exists because a Certificate naming an exact
-/// `ArtifactReleaseV1` cannot be authored for an accelerator whose ELF embeds
+/// `ArtifactReleaseV2` cannot be authored for an accelerator whose ELF embeds
 /// that Certificate: its identity would have to contain the digest of the bytes
 /// it is compiled into. Measured, not argued, in `23eed7df`. Widening to every
 /// build of one exact source is the deliberate price, and the complete normal
@@ -785,11 +785,11 @@ fn authenticate_pinned_artifact(
     accelerator_program: &AccountInfo<'_>,
     accelerator_programdata: &AccountInfo<'_>,
     deployment_authentication: CurrentDeploymentAuthenticationV2,
-) -> Result<(ArtifactReleaseIdV1, ArtifactReleaseV1, RecordPairBumpsV2), TradingSbfError> {
+) -> Result<(ArtifactReleaseIdV1, ArtifactReleaseV2, RecordPairBumpsV2), TradingSbfError> {
     let data = raw
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Content)?;
-    if data.len() != ARTIFACT_RELEASE_BYTES_V1 {
+    if data.len() != ARTIFACT_RELEASE_BYTES_V2 {
         return Err(TradingSbfError::Content);
     }
     // For a Release binding this is the Certificate's own pin, exactly as
@@ -805,12 +805,12 @@ fn authenticate_pinned_artifact(
         registry_program,
         raw,
         staging,
-        ARTIFACT_RELEASE_SCHEMA_ID_V1,
+        ARTIFACT_RELEASE_SCHEMA_ID_V2,
         digest,
         &data,
     )?;
     hot_cu_checkpoint!("aot-artifact-record");
-    let release = ArtifactReleaseV1::decode(&data).map_err(|_| TradingSbfError::Content)?;
+    let release = ArtifactReleaseV2::decode(&data).map_err(|_| TradingSbfError::Content)?;
     require_slot_pinned_release_v1(release).map_err(|_| TradingSbfError::Content)?;
     hot_cu_checkpoint!("aot-artifact-decoded");
     if let CertificateArtifactBindingV2::Semantic(_) = binding {
@@ -849,7 +849,7 @@ fn authenticate_pinned_artifact(
 /// Join a semantically bound Certificate to the release record it selected.
 fn certificate_semantic_join(
     binding: CertificateArtifactBindingV2,
-    release: ArtifactReleaseV1,
+    release: ArtifactReleaseV2,
 ) -> Result<(), TradingSbfError> {
     match binding {
         CertificateArtifactBindingV2::Semantic(semantic)
@@ -874,7 +874,7 @@ fn certificate_semantic_join(
 /// `ArtifactRelease` finalize route, where it is paid once per release instead
 /// of once per action.
 pub(crate) fn authenticate_slot_pinned_deployment(
-    release: ArtifactReleaseV1,
+    release: ArtifactReleaseV2,
     program: &AccountInfo<'_>,
     programdata: &AccountInfo<'_>,
 ) -> Result<(), TradingSbfError> {
@@ -900,7 +900,7 @@ pub(crate) fn authenticate_slot_pinned_deployment(
 /// again by `authenticate_deployment`; an upgradeable activated release keeps
 /// the full current-ELF hash.
 pub(crate) fn authenticate_activated_current_deployment(
-    release: ArtifactReleaseV1,
+    release: ArtifactReleaseV2,
     program: &AccountInfo<'_>,
     programdata: &AccountInfo<'_>,
 ) -> Result<(), TradingSbfError> {
