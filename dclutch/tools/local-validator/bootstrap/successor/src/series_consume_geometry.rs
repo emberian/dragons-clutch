@@ -1042,6 +1042,37 @@ mod tests {
         };
         let roles = derive_series_consume_role_sources_v1(&input)
             .expect("all prefix, Custody, Claims, and Core routes derive");
+        let ticket_state = Pubkey::new_from_array(selection.ticket_state_account.to_bytes());
+        let ticket_roles = roles
+            .iter()
+            .filter(|role| role.address() == ticket_state)
+            .collect::<Vec<_>>();
+        assert!(
+            !ticket_roles.is_empty(),
+            "native Core frame contains the Ticket replay"
+        );
+        for role in ticket_roles {
+            assert!(
+                matches!(role, SeriesConsumeRoleSourceV1::PreparedPrediction { fixed_data_len, .. }
+                if *fixed_data_len as usize == dclutch_trading::series::replay::SERIES_TICKET_STATE_BYTES_V3),
+                "Ticket replay is created by Prepare before Consume: {role:?}"
+            );
+        }
+        let observed_input = SeriesConsumeGeometryInputV1 {
+            prestate: SeriesConsumePrestateV1::ObservedPrepared,
+            ..input
+        };
+        let observed_roles = derive_series_consume_role_sources_v1(&observed_input)
+            .expect("post-Prepare routes require finalized resources");
+        for role in observed_roles
+            .iter()
+            .filter(|role| role.address() == ticket_state)
+        {
+            assert!(
+                matches!(role, SeriesConsumeRoleSourceV1::Finalized { expected_owner, .. }
+                if *expected_owner == selection.material.trading)
+            );
+        }
         let predicted_input = SeriesConsumeGeometryInputV1 {
             parent_root: SeriesParentRootFactV1::Predicted(
                 crate::series_found_prepare_input::SeriesPredictedParentRootV1 {

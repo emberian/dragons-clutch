@@ -59,6 +59,7 @@ the tail; the pre-2026-09-01 ledger starts at line 289), and before it
 
 | when | delta | ledger | store |
 | --- | --- | --- | --- |
+| 2026-09-09 | Exact source a8e3b4e8 seals all eight production ELFs after the General, Structured and Claims native changes; Series remains unselected and runtime lanes consume the immutable candidate separately | — | [native completion candidate](docs/evidence/STRICT_ALL_EIGHT_A8E3_NATIVE_COMPLETION_2026_09_09.md) |
 | 2026-09-09 | Sealed V2 Claims ELFs execute protocol Position admission, exact refusal rollback, retirement, closure and conservation from an installed graph; host-seeded terminal state remains explicit | — | [Claims protocol Position V2 runtime evidence](docs/evidence/CLAIMS_PROTOCOL_POSITION_V2_RUNTIME_2026_09_09.md) |
 | 2026-09-09 | Exact source fd7e5fec builds and seals all eight production ELFs and the ArtifactRelease V2 genesis pack; two independent captures admit its complete production frame baseline | — | [V2 checked build and frame evidence](docs/evidence/STRICT_ALL_EIGHT_V2_FD7_FRAMES_2026_09_09.md) |
 | 2026-09-09 | Existing Pages renders Scoring Dealer redeem/close and the current Core retirement handler; the established workflow deploys the exact publication cut | — | [explorer publication](docs/evidence/PAGES_SCORING_EXPLORER_2026_09_09.md) |

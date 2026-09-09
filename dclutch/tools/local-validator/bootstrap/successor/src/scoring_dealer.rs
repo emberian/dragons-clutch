@@ -1999,7 +1999,7 @@ fn plan_signed_delta_window_v1(
         .map_err(|error| Error::new(format!("the Dealer's delta position: {error:?}")))?;
     let taker_position_entry = SignedDeltaPositionV3::new(taker.to_bytes(), taker_revision)
         .map_err(|error| Error::new(format!("the taker's delta position: {error:?}")))?;
-    let (positions, dealer_index, taker_index, first_position, second_position) =
+    let (positions, dealer_index, _taker_index, first_position, second_position) =
         if dealer_position_entry.owner() < taker_position_entry.owner() {
             (
                 [dealer_position_entry, taker_position_entry],
@@ -2027,12 +2027,14 @@ fn plan_signed_delta_window_v1(
         })?);
     }
     let mut rows = Vec::with_capacity(2 * width);
-    for outcome in 0..width {
-        let index = u32::try_from(outcome).map_err(|_| Error::new("outcome index overflow"))?;
-        for (position_index, value) in [
-            (dealer_index, request.dealer_delta(outcome)),
-            (taker_index, request.taker_delta(outcome)),
-        ] {
+    for position_index in 0..2_u32 {
+        for outcome in 0..width {
+            let index = u32::try_from(outcome).map_err(|_| Error::new("outcome index overflow"))?;
+            let value = if position_index == dealer_index {
+                request.dealer_delta(outcome)
+            } else {
+                request.taker_delta(outcome)
+            };
             if value != 0 {
                 rows.push(
                     PositionDeltaV3::new(

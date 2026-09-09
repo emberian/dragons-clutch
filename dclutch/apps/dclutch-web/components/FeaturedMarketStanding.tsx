@@ -52,6 +52,17 @@ export function frontDoorPhraseV1(standing: FeaturedMarketStandingV1): string | 
 export default function FeaturedMarketStanding() {
   const deployment = useDeploymentV1();
   const market = PUBLIC_DEVNET_CUT_V1.market;
+  return <FeaturedMarketStandingForDeployment
+    key={JSON.stringify([deployment.endpoint, deployment.programs.core, market])}
+    deployment={deployment}
+    market={market}
+  />;
+}
+
+function FeaturedMarketStandingForDeployment({ deployment, market }: Readonly<{
+  deployment: ReturnType<typeof useDeploymentV1>;
+  market: string | null;
+}>) {
   const [standing, setStanding] = useState<FeaturedMarketStandingV1>({ kind: 'reading' });
 
   useEffect(() => {

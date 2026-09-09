@@ -27,8 +27,9 @@ use crate::{
     Error, Result,
     series_consume_geometry::{
         SERIES_CONSUME_CORE_FOUND_START_V1, SERIES_CONSUME_CORE_OPEN_START_V1,
-        SeriesConsumeGeometryInputV1, SeriesConsumeRoleSourceV1, final_source_v1, m0_source_v1,
-        prepared_prediction_v1, put_series_consume_role_v1, vacancy_v1,
+        SeriesConsumeGeometryInputV1, SeriesConsumePrestateV1, SeriesConsumeRoleSourceV1,
+        final_source_v1, m0_source_v1, prepared_prediction_v1, put_series_consume_role_v1,
+        vacancy_v1,
     },
     series_found_prepare_driver::SeriesPrepareFinalizedRecordV1,
     series_found_prepare_input::SeriesParentRootFactV1,
@@ -228,12 +229,7 @@ fn populate_found_v1<'a>(
             None,
         ),
         facts.root.clone(),
-        final_source_v1(
-            "prepared Ticket state",
-            facts.ticket_state,
-            input.trading,
-            None,
-        ),
+        ticket_state_source_v1(input, facts.ticket_state)?,
         record_source_v1("Series Template", input.registry, input.records.template)?,
         vacancy_v1("Series Template staging", input.records.template.staging, 0)?,
         record_source_v1(
@@ -409,12 +405,7 @@ fn populate_open_v1<'a>(
         m0_source_v1(input, input.m0.project_found[25])?,
         m0_source_v1(input, input.m0.project_found[26])?,
         facts.root.clone(),
-        final_source_v1(
-            "prepared Ticket state",
-            facts.ticket_state,
-            input.trading,
-            None,
-        ),
+        ticket_state_source_v1(input, facts.ticket_state)?,
         record_source_v1("Series Template", input.registry, input.records.template)?,
         vacancy_v1("Series Template staging", input.records.template.staging, 0)?,
         record_source_v1(
@@ -494,6 +485,25 @@ fn populate_open_v1<'a>(
         put_series_consume_role_v1(roles, coordinate, source)?;
     }
     Ok(())
+}
+
+fn ticket_state_source_v1<'a>(
+    input: &'a SeriesConsumeGeometryInputV1<'a>,
+    address: Pubkey,
+) -> Result<SeriesConsumeRoleSourceV1<'a>> {
+    match input.prestate {
+        SeriesConsumePrestateV1::PreparedPrediction => prepared_prediction_v1(
+            "prepared Ticket state",
+            address,
+            dclutch_trading::series::replay::SERIES_TICKET_STATE_BYTES_V3,
+        ),
+        SeriesConsumePrestateV1::ObservedPrepared => Ok(final_source_v1(
+            "prepared Ticket state",
+            address,
+            input.trading,
+            None,
+        )),
+    }
 }
 
 pub(crate) fn parent_root_source_v1<'a>(

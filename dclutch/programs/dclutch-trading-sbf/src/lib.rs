@@ -60,6 +60,9 @@ pub mod direct_begin_retiring_v1;
 /// Permissionless, release-authenticated close of one drained maker replay.
 #[cfg(feature = "families")]
 pub mod direct_close_maker_v1;
+/// Permissionless close of a never-activated Direct funding ledger.
+#[cfg(feature = "families")]
+pub mod direct_close_unused_v1;
 /// Permissionless settlement of one Direct fee, in a transaction of its own.
 #[cfg(feature = "families")]
 pub mod direct_fee_settlement_v1;
@@ -1076,6 +1079,14 @@ pub fn process_instruction(
     ))]
     if projected_custody_bootstrap_v1::is_controller_funding_cleanup_step2_v1(instruction_data) {
         return projected_custody_bootstrap_v1::process_controller_funding_cleanup_step2_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    #[cfg(feature = "families")]
+    if direct_close_unused_v1::is_direct_close_unused_v1(instruction_data) {
+        return direct_close_unused_v1::process_direct_close_unused_v1(
             program_id,
             accounts,
             instruction_data,
