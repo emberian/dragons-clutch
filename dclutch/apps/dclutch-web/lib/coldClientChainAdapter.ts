@@ -127,7 +127,7 @@ export function makeColdClientChainAdapterV1(options: Readonly<{
         }
 
         case 'market.inspect': {
-          if (selectedMarket === null) return refused(step, 'no Market was selected by discovery or injected');
+          if (selectedMarket === null) return refused(step, 'Select a market to continue.');
           const detail = await inspectMarketDetailV1(rpc, {
             coreProgramId: programs.core,
             registryProgramId: programs.registry,
@@ -135,18 +135,18 @@ export function makeColdClientChainAdapterV1(options: Readonly<{
             custodyProgramId: programs.custody,
             address: selectedMarket,
           });
-          if (detail.card.status !== 'decoded') return refused(step, `the selected Market did not decode: ${detail.reason}`);
+          if (detail.card.status !== 'decoded') return refused(step, `The selected market could not be decoded: ${detail.reason}`);
           const truths: ColdClientTruthV1[] = [
             truth('Market root', 'authenticated', `phase ${detail.card.phase}, generation ${detail.card.generation}`),
             detail.realmProvenance.kind === 'refused'
               ? truth('Realm binding', 'refused', detail.realmProvenance.reason)
-              : truth('Realm binding', 'authenticated', 'content-addressed collateral binding read back'),
+              : truth('Realm binding', 'authenticated', 'Collateral record loaded and matched.'),
             detail.liabilityProvenance.kind === 'refused'
               ? truth('Claims liability', 'refused', detail.liabilityProvenance.reason)
-              : truth('Claims liability', 'authenticated', 'supply vector read from the Claims aggregate'),
+              : truth('Claims liability', 'authenticated', 'Claim balances loaded from the aggregate.'),
             detail.capabilityProvenance.kind === 'refused'
               ? truth('capability manifest', 'refused', detail.capabilityProvenance.reason)
-              : truth('capability manifest', 'authenticated', 'the manifest this Market authenticates'),
+              : truth('capability manifest', 'authenticated', 'Capability manifest matched to the market.'),
           ];
           return Object.freeze({
             step,
@@ -159,8 +159,8 @@ export function makeColdClientChainAdapterV1(options: Readonly<{
         }
 
         case 'participant.inspect': {
-          if (selectedMarket === null) return refused(step, 'no Market is selected');
-          if (evidence.walletAddress === undefined) return unavailable(step, 'no wallet identity was injected; the journey stays a pure reader here');
+          if (selectedMarket === null) return refused(step, 'Select a market to continue.');
+          if (evidence.walletAddress === undefined) return unavailable(step, 'Provide a wallet address to inspect participant accounts.');
           const readiness = await inspectDirectParticipantReadinessV1(rpc, {
             market: selectedMarket,
             owner: evidence.walletAddress,
@@ -186,7 +186,7 @@ export function makeColdClientChainAdapterV1(options: Readonly<{
         }
 
         case 'direct.inspect': {
-          if (selectedMarket === null) return refused(step, 'no Market is selected');
+          if (selectedMarket === null) return refused(step, 'Select a market to continue.');
           const spine = await inspectDirectTradeSpineV1(rpc, {
             marketAddress: selectedMarket,
             coreProgramId: programs.core,
@@ -199,7 +199,7 @@ export function makeColdClientChainAdapterV1(options: Readonly<{
           const truths: ColdClientTruthV1[] = [
             truth('Direct capability', 'authenticated', `manifest entry ${spine.entryIndex}, price scale ${spine.priceScale}, fee ${spine.feeBasisPoints} bps`),
             spine.walls.length === 0
-              ? truth('trade walls', 'authenticated', 'no Market-state wall stands between inspection and execution')
+              ? truth('trade walls', 'authenticated', 'The market-state checks found no trading blockers.')
               : truth('trade walls', 'refused', spine.walls.map((wall) => wall.name).join('; ')),
           ];
           return Object.freeze({
@@ -213,9 +213,9 @@ export function makeColdClientChainAdapterV1(options: Readonly<{
         }
 
         case 'direct.preview-unsigned': {
-          if (selectedMarket === null) return refused(step, 'no Market is selected');
+          if (selectedMarket === null) return refused(step, 'Select a market to continue.');
           if (evidence.walletAddress === undefined || evidence.directTicket === undefined) {
-            return unavailable(step, 'a Direct preview needs an injected wallet identity and a signed counterparty ticket');
+            return unavailable(step, 'Provide a wallet address and a signed counterparty ticket to preview the trade.');
           }
           const spine = await inspectDirectTradeSpineV1(rpc, {
             marketAddress: selectedMarket,
@@ -226,7 +226,7 @@ export function makeColdClientChainAdapterV1(options: Readonly<{
             owner: evidence.walletAddress,
           });
           if (spine.status === 'refused') return refused(step, spine.reason);
-          if (spine.outcomeCount === null) return refused(step, 'the Market does not expose the Product width an exact crossing needs');
+          if (spine.outcomeCount === null) return refused(step, 'The market’s outcome count is unavailable.');
           const readiness = await inspectDirectParticipantReadinessV1(rpc, {
             market: selectedMarket,
             owner: evidence.walletAddress,
@@ -238,7 +238,7 @@ export function makeColdClientChainAdapterV1(options: Readonly<{
             rentProgram: programs.rent,
           });
           if (readiness.status !== 'ready') {
-            return refused(step, readiness.status === 'refused' ? readiness.reason : `the injected wallet is not a participant: missing ${readiness.missing.join(' and ')}`);
+            return refused(step, readiness.status === 'refused' ? readiness.reason : `Participant accounts are missing: ${readiness.missing.join(' and ')}`);
           }
           const ticket = decodeDirectIntentTicketV1(evidence.directTicket);
           const replay = await inspectDirectMakerNonceV1(rpc, {
@@ -274,11 +274,11 @@ export function makeColdClientChainAdapterV1(options: Readonly<{
           return Object.freeze({
             step,
             status: 'ready' as const,
-            reason: `previewed a ${plan.takerSide} of ${plan.fill} claim atoms at signed price ${plan.executionPrice}; nothing was signed or submitted`,
+            reason: `Unsigned ${plan.takerSide} preview: ${plan.fill} claim atoms at signed price ${plan.executionPrice}.`,
             observedSlot: replay.observedSlot,
             addresses: Object.freeze([readiness.coordinates.collateral]),
             truths: Object.freeze([
-              truth('crossing arithmetic', 'authenticated', 'exact integer preview computed by the code the chain runs'),
+              truth('crossing arithmetic', 'authenticated', 'Trade amounts and fees calculated in integer atoms.'),
             ]),
             artifact: Object.freeze({
               kind: 'unsigned-preview' as const,
@@ -289,7 +289,7 @@ export function makeColdClientChainAdapterV1(options: Readonly<{
         }
 
         case 'resolution.inspect': {
-          if (selectedMarket === null) return refused(step, 'no Market is selected');
+          if (selectedMarket === null) return refused(step, 'Select a market to continue.');
           const detail = await inspectMarketDetailV1(rpc, {
             coreProgramId: programs.core,
             registryProgramId: programs.registry,
@@ -297,11 +297,11 @@ export function makeColdClientChainAdapterV1(options: Readonly<{
             custodyProgramId: programs.custody,
             address: selectedMarket,
           });
-          if (detail.card.status !== 'decoded') return refused(step, `the selected Market did not decode: ${detail.reason}`);
+          if (detail.card.status !== 'decoded') return refused(step, `The selected market could not be decoded: ${detail.reason}`);
           const settlement = detail.card.settlement;
           const verdict = settlement.status === 'terminal'
             ? truth('terminal settlement', 'authenticated', `winning claim ${settlement.winner}`)
-            : truth('terminal settlement', 'refused', 'no terminal receipt is written; this is the account state, not a missing read');
+            : truth('terminal settlement', 'refused', 'The market has no terminal settlement receipt.');
           return Object.freeze({
             step,
             status: 'ready' as const,
@@ -312,8 +312,8 @@ export function makeColdClientChainAdapterV1(options: Readonly<{
         }
 
         case 'redeem.inspect': {
-          if (selectedMarket === null) return refused(step, 'no Market is selected');
-          if (evidence.walletAddress === undefined) return unavailable(step, 'redemption inspection needs an injected wallet identity');
+          if (selectedMarket === null) return refused(step, 'Select a market to continue.');
+          if (evidence.walletAddress === undefined) return unavailable(step, 'Provide a wallet address to inspect redemption readiness.');
           const state = await inspectClaimsCustodyReplayV1(rpc, {
             marketAddress: selectedMarket,
             claimsProgramId: programs.claims,
@@ -323,12 +323,12 @@ export function makeColdClientChainAdapterV1(options: Readonly<{
           });
           if (state.status === 'refused') return refused(step, state.reason);
           const verdict = state.status === 'exists'
-            ? truth('Claims replay', 'authenticated', 'the reusable payment record already exists')
-            : truth('Claims replay', 'authenticated', 'no replay exists; a complete signable creation plan was derived');
+            ? truth('Claims replay', 'authenticated', 'Payment record already exists.')
+            : truth('Claims replay', 'authenticated', 'Payment record needs creation. The creation transaction is ready to sign.');
           return Object.freeze({
             step,
             status: 'ready' as const,
-            reason: state.status === 'exists' ? 'the replay record exists and can carry a payout' : state.note,
+            reason: state.status === 'exists' ? 'The payment record is ready for payouts.' : state.note,
             observedSlot: state.observedSlot,
             truths: Object.freeze([verdict]),
           });
@@ -336,7 +336,7 @@ export function makeColdClientChainAdapterV1(options: Readonly<{
 
         case 'redeem.prepare-unsigned': {
           if (evidence.walletAddress === undefined || evidence.redeemPlan === undefined) {
-            return unavailable(step, 'payout preparation needs an injected wallet identity and a Rust-authored payout artifact');
+            return unavailable(step, 'Provide a wallet address and a prepared payout file.');
           }
           const manifest = importRustWalletTerminalPayoutArtifactV3(evidence.redeemPlan);
           const prepared = await prepareWalletTerminalPayoutV3(rpc, manifest, evidence.walletAddress);
@@ -344,10 +344,10 @@ export function makeColdClientChainAdapterV1(options: Readonly<{
           return Object.freeze({
             step,
             status: 'ready' as const,
-            reason: `compiled the exact ${messageBytes.length}-byte payout message; nothing was signed or submitted`,
+            reason: `Prepared an unsigned payout message (${messageBytes.length} bytes).`,
             observedSlot: prepared.report.observedSlot,
             truths: Object.freeze([
-              truth('payout plan', 'authenticated', 'the browser re-checked the Rust-authored plan against finalized chain state'),
+              truth('payout plan', 'authenticated', 'Payout plan checked against finalized account state.'),
             ]),
             artifact: Object.freeze({
               kind: 'unsigned-transaction' as const,
@@ -358,7 +358,7 @@ export function makeColdClientChainAdapterV1(options: Readonly<{
         }
 
         case 'retirement.inspect': {
-          if (selectedMarket === null) return refused(step, 'no Market is selected');
+          if (selectedMarket === null) return refused(step, 'Select a market to continue.');
           const detail = await inspectMarketDetailV1(rpc, {
             coreProgramId: programs.core,
             registryProgramId: programs.registry,
@@ -366,7 +366,7 @@ export function makeColdClientChainAdapterV1(options: Readonly<{
             custodyProgramId: programs.custody,
             address: selectedMarket,
           });
-          if (detail.card.status !== 'decoded') return refused(step, `the selected Market did not decode: ${detail.reason}`);
+          if (detail.card.status !== 'decoded') return refused(step, `The selected market could not be decoded: ${detail.reason}`);
           const retirement = await inspectAggregateRetirementV1(rpc, {
             coreProgramId: programs.core,
             claimsProgramId: programs.claims,

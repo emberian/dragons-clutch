@@ -165,15 +165,15 @@ export default function ExposureBand({
     </svg></div>
     <p className="viz-readout">
       <span className="viz-key" style={{ background: 'var(--viz-deemph)' }} />
-      <strong>arrives whatever happens</strong>
+      <strong>payout floor</strong>
       <span className="viz-key" style={{ background: 'var(--viz-mark)' }} />
-      <strong>decided by the outcome</strong>
+      <strong>outcome-dependent amount</strong>
     </p>
     <details className="viz-table">
       <summary>Exact numbers</summary>
       <div className="viz-table-scroll" tabIndex={0} role="region" aria-label={`Exact numbers · ${caption}`}>
         <table>
-          <thead><tr><th>Band</th><th>At least · raw u64</th><th>At most · raw u64</th><th>Decided by the outcome</th></tr></thead>
+          <thead><tr><th>Band</th><th>At least · atoms</th><th>At most · atoms</th><th>Decided by the outcome</th></tr></thead>
           <tbody>
             {rows.map((row) => <tr key={row.label}>
               <td>{row.label}</td>

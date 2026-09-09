@@ -48,10 +48,11 @@ use dclutch_vm::account_profile::{
     },
     v2::{
         AccountPrestateV2, AccountProfileV2, DynamicFixedSpanV2, ProjectionRegistersV2,
-        TrustedEnvironmentV2, derive_effect_permissions,
-        derive_effect_permissions_with_dynamic_spans, project_atomic as project_accounts_atomic,
-        project_dynamic_fixed_spans_atomic,
+        SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V2, TrustedEnvironmentV2,
+        derive_effect_permissions, derive_effect_permissions_with_dynamic_spans,
+        project_atomic as project_accounts_atomic, project_dynamic_fixed_spans_atomic,
     },
+    v3::{AccountProfileV3, SCHEMA_RELEASE_ID_V3 as ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V3},
 };
 use dclutch_vm::capability_seal::CapabilitySealKeyV1;
 use dclutch_vm::effect::{
@@ -358,6 +359,69 @@ mod profile_ops {
     }
     #[allow(dead_code)]
     fn _keep(_: PhysicalAccountDataGeometryV2) {}
+}
+
+/// Decode the descriptor-selected AccountProfile schema through the native VM owners.
+pub fn decode_dealer_account_profile_v1<'a>(
+    schema: [u8; 32],
+    bytes: &'a [u8],
+) -> Result<AccountProfileV2<'a>, HotProjectionErrorV1> {
+    match schema {
+        ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V2 => AccountProfileV2::decode(bytes)
+            .map_err(|_| HotProjectionErrorV1::Projection("account-profile-v2")),
+        ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V3 => AccountProfileV3::decode(bytes)
+            .map(AccountProfileV3::base)
+            .map_err(|_| HotProjectionErrorV1::Projection("account-profile-v3")),
+        _ => Err(HotProjectionErrorV1::Projection("account-profile-schema")),
+    }
+}
+
+/// Return the profile-owned logical account width at one authenticated tail and span set.
+pub fn dealer_profile_logical_count_v1(
+    profile: AccountProfileV2<'_>,
+    tail_count: u32,
+    spans: &[u32],
+) -> Result<usize, HotProjectionErrorV1> {
+    profile_ops::logical_count(profile, tail_count, spans)
+}
+
+/// Return the profile-owned physical account width at one authenticated tail and span set.
+pub fn dealer_profile_physical_count_v1(
+    profile: AccountProfileV2<'_>,
+    tail_count: u32,
+    spans: &[u32],
+) -> Result<usize, HotProjectionErrorV1> {
+    profile_ops::physical_count(profile, tail_count, spans)
+}
+
+/// Resolve one logical coordinate to its canonical profile representative.
+pub fn dealer_profile_representative_v1(
+    profile: AccountProfileV2<'_>,
+    tail_count: u32,
+    spans: &[u32],
+    coordinate: usize,
+) -> Result<usize, HotProjectionErrorV1> {
+    profile_ops::representative(profile, tail_count, spans, coordinate)
+}
+
+/// Resolve one logical coordinate to its canonical packed physical ordinal.
+pub fn dealer_profile_ordinal_v1(
+    profile: AccountProfileV2<'_>,
+    tail_count: u32,
+    spans: &[u32],
+    coordinate: usize,
+) -> Result<usize, HotProjectionErrorV1> {
+    profile_ops::ordinal(profile, tail_count, spans, coordinate)
+}
+
+/// Return the profile-owned geometry and privileges for one physical ordinal.
+pub fn dealer_profile_geometry_v1(
+    profile: AccountProfileV2<'_>,
+    tail_count: u32,
+    spans: &[u32],
+    ordinal: usize,
+) -> Result<dclutch_vm::account_profile::v2::PhysicalAccountGeometryV2, HotProjectionErrorV1> {
+    profile_ops::geometry(profile, tail_count, spans, ordinal)
 }
 
 /// One logical coordinate's account facts as the builder currently holds them.

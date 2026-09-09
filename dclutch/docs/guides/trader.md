@@ -1,177 +1,100 @@
 # Trader guide
 
-What you hold when you hold a dClutch claim, what it can and cannot do to
-you, and how to read what the protocol tells you.
+Choose a market, read its payout rules and trade claims on the outcomes you
+want to hold. The public app runs on Solana devnet with test tokens.
 
-This guide describes the current-source trading path exercised on local test
-chains and devnet. Devnet assets and executions are public-test evidence, not
-mainnet evidence. Treat a live deployment as a dClutch deployment only when its
-checked release manifest authenticates the programs and profile it names.
+## What you hold
 
-## Which browser page can trade?
+In a price-range market, each claim pays one collateral unit if its range wins
+and zero otherwise. The market fixes the ranges, price source, observation
+window and fallback before trading begins.
 
-The public site has two Direct surfaces with intentionally different jobs.
-Console `/trade` reacquires a route and previews exact fill arithmetic; it is
-read-only and asks neither for a wallet signature nor for submission. The
-detailed Market pages (`/markets/<address>` and `/market`) carry the Direct
-participant and execution flow when the market authenticates as open and has a
-checked route.
+For example, buying 100 claims on “SOL below $100” at 0.20 units each costs
+20 collateral units before fees. If that outcome wins, the claims pay 100
+units. Otherwise they pay zero. Your purchase is fully paid: holding the
+claims creates no margin calls, funding payments or liquidation risk.
 
-On an eligible detailed Market page, the browser checks your Position and
-collateral account, can admit your wallet where the checked first-admission
-binding permits it, lets you select an outcome and a maker's signed offer, and
-then prepares the exact transaction. It saves the unsigned packet before the
-wallet opens, saves the signed packet before its single send, and checks the
-finalized poststate before reporting completion. A market that fails any of the
-market, route, phase, or prestate checks does not expose a trade.
+Some markets use more detailed payout curves. Read the market’s payout chart
+for the amount each claim pays at each possible result.
 
-That path is a way to take an existing signed offer. It is not a promise of an
-order book, a buyer, a price, or an executable route for every market. The
-[reader guide](reader.md) explains what the market is backing; this guide
-explains what the Direct terms mean once one is available.
+## Before you trade
 
-## Moving a bearer claim to another wallet
+Check these terms on the market page:
 
-The Console links to `/representation`, where a compatible local or custom
-chain can transfer an already-issued bearer claim between ordinary Token-2022
-accounts. No current devnet market supplies the selected representation route,
-so the page says that before asking anyone to begin. This transfer does not
-open, wrap, redeem, or retire a representation; those are separate privileged
-protocol actions with their own checked routes.
+- **Collateral:** the token used to buy claims and pay redemptions.
+- **Outcomes and payouts:** including which range contains an exact boundary.
+- **Source and timing:** which observation can settle the market and when.
+- **Fallback:** which payout applies if the source and funded recovery steps fail.
+- **Fees:** the cost added to a purchase or deducted from a sale.
 
-The page derives the Token behavior record from the Market, then reads the
-Mint, source account, destination account, and address lookup table at finalized
-commitment. Enter the quantity in raw token atoms. The Mint's decimal count is
-shown as metadata and is never used to round or scale the quantity.
+One claim on every outcome forms a **complete set**. In a range market, a
+complete set pays one collateral unit. Depositing collateral can create a
+complete set; returning one while the market is open releases its backing.
+Individual offers can be priced differently, so check the total cost of the
+claims you are buying.
 
-The source owner is the **transfer authority**. The wallet that pays the Solana
-transaction fee is the **transaction payer**. They may be different people:
-connect the transfer authority first, sign its slot, then connect the exact
-payer and sign the unchanged packet. One wallet signature cannot silently
-replace the other identity. The browser saves the operation before it opens a
-wallet, saves the completely signed packet before its only send, and never
-resubmits during recovery. It reports completion only after the signature is
-finalized and fresh Mint, source, and destination reads match the exact expected
-raw balances. If you leave before finalization, enter and authenticate the same
-route again to resume that saved signature.
+## Join and trade
 
-## What a claim is
+Open **Markets**, choose a market and connect your devnet wallet. Joining
+creates your **Position**, which holds your claim balances, and the associated
+collateral account. The page shows whether joining is available for that
+market.
 
-A market asks one question with a bounded, checkable answer — say, where
-SOL/USD is at noon on Friday. The possible answers are split into buckets
-called **cells**, fixed when the market is created. Every claim is a claim
-on one cell.
+For a **Direct** trade:
 
-A claim pays **one collateral unit** if the answer lands in its cell, and
-**zero** if it doesn't. That is the whole product.
+1. Choose the outcome and an available signed offer.
+2. Enter the quantity and review the price, fees and resulting balances.
+3. Sign your trade terms, then sign the transaction. If a different wallet
+   pays the transaction fee, that wallet must also sign.
+4. Submit the transaction and wait for confirmation. The page then shows your
+   updated balances.
 
-One claim on every cell — a **complete set** — pays exactly one unit no
-matter what happens. So the protocol treats a complete set and a
-collateral unit as the same thing: deposit a unit and you mint a complete
-set; return a complete set and you get the unit back. That deposit is
-where every claim comes from. The collateral sits in the market's vault
-(its **Hoard**) before any claim exists, and it does nothing but pay claim
-holders.
+You can reload to check a submitted transaction’s progress. Selling requires
+a buyer who accepts your terms; posting an offer does not itself move claims.
 
-What this means for you:
+The Console’s **Direct trade** page (`/trade`) previews trade calculations.
+Use a market’s detail page for wallet trading. Other markets may use
+**General** batch orders or **Dealer** liquidity; their pages show the actions
+available for the selected mechanism.
 
-- The most you can lose is what you paid for your claims. Ever.
-- There is no leverage, so there is no liquidation, no margin call, and
-  no funding rate. Nothing can force-close your position.
-- Because a complete set is always worth exactly one unit, cell prices
-  always sum to exactly one unit. A cell priced at 0.07 units is the
-  market pricing that outcome at seven cents on the dollar.
+## Direct trading fees
 
-## Buying protection
+The market’s creator fixes its Direct fee rate and recipient when founding the
+market. The rate applies to each side. At 50 basis points (0.5%) on a trade
+worth 100 collateral units, the buyer pays 100.50 and the seller receives
+99.50; the fee recipient receives 1 unit in total. Token-atom rounding applies
+to the amounts shown in the transaction preview.
 
-"Protection against SOL below $100" is not a special product. It is
-claims on every cell below $100. If SOL resolves below $100, exactly one
-of your cells wins and pays you one unit per claim. If not, your claims
-expire worthless and the seller keeps what you paid — like an insurance
-premium.
+Fees go to the market’s designated recipient and are held separately from
+claim collateral. The market page and signed offer show the applicable rate.
 
-The same shape covers a range ("between X and Y") or a tail ("above Z"):
-pick the cells, buy claims on each. The price of the bundle is the sum of
-the cell prices, exactly.
+## Settlement and redemption
 
-No price feed watches your position along the way, because there is no
-position to liquidate. The only moment that matters is resolution.
+The first valid source observation in the market’s window selects the result.
+If the source is unavailable, the market follows its funded recovery steps
+and, if those are exhausted, its preselected failure outcome.
 
-## Getting into a market
+After settlement, open **Portfolio** to see the payout for your holdings and
+redeem paying claims into your collateral account. Before settlement, you can
+exit by selling to another participant or returning complete sets through an
+available market route.
 
-Before you can hold claims in a market you need a **Position** in it. A
-Position is an account that belongs to you and holds your claim balances,
-alongside a collateral account that funds them. Both live at addresses
-worked out from the market and your own wallet, so nobody assigns you one
-and nobody can hand you someone else's — the addresses are yours before
-either account exists. Joining is what creates them.
+## Transfer a bearer claim
 
-A browser wallet admission is available only for a market whose public Market
-page carries a checked first-admission binding. Connect the wallet that will
-own the Position, open that Market page, and choose the admission action. The
-browser asks the Rust planner to reauthenticate the finalized Market and
-linked-basis record, saves the exact unsigned request before the wallet opens,
-submits the signed bytes once, and reports success only after the signature and
-the Position's finalized poststate agree.
+Markets with bearer representations can issue claims as Token-2022 tokens.
+The Console’s **Representation** page transfers an existing bearer claim
+between compatible token accounts when the selected market supports it.
+Enter the amount in token atoms and provide the destination account. The
+source owner authorizes the transfer; a separate transaction payer can pay the
+Solana fee. After submission, the page checks the resulting balances.
 
-If a Market has no checked first-admission binding, the public entrance stays
-closed. A market address, an aquarium observation, or an old cohort report is
-not a substitute: wait for the market's checked founding report to be bound and
-published. This is a launch gate, not a wallet error to retry.
+## If a transaction fails
 
-The CLI remains useful for an operator's or local run's checked plan and
-campaign evidence. Its key file is the Position identity, but an operator
-artifact never authorizes a stranger's public wallet transaction. Against
-devnet, confirm the cluster identity; an owned validator uses its own
-credential-free loopback endpoint. The client does not guess which chain you
-meant.
+Read the displayed reason before retrying. Expired offers need fresh terms;
+changed balances need a new preview; a closed market cannot accept a trade.
+A failed Solana transaction rolls back its protocol changes but can still
+charge a transaction fee. Program error codes are listed in the
+[refusal reference](../reference/refusals.md).
 
-## Who gets the trading fee
-
-Every Direct market has one venue rate, set when it is created, immutable
-after, and charged **per side**: a rate of 50 basis points takes 50 from the
-seller and 50 from the buyer, so a fill at that rate moves 1% of the gross.
-The seller nets the gross less their side; the buyer is debited the gross plus
-theirs. Rounding goes toward the makers, never toward the venue.
-
-**The protocol takes none of it.** There is no protocol treasury, no protocol
-beneficiary, and no instruction anywhere that lets the protocol sweep a market's
-fees. The whole fee goes to the market's own `fee_recipient` — a pubkey the
-founder fixed at creation — and it gets there by an ordinary token transfer that
-anybody may submit. That transfer is a second transaction: permissionless,
-unsigned by the venue, unrewarded, and with no deadline.
-
-The rate can be anything from zero up to **500 basis points a side**, and no
-higher: the protocol refuses a market founded above that, and the ceiling lives
-in the deployed program rather than in a setting. Inside that band the rate is
-the founder's choice and it is shown to you before you trade — on the market
-page, on the ticket you sign, and copied into the signed terms where the trade
-form cannot change it. A market's rate is a fact about that market, disclosed;
-it is not a number the protocol collects.
-
-## How the market resolves
-
-Every market pins its source when it is created — a specific price feed,
-down to the exact program deployment it trusts — and names a time window
-with real width. The first valid observation from that source inside the
-window settles the market; every later one is rejected. No committee, no
-vote, nobody to appeal to — and nobody to be surprised by.
-
-If the source publishes nothing through the whole window, the market can take
-the disclosed recovery path it selected and funded before opening. If that
-path is exhausted, the permissionless failure walk commits the published
-failure outcome. You know before you trade what silence produces; neither the
-founder nor a later committee gets to invent a different answer.
-
-## When the protocol says no
-
-dClutch refuses any transaction that doesn't check out exactly: wrong
-account, wrong signer, stale state, a window that hasn't opened, a
-replay. A refused transaction rolls back completely — your collateral
-stays exactly where it was, and you're out a transaction fee and nothing
-else.
-
-Every refusal carries a code naming the program that refused and why. The
-full list, with meanings, is in
-[the refusal reference](../reference/refusals.md). A refusal isn't a
-malfunction; it's the protocol keeping the market's rules.
+Continue with the [reader guide](reader.md) for a worked market example or the
+[operator guide](operator.md) to create a market.

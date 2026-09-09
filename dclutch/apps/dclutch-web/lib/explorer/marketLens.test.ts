@@ -95,7 +95,7 @@ describe('the Market lens', () => {
       expect(held.contentId).toHaveLength(64);
       expect(held.address, `${id} was not derived`).toBeTruthy();
       expect(held.provenance.kind).toBe('derived');
-      if (held.provenance.kind === 'derived') expect(held.provenance.how).toContain('not reacquired');
+      if (held.provenance.kind === 'derived') expect(held.provenance.how).toContain('Registry address derived from the record identity.');
     }
   });
 
@@ -176,6 +176,6 @@ describe('the Market lens', () => {
     expect(lens.nodes).toHaveLength(1);
     expect(lens.nodes[0].provenance.kind).toBe('unavailable');
     expect(lens.edges).toEqual([]);
-    expect(lens.gaps[0]).toContain('did not decode');
+    expect(lens.gaps[0]).toContain('could not be decoded');
   });
 });

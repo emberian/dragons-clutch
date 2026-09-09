@@ -104,31 +104,31 @@ const IDENTITY_SCHEMAS: ReadonlyArray<
     field: 'realmId',
     schema: REALM_SCHEMA_RELEASE_ID_V1,
     title: 'Realm record',
-    summary: 'What this market pays out in: the exact token behind every claim it issues.',
+    summary: 'The collateral token used for this market’s payouts.',
   },
   {
     field: 'productRecordId',
     schema: PRODUCT_RECORD_SCHEMA_ID_V2,
     title: 'Product record',
-    summary: 'The product this market grades its claims against.',
+    summary: 'The payout rules for this market’s claims.',
   },
   {
     field: 'resolutionPolicyId',
     schema: SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
     title: 'Source material',
-    summary: 'How this market decides its outcome: the source material it settles on.',
+    summary: 'The source data and rules used to resolve this market.',
   },
   {
     field: 'capabilityManifestId',
     schema: CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
     title: 'Capability manifest record',
-    summary: 'The fixed list of what this market is allowed to do, set at founding.',
+    summary: 'The market’s capabilities, fixed when it opens.',
   },
   {
     field: 'selectedReleaseSetId',
     schema: EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1,
     title: 'Execution release set',
-    summary: 'The exact program builds every action on this market runs under.',
+    summary: 'The program releases selected for this market.',
   },
 ]);
 
@@ -167,7 +167,7 @@ export function projectMarketLens(detail: MarketDetailV1): MarketLens {
         facts: Object.freeze([]),
       }),
     );
-    gaps.push('The Market itself did not decode.');
+    gaps.push('The market data could not be decoded.');
     return Object.freeze({
       address: detail.address,
       floorSlot: detail.floorSlot,
@@ -189,7 +189,7 @@ export function projectMarketLens(detail: MarketDetailV1): MarketLens {
       id: 'market',
       band: 'market',
       title: 'Market · Core state',
-      summary: detail.phaseMeaning ?? 'The market account itself.',
+      summary: detail.phaseMeaning ?? 'The market’s current state.',
       address: card.address,
       contentId: null,
       provenance: Object.freeze({ kind: 'observed', slot: card.observedSlot }),
@@ -229,11 +229,11 @@ export function projectMarketLens(detail: MarketDetailV1): MarketLens {
           address === null
             ? Object.freeze({
                 kind: 'stated',
-                how: 'a content identity the Market carries; no Registry program is selected, so its record address is not derived',
+                how: 'Record identity from the market. Its Registry address is unavailable.',
               })
             : Object.freeze({
                 kind: 'derived',
-                how: 'raw-record PDA of this identity under the selected Registry program; not reacquired',
+                how: 'Registry address derived from the record identity.',
               }),
         facts: Object.freeze([fact('Content identity', identity)]),
       }),
@@ -246,12 +246,12 @@ export function projectMarketLens(detail: MarketDetailV1): MarketLens {
       id: 'productInstance',
       band: 'identity',
       title: 'Product instance',
-      summary: 'The product the payout is graded under. It lives inside the product record, not in an account of its own.',
+      summary: 'The payout definition stored inside the Product record.',
       address: null,
       contentId: card.identity.productInstanceId,
       provenance: Object.freeze({
         kind: 'stated',
-        how: 'read from the Market’s own seed; no record account holds it',
+        how: 'Product instance identity from the market.',
       }),
       facts: Object.freeze([fact('Content identity', card.identity.productInstanceId)]),
     }),
@@ -265,7 +265,7 @@ export function projectMarketLens(detail: MarketDetailV1): MarketLens {
         id: 'realm',
         band: 'collateral',
         title: 'Realm, authenticated',
-        summary: 'The record naming the token this market pays out in.',
+        summary: 'The market’s collateral token and authority policies.',
         address: card.collateral.realmAddress,
         contentId: card.collateral.realmContentId,
         provenance: Object.freeze({ kind: 'observed', slot: card.collateral.observedSlot }),
@@ -303,7 +303,7 @@ export function projectMarketLens(detail: MarketDetailV1): MarketLens {
         id: 'aggregate',
         band: 'liability',
         title: 'Claims aggregate',
-        summary: 'How many claims this market has issued in total, and where the collateral behind them sits.',
+        summary: 'Issued claim balances and their required collateral backing.',
         address: card.liability.aggregateAddress,
         contentId: null,
         provenance: Object.freeze({ kind: 'observed', slot: card.liability.observedSlot }),
@@ -371,7 +371,7 @@ export function projectMarketLens(detail: MarketDetailV1): MarketLens {
         id: 'manifest',
         band: 'capability',
         title: 'Capability manifest, authenticated',
-        summary: `${card.capabilities.badges.length} things this market is allowed to do.`,
+        summary: `${card.capabilities.badges.length} capabilities configured for this market.`,
         address: card.capabilities.recordAddress,
         contentId: card.capabilities.manifestId,
         provenance: Object.freeze({ kind: 'observed', slot: card.capabilities.observedSlot }),
@@ -387,8 +387,8 @@ export function projectMarketLens(detail: MarketDetailV1): MarketLens {
           band: 'capability',
           title: `Capability ${badge.index} · ${badge.label}`,
           summary: badge.recognized
-            ? 'A named capability kind.'
-            : 'An unnamed capability kind, identified by its fingerprint.',
+            ? 'Recognized capability type.'
+            : 'Capability type identified by its content ID.',
           address: null,
           contentId: badge.kindId,
           provenance: Object.freeze({ kind: 'observed', slot: card.capabilities.observedSlot }),
@@ -427,7 +427,7 @@ export function projectMarketLens(detail: MarketDetailV1): MarketLens {
         contentId: card.settlement.receiptId,
         provenance: Object.freeze({
           kind: 'stated',
-          how: 'read from the Market’s own terminal receipt slot; no schema pairing is declared for it',
+          how: 'Receipt identity from the market. No record address is available.',
         }),
         facts: Object.freeze([
           fact('Winner', String(card.settlement.winner)),
@@ -454,7 +454,7 @@ export function projectMarketLens(detail: MarketDetailV1): MarketLens {
 
   if (detail.registryProgramId === null) {
     gaps.push(
-      'No Registry program is selected, so the five content identities the Market names could not be turned into record addresses. Select one to make them openable.',
+      'No Registry program is selected. Select one to open the market’s records.',
     );
   }
 

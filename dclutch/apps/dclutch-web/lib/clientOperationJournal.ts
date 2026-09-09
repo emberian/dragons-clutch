@@ -24,6 +24,7 @@ export const CLIENT_OPERATION_JOURNAL_OPERATIONS_V1 = Object.freeze([
   'source-provider-submit-v1',
   'rational-open-v1',
   'bearer-transfer-v2',
+  'structured-lifecycle-v1',
   'source-terminal-v1',
   'source-close-fund-v1',
   // Admission: the act that turns a wallet into a market participant. It is

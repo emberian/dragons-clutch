@@ -1,161 +1,104 @@
 # Operator guide
 
-Running a dClutch market means making all the decisions up front, funding
-them, and then getting out of the way. After your market opens you hold no
-admin keys, you cannot change its rules, and you are not the referee:
-everything that happens next is either open to everyone or refused for
-everyone. This guide walks through the decisions that are yours.
+Creating a market means choosing its terms, funding its obligations and
+publishing it on chain. The outcomes, source rules and payout terms are fixed
+before trading begins.
 
-The recorded cohort 17 deployment contains eight protocol programs (fresh ids
-each redeploy; the addresses are not permanent). Its markets have been
-founded, traded, resolved and paid; the
-[cohort evidence](../evidence/COHORT17_SEATED_FILLED_RETIRING_2026_09_06.md)
-records the exact programs and outcomes. You rehearse market creation
-against a local test chain first ([the walkthrough](../operators/found-a-market.md))
-and use the public app to inspect the live cohort. Exact costs, routes, and
-codes live in the [reference](../reference/README.md).
+Use **Design a market** in the app to explore the terms, and the **Console**
+for market operations. The [founding walkthrough](../operators/found-a-market.md)
+covers the command-line workflow. Rehearse your configuration on a local
+validator before creating a devnet market.
 
-## What you fix at creation, forever
+## Choose the market terms
 
-- **The collateral** — which token backs the market (its **Realm**: the
-  collateral and admission namespace).
-- **The question and its cells** — how the answer space is split into
-  buckets.
-- **The source** — the exact feed whose observation resolves the market,
-  pinned down to the program deployment it trusts.
-- **The window** — when the market can resolve, and how stale an
-  observation may be when it lands.
-- **The fallback outcome** — what happens if the source stays silent.
-- **The program releases** — the exact on-chain code your market runs,
-  named by content, selected from the Registry.
+| Choice | What to decide |
+| --- | --- |
+| Collateral | The token backing claims and its admission rules. |
+| Outcomes | The complete set of possible results, their boundaries and payouts. |
+| Source | The feed or other source that supplies the result. |
+| Observation window | When an observation is eligible and how old it may be when submitted. |
+| Recovery and fallback | Funded recovery steps and the payout used if they are exhausted. |
+| Trading mechanism | Direct signed offers, General batches or Dealer liquidity. |
+| Fees | The selected mechanism’s rate and recipient. |
+| Program releases | The deployed programs and capabilities used by this market. |
 
-All of it is published on chain before the market opens, and none of it
-can change afterwards. There is nothing to govern, so there is no
-governance to capture — and no creator backdoor to worry about, because
-none exists to defend.
+For a price-range market, include every possible price and assign each boundary
+to exactly one range. The payout chart should make the result clear at the
+boundaries as well as between them.
 
-## Opening the market
+## Fund the obligations
 
-Creating a market — the protocol calls it **founding** — now has three
-ordered stages:
+Claim collateral goes into the market’s **Hoard**. Source work, recovery,
+rent and fees have separate accounts and funding requirements.
 
-1. **Project the market.** The Core program authenticates the complete
-   Registry graph and authorizes the exact projection for this future market.
-2. **Stage custody and controller funding.** The `DCLTPCB2` transaction opens
-   the empty Hoard, creates the one-shot projected custody state, funds the
-   named obligations, and records the exact controller-owned funding ledgers.
-   It does not create claims or open the market.
-3. **Found.** The `DCLTGMF3` transaction locks custody, creates the market,
-   makes it real, sets up claims, and opens trading last in one all-or-nothing
-   rollback domain. When that composed transaction does not fit under the
-   compute limit, the same stages run as two transactions instead: `DCLTGFP1`
-   commits the market and escrows a one-shot Core permit, and the
-   permissionless `DCLTGMO1` consumes the permit to open the market last.
-   Founding through the split is atomic economically rather than
-   transactionally: the permit pins every coordinate of the open, so the
-   market can only open on the terms the first stage committed, and the escrow
-   carries a refund path so nothing strands between the two transactions.
+| Funds | Purpose |
+| --- | --- |
+| Claim principal | Pay claim holders. |
+| Trading and settlement principal | Fund the selected trading mechanism. |
+| Source-work funding | Pay for resolution work. |
+| Recovery reserve | Fund the selected recovery steps. |
+| Failure bounty | Pay the caller completing the failure procedure. |
+| Account rent | Create and maintain the required Solana accounts. |
+| Realized fees | Pay the market’s designated fee recipient. |
 
-Both routes have opened markets on devnet. A transaction must finish within
-Solana's 1,400,000 compute-unit maximum; its requested compute limit cannot buy
-execution beyond that ceiling. The composed route's cost depends on the
-selected market and program versions. Use the
-[budgets reference](../reference/budgets.md) and its dated evidence when
-choosing a route.
+Native SOL and collateral tokens are separate amounts. Review both before
+founding. Claim principal cannot be used to cover another obligation.
 
-The test reports also compare transaction costs with historical performance
-baselines. Exceeding one of those baselines means a regression comparison is
-red; it does not by itself mean the transaction failed on chain. For example,
-the [September 7 infrastructure campaign](../evidence/INFRASTRUCTURE_FLOOR_88AEC17E8_2026_09_07.md)
-completed all 209 transactions while eight baseline comparisons failed. A
-runtime compute exhaustion is different: the transaction fails and its state
-changes roll back. Read the transaction result alongside the budget result.
+## Open the market
 
-## Funding named obligations
+The founding workflow has three stages:
 
-The money you put in has names. Custody tags every token account with
-what it is for, and the tags never mix: collateral can never be spent as
-fees, the fallback bounty can never be spent as rent, and so on. The
-compartments (`CompartmentV1`, `crates/dclutch-custody-contract`):
+1. **Prepare the market.** Publish and check its outcomes, source, capabilities
+   and selected program releases.
+2. **Fund custody and operations.** Create the required accounts and fund their
+   named obligations.
+3. **Found and open.** Commit the market terms, lock collateral, initialize
+   claims and enable trading.
 
-| compartment | holds |
-|---|---|
-| `HoardPrincipal` | the market's collateral — pays claim holders, never anything else |
-| `TradingPrincipal` | Direct/Dealer trading principal |
-| `Settlement` | general settlement inventory |
-| `FeeVault` | realized fees, kept physically separate |
-| `LivenessVault` | the funding for the fallback (the walk bounty) |
-| `RecoveryReserve` | recovery-reserve capital |
-| `SeriesEscrow` | Series ticket principal before its market exists |
-| `External` | accounts owned by depositors, recipients, beneficiaries |
+The final stage can use one transaction or a funded two-step permit, depending
+on the selected market. A two-step founding commits the opening terms first;
+anyone can then complete that exact opening. The permit also defines how an
+incomplete opening is refunded.
 
-When you fund a market, you are funding specific named obligations — the
-fallback bounty, the resolution work, the rent — not topping up one
-pooled balance. Native SOL and the market's collateral token are counted
-separately and never converted into each other. An escrow one lamport
-short of its named amount is refused.
+Solana allows at most 1,400,000 compute units in one transaction. Simulate the
+selected route before submitting it. The [transaction budgets reference](../reference/budgets.md)
+and the founding walkthrough cover route sizes and measured costs.
 
-## Choosing a resolution window
+## Choose a usable resolution window
 
-Your window is a time range `[start, end]`, and it needs real width: a
-market that can only be answered in one exact second is answered
-essentially never, and takes its fallback instead. Match the width to how
-often your source actually publishes.
+Allow enough time for the source to publish and for a caller to submit its
+observation. A narrow window can send a market to fallback even when the source
+is generally working.
 
-For Pyth's devnet SOL/USD feed (measured: a new price roughly every 313
-seconds), the chance the window contains at least one publication is
-about `1 − exp(−W/313)`:
+Measure publication intervals for the feed you intend to use. Choose a window
+covering several intervals, with room for delays. The `max_age_seconds`
+parameter separately limits how old an observation may be when submitted;
+a wider observation window does not remove that limit.
 
-| width `W` | shape | chance of ≥ 1 publication |
-| --- | --- | ---: |
-| 1 s | a single instant | ~0.3% |
-| 300 s | one publication interval | ~62% |
-| 600 s | two intervals | ~85% |
-| 1,250 s | four intervals | ~98% |
-| 1,800 s | 30 minutes | ~99.7% |
+The first valid observation settles the market. Later observations cannot
+replace the result. Check the selected source’s deadline rules in the
+[reference](../reference/README.md) when scheduling resolution and recovery.
 
-Practical rule: **make the window at least four publication intervals
-(about 21 minutes), and 30 minutes for a market that should not fall back
-just because the feed was slow.** The derivation is in
-[`docs/design/MAINNET_STATE_RELAY.md`](../design/MAINNET_STATE_RELAY.md)
-§12.3.
+## Recovery and failure
 
-`max_age_seconds` is a separate knob: it caps how old an observation may
-be when it lands on chain, and it sets the market's final deadline at
-`end + max_age`. A wide window doesn't help if nobody can land the
-observation within `max_age` of its publication.
+Choose recovery sources, activation conditions and funding before opening.
+If a recovery source supplies the required statistic, the result uses the same
+market payout rules. If all selected routes are exhausted, the published
+failure outcome becomes available.
 
-Two guarantees you get for free: the first valid observation settles the
-market and every later one is rejected; and there is no dead gap — the
-last moment an observation can resolve the market and the first moment
-the fallback can take it are the same moment, `end + max_age`.
+Anyone can complete the failure procedure once its conditions hold. A funded
+bounty pays the caller; replaying the completion cannot collect it again.
+Choose a fallback outcome your participants can understand and show it beside
+the normal outcomes.
 
-## The fallback
+## Follow the market
 
-If the source stays silent through the window and its grace period, your
-market takes the fallback outcome you disclosed — the protocol calls this
-the **failure walk** — and anyone may trigger it and collect the bounty
-you funded. A walk before the deadline is refused, a second walk cannot
-collect twice, and an underfunded bounty is refused down to the lamport.
+Use the market page and Explorer to inspect its state, collateral, claims and
+source progress. Keep the required source or keeper process running through
+the observation window. After settlement, complete the selected cleanup and
+retirement steps so account rent and remaining operational funds reach their
+specified recipients.
 
-The walk isn't a defect; it's the planned answer to a source that never
-showed up. Your job is to make it rare (a wide-enough window, a
-reasonable `max_age`, a source that really publishes) and survivable (a
-fallback outcome you'd be willing to live with, funded for real). It
-should happen because nothing published — never because your market asked
-a question nothing could answer.
-
-### Recovery is also precommitted
-
-A market can select funded recovery depth between its primary source and the
-failure walk. The source lifecycle distinguishes primary, recovery, resolved,
-exhausted, and failure states; a funded recovery ladder has run on real program
-bytes. Treat each rung as another immutable part of the market's answer
-procedure. Its source identity, conditions, and funding belong in the founding
-records, not in an operator decision after the outcome becomes inconvenient.
-
-If a recovery route resolves the stated statistic, its result settles the
-market through the same fixed partition. If every selected route is exhausted,
-only then does the published failure outcome become available. Recovery reserve
-and walk funding are separate named obligations; neither may be borrowed from
-Hoard principal.
+The [client developers guide](client-developers.md) covers integrations. Program
+instructions, account layouts and error codes are in the
+[reference](../reference/README.md).

@@ -25,6 +25,6 @@ tools/release/devnet-sponsored-keeper.py \
 
 Use `tools/release/stage-story-market-exchange.py --work ABSOLUTE_FRESH_DIR` to
 emit the finite flagship, graduation, and abandoned story plan. It uses the
-canonical scenario generator, marks adapter-required stages honestly, and
+canonical scenario generator, lists stages that require an adapter, and
 states that any graduation mainnet observation is read-only: it has no mainnet
 signer, transaction, or spend path.

@@ -1,13 +1,12 @@
 # @dclutch/cli
 
-`dclutch-terminal` is the fail-closed dClutch terminal client. It proves that
-`@dclutch/sdk` is a real client surface: every chain fact this tool states
-flows through the SDK's generated, byte-gated modules; nothing is restated.
+`dclutch-terminal` uses the dClutch SDK and native operator tools to inspect
+markets, prepare offers and run market workflows. Build it from this checkout;
+the package is not published on npm.
 
-The executable is `dclutch-terminal`, not `dclutch`. The bare name belongs to
-the Rust reader/authoring binary in `tools/dclutch-cli`, which is the
-distributed artifact; this package is `private: true`, is on no registry, and
-is installed only from this checkout.
+The separate Rust client is named `dclutch`. See
+[Command-line clients](../../docs/guides/two-clients.md) for its commands and
+build instructions.
 
 ```sh
 npm install && npm run build       # bundles to dist/dclutch-terminal.mjs

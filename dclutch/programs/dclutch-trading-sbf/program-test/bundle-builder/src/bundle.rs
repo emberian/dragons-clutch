@@ -26,9 +26,11 @@ use dclutch_operator::hot_bump_miner::{HotBumpCorpusV1, mine_hot_bump_hints_v1};
 use dclutch_trading::{
     general::artifacts_v3::decode_general_request_v3, general_codec::Action as GeneralAction,
 };
+use dclutch_vm::account_profile::v2::AccountProfileV2;
+#[cfg(test)]
 use dclutch_vm::account_profile::{
-    v2::{AccountProfileV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V2},
-    v3::{AccountProfileV3, SCHEMA_RELEASE_ID_V3 as ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V3},
+    v2::SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V2,
+    v3::SCHEMA_RELEASE_ID_V3 as ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V3,
 };
 use sha2::{Digest, Sha256};
 use solana_account::Account;
@@ -234,15 +236,8 @@ fn decode_execution_account_profile<'a>(
     schema: [u8; 32],
     bytes: &'a [u8],
 ) -> Result<AccountProfileV2<'a>, BuilderError> {
-    match schema {
-        ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V2 => {
-            AccountProfileV2::decode(bytes).map_err(|_| BuilderError::Artifact)
-        }
-        ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V3 => AccountProfileV3::decode(bytes)
-            .map(AccountProfileV3::base)
-            .map_err(|_| BuilderError::Artifact),
-        _ => Err(BuilderError::Artifact),
-    }
+    dclutch_operator::dealer_hot_projection_v1::decode_dealer_account_profile_v1(schema, bytes)
+        .map_err(|_| BuilderError::Artifact)
 }
 
 fn placeholder_key(coordinate: usize) -> Pubkey {

@@ -247,6 +247,9 @@ pub(crate) struct RpcAccount {
     pub(crate) data: Vec<u8>,
 }
 
+/// Solana JSON-RPC's per-request getMultipleAccounts address limit.
+pub(crate) const RPC_GET_MULTIPLE_ACCOUNTS_MAX_ADDRESSES_V1: usize = 100;
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RpcSuccessEnvelopeV1 {
@@ -485,6 +488,7 @@ const READ_METHODS: &[&str] = &[
     "getLatestBlockhash",
     "getMinimumBalanceForRentExemption",
     "getMultipleAccounts",
+    "getProgramAccounts",
     "getRecentPrioritizationFees",
     "getSignatureStatuses",
     "getSignaturesForAddress",
@@ -623,6 +627,43 @@ pub(crate) struct FinalizedReturnDataV1 {
 }
 
 impl Rpc {
+    /// Reuse an authenticated endpoint for parallel same-slot account reads.
+    /// The fork cannot submit transactions and inherits the read-your-writes floor.
+    fn fork_read_only_v1(&self) -> Self {
+        Self {
+            url: self.url.clone(),
+            client: self.client.clone(),
+            request_id: self.request_id,
+            pacing: self.pacing,
+            policy: WritePolicyV1::ReadsOnly,
+            last_call: None,
+            read_floor: self.read_floor,
+            unread_block_times: Vec::new(),
+        }
+    }
+
+    /// Read independent native-requested pages concurrently, preserving order.
+    /// Callers retain account geometry and require their common context slot.
+    pub(crate) fn read_parallel_v1(&self, queries: &[(&str, Value)]) -> Result<Vec<Value>> {
+        std::thread::scope(|scope| {
+            let handles = queries
+                .iter()
+                .map(|(method, params)| {
+                    let mut reader = self.fork_read_only_v1();
+                    scope.spawn(move || reader.call(method, params))
+                })
+                .collect::<Vec<_>>();
+            handles
+                .into_iter()
+                .map(|handle| {
+                    handle
+                        .join()
+                        .map_err(|_| Error::new("parallel RPC account reader panicked"))?
+                })
+                .collect()
+        })
+    }
+
     pub(crate) fn connect(value: &str) -> Result<Self> {
         let url = validate_loopback_url(value)?;
         let mut rpc = Self::build(url, LOOPBACK_PACING, WritePolicyV1::Writes)?;
@@ -1073,7 +1114,7 @@ impl Rpc {
         addresses: &[Pubkey],
         minimum_slot: u64,
     ) -> Result<(u64, Vec<Option<RpcAccount>>)> {
-        if addresses.is_empty() || addresses.len() > 100 {
+        if addresses.is_empty() || addresses.len() > RPC_GET_MULTIPLE_ACCOUNTS_MAX_ADDRESSES_V1 {
             return Err(Error::new(
                 "getMultipleAccounts requires one through 100 exact addresses",
             ));
@@ -2739,7 +2780,7 @@ fn parse_account_info_result_v1(value: Value, minimum_slot: u64) -> Result<Optio
     result.value.map(parse_account_wire_v1).transpose()
 }
 
-fn parse_multiple_accounts_result_v1(
+pub(crate) fn parse_multiple_accounts_result_v1(
     value: Value,
     expected_width: usize,
     minimum_slot: u64,
@@ -2894,6 +2935,31 @@ fn u64_field(value: &Value, name: &str) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parallel_read_transport_cannot_inherit_write_authority() {
+        let mut rpc = Rpc::build(
+            Url::parse("http://127.0.0.1:1/").expect("unused endpoint"),
+            LOOPBACK_PACING,
+            WritePolicyV1::Writes,
+        )
+        .expect("transport");
+        rpc.read_floor = 73;
+        let fork = rpc.fork_read_only_v1();
+        assert_eq!(fork.policy, WritePolicyV1::ReadsOnly);
+        assert_eq!(fork.read_floor, 73);
+        assert_eq!(fork.url, rpc.url);
+        for method in ["sendTransaction", "requestAirdrop"] {
+            assert_eq!(
+                rpc.read_parallel_v1(&[(method, json!([]))])
+                    .expect_err("read fork must refuse before HTTP")
+                    .to_string(),
+                format!(
+                    "REFUSED: {method} is not a read method and this connection is read-only. A preflight that could write is not a preflight."
+                )
+            );
+        }
+    }
 
     /// AN ABSENT ACCOUNT IS A VACANT ACCOUNT, AND VACANT HAS AN EXACT SHAPE.
     ///

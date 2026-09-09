@@ -21,8 +21,8 @@ describe('the exposure band', () => {
   });
 
   it('names both parts of every band in words, never by colour alone', () => {
-    expect(html).toContain('arrives whatever happens');
-    expect(html).toContain('decided by the outcome');
+    expect(html).toContain('payout floor');
+    expect(html).toContain('outcome-dependent amount');
   });
 
   it('draws no conditional hairline unless it is given the words that condition it', () => {

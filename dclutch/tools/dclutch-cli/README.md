@@ -1,10 +1,7 @@
 # `dclutch` — inspect dClutch state and build unsigned handoffs
 
-A dClutch market is a Solana account. Its bytes are the truth; the website, a
-screenshot, and this paragraph are all renderings of them. `dclutch` fetches
-those bytes over ordinary JSON-RPC and hands them to the same decoders the
-on-chain programs use, so you can check a market for yourself without trusting
-our website.
+`dclutch` reads market and capability accounts, signs portable Direct offers,
+and builds unsigned operation plans. Use `--json` for machine-readable output.
 
 ## Install
 
@@ -13,14 +10,8 @@ curl --proto '=https' --tlsv1.2 -LsSf \
   https://github.com/emberian/dragons-clutch/releases/download/v0.1.0-devnet.2/dclutch-cli-installer.sh | sh
 ```
 
-The URL names a version rather than `latest` on purpose, and it is not
-pedantry: every release so far is a **prerelease**, and GitHub's
-`/releases/latest/` endpoint skips prereleases entirely — that URL returns 404
-today, which is a bad first thing to hand a stranger. Take the current version
-from the [releases
-page](https://github.com/emberian/dragons-clutch/releases). When a release
-stops being a prerelease, `latest` starts working and this line can lose its
-version.
+The installer above selects a specific prerelease. Available packages are
+listed on the [releases page](https://github.com/emberian/dragons-clutch/releases).
 
 macOS (Apple Silicon and Intel) and Linux x86-64. Or build it from the
 repository root with `cargo build --release -p dclutch-cli`; the binary lands

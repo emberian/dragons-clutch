@@ -59,17 +59,15 @@ pub mod profile_ops {
 
     use crate::BuilderError;
 
-    /// Refuse span widths a non-spans profile cannot carry.
-    fn checked(profile: AccountProfileV2<'_>, spans: &[u32]) -> Result<bool, BuilderError> {
-        let dynamic = profile.uses_dynamic_fixed_spans();
-        if dynamic {
-            if spans.len() != usize::from(profile.dynamic_fixed_span_count()) {
-                return Err(BuilderError::Profile(line!()));
+    fn map(
+        error: dclutch_operator::dealer_hot_projection_v1::HotProjectionErrorV1,
+    ) -> BuilderError {
+        match error {
+            dclutch_operator::dealer_hot_projection_v1::HotProjectionErrorV1::Profile(line) => {
+                BuilderError::Profile(line)
             }
-        } else if !spans.is_empty() {
-            return Err(BuilderError::Profile(line!()));
+            _ => BuilderError::Profile(line!()),
         }
-        Ok(dynamic)
     }
 
     /// Logical account count at this tail.
@@ -78,12 +76,10 @@ pub mod profile_ops {
         tail_count: u32,
         spans: &[u32],
     ) -> Result<usize, BuilderError> {
-        if checked(profile, spans)? {
-            profile.logical_account_count_with_dynamic_spans(tail_count, spans)
-        } else {
-            profile.logical_account_count(tail_count)
-        }
-        .map_err(|_| BuilderError::Profile(line!()))
+        dclutch_operator::dealer_hot_projection_v1::dealer_profile_logical_count_v1(
+            profile, tail_count, spans,
+        )
+        .map_err(map)
     }
 
     /// Physical account count at this tail.
@@ -92,12 +88,10 @@ pub mod profile_ops {
         tail_count: u32,
         spans: &[u32],
     ) -> Result<usize, BuilderError> {
-        if checked(profile, spans)? {
-            profile.physical_account_count_with_dynamic_spans(tail_count, spans)
-        } else {
-            profile.physical_account_count(tail_count)
-        }
-        .map_err(|_| BuilderError::Profile(line!()))
+        dclutch_operator::dealer_hot_projection_v1::dealer_profile_physical_count_v1(
+            profile, tail_count, spans,
+        )
+        .map_err(map)
     }
 
     /// Canonical representative coordinate of one logical coordinate.
@@ -107,12 +101,10 @@ pub mod profile_ops {
         spans: &[u32],
         coordinate: usize,
     ) -> Result<usize, BuilderError> {
-        if checked(profile, spans)? {
-            profile.representative_with_dynamic_spans(tail_count, spans, coordinate)
-        } else {
-            profile.representative(tail_count, coordinate)
-        }
-        .map_err(|_| BuilderError::Profile(line!()))
+        dclutch_operator::dealer_hot_projection_v1::dealer_profile_representative_v1(
+            profile, tail_count, spans, coordinate,
+        )
+        .map_err(map)
     }
 
     /// Packed physical ordinal of one logical coordinate.
@@ -122,12 +114,10 @@ pub mod profile_ops {
         spans: &[u32],
         coordinate: usize,
     ) -> Result<usize, BuilderError> {
-        if checked(profile, spans)? {
-            profile.physical_account_ordinal_with_dynamic_spans(tail_count, spans, coordinate)
-        } else {
-            profile.physical_account_ordinal(tail_count, coordinate)
-        }
-        .map_err(|_| BuilderError::Profile(line!()))
+        dclutch_operator::dealer_hot_projection_v1::dealer_profile_ordinal_v1(
+            profile, tail_count, spans, coordinate,
+        )
+        .map_err(map)
     }
 
     /// Kernel-owned geometry of one physical ordinal.
@@ -137,16 +127,13 @@ pub mod profile_ops {
         spans: &[u32],
         physical_ordinal: usize,
     ) -> Result<PhysicalAccountGeometryV2, BuilderError> {
-        if checked(profile, spans)? {
-            profile.physical_account_geometry_with_dynamic_spans(
-                tail_count,
-                spans,
-                physical_ordinal,
-            )
-        } else {
-            profile.physical_account_geometry(tail_count, physical_ordinal)
-        }
-        .map_err(|_| BuilderError::Profile(line!()))
+        dclutch_operator::dealer_hot_projection_v1::dealer_profile_geometry_v1(
+            profile,
+            tail_count,
+            spans,
+            physical_ordinal,
+        )
+        .map_err(map)
     }
 }
 

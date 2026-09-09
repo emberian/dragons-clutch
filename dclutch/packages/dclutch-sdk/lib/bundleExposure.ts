@@ -2,68 +2,29 @@ import { type MarketDiscoveryCardV1 } from './marketDiscovery';
 import { type PortfolioV1 } from './portfolio';
 
 /**
- * What a bundle of positions can pay, across markets, without a model.
+ * Payout bounds in exact collateral atoms, grouped by collateral mint.
  *
- * A single position's payout is a weighted average of the claim balances it
- * holds: the market's basis hands out weights that are never negative and
- * always sum to one collateral unit, so whatever the market resolves to — and
- * whatever its frozen failure policy refunds if it never resolves at all — the
- * position pays somewhere between its smallest balance and its largest. That is
- * the whole per-market computation. It needs no oracle, no price, no volatility
- * and no correlation; it needs the balances this browser already read.
+ * Each position pays a nonnegative weighted average of its claim balances,
+ * including the failure branch. Its minimum and maximum balances therefore
+ * bound every payout. The endpoints need not be attainable for higher-degree
+ * splines, so these are bounds rather than predictions of a maximum payout.
  *
- * Across markets the question is which combinations of outcomes are possible at
- * once. Two markets that settle against different things exclude nothing: any
- * result of one is compatible with any result of the other, so the bundle's
- * ceiling is exactly the sum of the two ceilings. Not a cautious sum — the
- * exact one, attained at the pair of outcomes that maxes both. Every venue that
- * shows a smaller number there is asserting that the two markets move together.
- * That assertion is a correlation model, and this protocol does not hold one.
+ * Compatible positions with identical Realm, Product record, Product instance
+ * and resolution-policy identities can be added claim by claim when they all
+ * resolve normally. Independent failure outcomes still require the headline
+ * to retain the sum of the separate position bounds. Other grids and related
+ * statistics need additional basis records before any further netting.
  *
- * Netting exists only where the terms themselves overlap. The case this surface
- * implements is the one it can check from the bytes it already has: two markets
- * whose Realm, product record, product instance and resolution policy are all
- * the same identity resolve against the same thing under the same payoff, so
- * their outcomes are locked together. Held jointly those positions add
- * coordinate by coordinate, and `max` is subadditive while `min` is
- * superadditive — the band narrows from both ends, exactly, in integers.
- *
- * That release is stated as CONDITIONAL and never folded into the headline,
- * because the two markets can still come apart: `CommitDeadlineFailure` lets
- * any wallet walk either market to its own failure outcome on its own deadline,
- * one without the other, and the refund a market pays there is written in a
- * record this page does not read. One-sided failure puts the pair off the
- * locked diagonal and back on the sum. So the sum is what the headline says.
- *
- * Everything is exact. There is no division anywhere in this module: the
- * arithmetic is `min`, `max`, addition and subtraction over bigint atoms, so
- * there is no rounding to have a direction and no u64 that can lose its low
- * bits on the way to the screen. The bound reported as "at most" is never
- * rounded down and the bound reported as "at least" is never rounded up.
- *
- * What is NOT computed here, stated as a refusal rather than approximated:
- * markets that share a feed and a window but carry different payoff grids net
- * against each other, and statistics that constrain one another (a window's low
- * can never exceed its close) net further still. Both need the basis records —
- * the knots, the degree, the statistic — and this page reads a market's
- * identity, not its basis. It will not guess them. It also cannot tell a
- * degree-0 or degree-1 basis, whose largest balance is reached exactly, from a
- * degree-2 or degree-3 one, whose interior weights peak below one and so cannot
- * quite reach it. That caveat is live rather than theoretical: this tree admits
- * the categorical degree-0 basis and spline degrees 1 through 3
- * (`SPLINE_MIN_DEGREE_V2` = 1, `SPLINE_MAX_DEGREE_V2` = 3). The ceiling is a
- * true upper bound under all four, exact under two of them, and never
- * understated under any — which is the direction that matters, since this page
- * is read as a promise about the most a holder can be owed.
+ * Arithmetic uses bigint min, max, addition and subtraction without rounding.
  */
 
 export type BundleLegV1 = Readonly<{
   marketAddress: string;
   positionAddress: string;
   claimCount: number;
-  /** The least this position can pay, over every outcome and the failure branch. */
+  /** Lower payout bound over every outcome and the failure branch. */
   floorAtoms: string;
-  /** The most it can pay, likewise. Exact for a degree-0 or degree-1 basis. */
+  /** Upper payout bound, likewise. Attainable for a degree-0 or degree-1 basis. */
   ceilingAtoms: string;
   /** ceiling - floor: the part of this position the outcome decides. */
   swingAtoms: string;
@@ -99,7 +60,7 @@ export type BundleV1 = Readonly<{
   legs: ReadonlyArray<BundleLegV1>;
   /** Sum of the leg floors. Owed to this holder under every admissible joint outcome. */
   floorAtoms: string;
-  /** Sum of the leg ceilings. The exact bundle maximum when no terms are shared. */
+  /** Sum of the leg ceilings: an upper bound on the bundle payout. */
   ceilingAtoms: string;
   swingAtoms: string;
   /** Ceiling if every locked pair also resolves together: ceiling - releases. */
@@ -195,7 +156,7 @@ function clusterV1(termsKey: string, members: ReadonlyArray<WorkingLeg>): Bundle
         status: 'refused',
         termsKey,
         marketAddresses,
-        reason: `these Markets declare the same terms but their Positions are ${width} and ${member.leg.claimCount} claims wide, so their balances do not add in one space and no netting is claimed`,
+        reason: `These positions contain ${width} and ${member.leg.claimCount} claims. Their widths differ, so their payout bounds remain separate.`,
       });
     }
     if (member.leg.liabilityBasisId !== basis) {
@@ -203,7 +164,7 @@ function clusterV1(termsKey: string, members: ReadonlyArray<WorkingLeg>): Bundle
         status: 'refused',
         termsKey,
         marketAddresses,
-        reason: 'these Markets declare the same terms but their Positions name different liability bases, so the same claim index need not mean the same payout and no netting is claimed',
+        reason: 'These positions use different liability bases. Matching claim indices may have different payouts, so their bounds remain separate.',
       });
     }
   }
@@ -220,7 +181,7 @@ function clusterV1(termsKey: string, members: ReadonlyArray<WorkingLeg>): Bundle
       status: 'refused',
       termsKey,
       marketAddresses,
-      reason: 'the joint band computed wider than the separate bands, which cannot happen; no netting is claimed from a computation that disagrees with itself',
+      reason: 'The joint payout calculation failed its bound check. The total uses the separate position bounds.',
     });
   }
 
@@ -234,40 +195,40 @@ function clusterV1(termsKey: string, members: ReadonlyArray<WorkingLeg>): Bundle
     jointFloorAtoms: jointFloor.toString(),
     ceilingReleaseAtoms: ceilingRelease.toString(),
     floorReleaseAtoms: floorRelease.toString(),
-    note: `${members.length} of these Markets settle against the same thing and pay by the same rule, so they cannot land on different answers. Add the balances claim by claim and the pair can pay at most ${jointCeiling} atoms and at least ${jointFloor} — a narrower band than holding them apart by ${ceilingRelease} atoms at the top and ${floorRelease} at the bottom. This holds while both Markets resolve. Either can instead be walked to its own failure outcome on its own deadline by any wallet, which puts them back on the sum, so the figures above the fold stay the sum.`,
+    note: `These ${members.length} markets have matching Realm, Product record, Product instance and resolution-policy IDs, with compatible claim balances. If all resolve normally, their combined payout is between ${jointFloor} and ${jointCeiling} atoms. This lowers the upper bound by ${ceilingRelease} and raises the lower bound by ${floorRelease}. A market can enter its failure outcome independently after its deadline, so the headline keeps the separate bounds added together.`,
   });
 }
 
 function headlineV1(floor: bigint, ceiling: bigint, legs: number): string {
-  const subject = legs === 1 ? 'This Position' : `Across ${legs} Positions this bundle`;
+  const subject = legs === 1 ? 'This position' : `This bundle of ${legs} positions`;
   if (ceiling === floor) {
-    return `${subject} pays exactly ${ceiling} atoms whatever happens. Every claim is held in equal measure, so no outcome moves the total: this is collateral parked rather than a stance on anything.`;
+    return `${subject} pays exactly ${ceiling} atoms regardless of the outcome. Equal claim balances give a fixed payout.`;
   }
-  return `${subject} pays at least ${floor} atoms and at most ${ceiling}, whatever every Market resolves to and whatever any of them refunds if it never resolves at all. ${ceiling - floor} atoms of that are what the outcomes decide; the rest is yours either way.`;
+  return `${subject} pays at least ${floor} atoms and at most ${ceiling}, including failure refunds. The difference of ${ceiling - floor} atoms depends on the outcomes.`;
 }
 
 function nettingV1(legs: number, clusters: ReadonlyArray<BundleClusterV1>, release: bigint): string {
   if (legs < 2) {
-    return 'Netting is a question about two positions or more. With one, the band above is the whole answer.';
+    return 'One position: the displayed bounds apply to this holding alone.';
   }
   const locked = clusters.filter((cluster) => cluster.status === 'locked').length;
   if (locked === 0) {
-    return `These ${legs} Markets settle against different things, so nothing about one rules out anything about another — including all of them going your way at once. The most they can pay together is exactly the sum of what each can pay alone. That sum is the true maximum, not a cautious one. Somewhere else you might be shown a smaller number here, and that number assumes your Markets move together. dClutch holds no opinion about whether they do and will not put one into your arithmetic.`;
+    return `No compatible group with identical resolution terms was found among these ${legs} markets. The total adds each position’s lower and upper payout bounds without a netting adjustment.`;
   }
-  return `${locked} group${locked === 1 ? ' of these Markets settles' : 's of these Markets settle'} against the same thing, and inside a group the outcomes are locked to each other: while every Market in it resolves, ${release} atoms of the sum above can never be paid at once. Everything else here settles against something different, and between those Markets nothing nets without a model — the sum is exactly the answer.`;
+  return `${locked} group${locked === 1 ? ' has' : 's have'} compatible balances and identical resolution terms. If all markets in those groups resolve normally, the combined upper bound is ${release} atoms lower. Other positions retain their separate bounds.`;
 }
 
 function settlementV1(settled: number, legs: number): string {
   if (settled === 0) {
     const nothing = legs === 1
-      ? 'This Market has not settled yet. When it does'
-      : `None of these ${legs} Markets has settled yet. When one does`;
-    return `${nothing}, the band above can only narrow: settling takes outcomes out of the set these bounds are taken over, so a settlement can never widen what is left. Nothing here can ask you for more afterwards, because nothing here was ever borrowed.`;
+      ? 'This market has not settled yet'
+      : `None of these ${legs} markets has settled yet`;
+    return `${nothing}. Settlement fixes each market’s payout within its bounds. These holdings are fully collateralized.`;
   }
-  return `${settled} of ${legs} Market${legs === 1 ? '' : 's'} ${settled === 1 ? 'has' : 'have'} settled. Neither bound above moved the wrong way when that happened, and neither can: settling takes outcomes out of the set these bounds are taken over, so the band only ever narrows. That is the shape of the arithmetic rather than a policy someone chose to honour.`;
+  return `${settled} of ${legs} market${legs === 1 ? '' : 's'} ${settled === 1 ? 'has' : 'have'} settled. Settlement fixes the payout within the displayed bounds; it cannot expand the possible payout range.`;
 }
 
-const BOUNDARY_V1 = 'What this page does not compute, plainly: two Markets can also net when they settle against the same feed over the same window but pay on different grids, and they net further when their statistics constrain one another — a window\'s low can never come out above its close. Both need the payoff basis records themselves, the knots and the degree, and this surface reads a Market\'s identity rather than its basis. It states no number it cannot derive from bytes it read.';
+const BOUNDARY_V1 = 'For markets with different payout grids or related statistics, the total uses separate position bounds. Additional netting requires the payoff-basis records.';
 
 /**
  * The model-free bundle exposure of one portfolio read.
@@ -288,14 +249,14 @@ export function bundleExposureV1(portfolio: PortfolioV1): BundleExposureV1 {
     if (market.status !== 'decoded') {
       excluded.push(Object.freeze({
         marketAddress: entry.marketAddress,
-        reason: 'the Market did not decode at this finalized floor, so neither its collateral unit nor its terms are known and its Position cannot be added to any bundle',
+        reason: 'The market data could not be decoded. Its collateral mint and terms are unknown, so this position is excluded.',
       }));
       continue;
     }
     if (market.collateral.status !== 'bound') {
       excluded.push(Object.freeze({
         marketAddress: entry.marketAddress,
-        reason: `the Market's Realm is ${market.collateral.status}, so the collateral mint these atoms are denominated in is unknown; they are not summed with anything`,
+        reason: `The Realm is ${market.collateral.status}. Its collateral mint is unknown, so this position is excluded.`,
       }));
       continue;
     }
@@ -366,12 +327,12 @@ export function bundleExposureV1(portfolio: PortfolioV1): BundleExposureV1 {
 
   const legCount = bundles.reduce((count, bundle) => count + bundle.legs.length, 0);
   const reason = legCount === 0
-    ? 'No held Position in this read carries a decoded Market and a known collateral mint, so there is no bundle to bound. That is the chain state, not an empty state.'
+    ? 'No held positions have both readable market data and a known collateral mint.'
     : bundles.length === 1
       ? legCount === 1
-        ? '1 held Position, bounded on its own.'
-        : `${legCount} held Positions, all denominated in one collateral mint, bounded together.`
-      : `${legCount} held Positions across ${bundles.length} collateral mints. Each mint is bounded on its own; atoms of different mints are different units and are never added.`;
+        ? '1 held position.'
+        : `${legCount} held positions using one collateral mint.`
+      : `${legCount} held positions across ${bundles.length} collateral mints. Each mint has separate totals because their atoms use different units.`;
 
   return Object.freeze({
     owner: portfolio.owner,

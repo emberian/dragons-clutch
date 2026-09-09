@@ -73,7 +73,7 @@ describe('markets that share no terms', () => {
   ]));
   const [bundle] = exposure.bundles;
 
-  it('sums the legs exactly, and says that sum is the answer rather than a caution', () => {
+  it('sums the separate position bounds exactly', () => {
     expect(bundle.ceilingAtoms).toBe('140');
     expect(bundle.floorAtoms).toBe('15');
     expect(bundle.swingAtoms).toBe('125');
@@ -82,12 +82,12 @@ describe('markets that share no terms', () => {
     expect(bundle.sharedTerms).toBe(false);
   });
 
-  it('states the one sentence no margined venue can state truthfully', () => {
-    expect(bundle.netting).toContain('settle against different things');
-    expect(bundle.netting).toContain('the sum of what each can pay alone');
-    expect(bundle.netting).toContain('That sum is the true maximum, not a cautious one');
-    expect(bundle.netting).toContain('that number assumes your Markets move together');
-    expect(bundle.netting).toContain('will not put one into your arithmetic');
+  it('states that unmatched terms retain separate payout bounds', () => {
+    expect(bundle.netting).toContain('No compatible group with identical resolution terms was found');
+    expect(bundle.netting).toContain('adds each position’s lower and upper payout bounds');
+    expect(bundle.netting).toContain('without a netting adjustment');
+    expect(bundle.netting).toContain('these 2 markets');
+    expect(bundle.netting).toContain('without a netting adjustment');
   });
 
   it('leaves the co-resolved figures equal to the plain ones, because nothing is locked', () => {
@@ -123,14 +123,14 @@ describe('markets that carry the identical terms identity', () => {
     expect(bundle.coResolvedCeilingAtoms).toBe('45');
     expect(bundle.coResolvedFloorAtoms).toBe('30');
     if (cluster.status !== 'locked') throw new Error(cluster.reason);
-    expect(cluster.note).toContain('walked to its own failure outcome on its own deadline');
-    expect(cluster.note).toContain('the figures above the fold stay the sum');
+    expect(cluster.note).toContain('enter its failure outcome independently after its deadline');
+    expect(cluster.note).toContain('the headline keeps the separate bounds added together');
   });
 
   it('names the release in the netting sentence without folding it into the bound', () => {
-    expect(bundle.netting).toContain('1 group of these Markets settles against the same thing');
-    expect(bundle.netting).toContain('25 atoms of the sum above can never be paid at once');
-    expect(bundle.netting).toContain('nothing nets without a model');
+    expect(bundle.netting).toContain('1 group has compatible balances and identical resolution terms');
+    expect(bundle.netting).toContain('combined upper bound is 25 atoms lower');
+    expect(bundle.netting).toContain('Other positions retain their separate bounds');
   });
 });
 
@@ -142,7 +142,7 @@ describe('what the netting refuses rather than approximates', () => {
     ]));
     const [cluster] = exposure.bundles[0].clusters;
     if (cluster.status !== 'refused') throw new Error('a width mismatch must refuse');
-    expect(cluster.reason).toContain('3 and 2 claims wide');
+    expect(cluster.reason).toContain('3 and 2 claims');
     expect(exposure.bundles[0].releaseAtoms).toBe('0');
     expect(exposure.bundles[0].ceilingAtoms).toBe('70');
   });
@@ -154,7 +154,7 @@ describe('what the netting refuses rather than approximates', () => {
     ]));
     const [cluster] = exposure.bundles[0].clusters;
     if (cluster.status !== 'refused') throw new Error('a basis mismatch must refuse');
-    expect(cluster.reason).toContain('the same claim index need not mean the same payout');
+    expect(cluster.reason).toContain('Matching claim indices may have different payouts');
     expect(exposure.bundles[0].releaseAtoms).toBe('0');
   });
 
@@ -165,7 +165,7 @@ describe('what the netting refuses rather than approximates', () => {
     ]));
     expect(exposure.bundles).toHaveLength(2);
     expect(exposure.bundles.map((bundle) => bundle.ceilingAtoms)).toEqual(['40', '1000']);
-    expect(exposure.reason).toContain('atoms of different mints are different units and are never added');
+    expect(exposure.reason).toContain('Each mint has separate totals because their atoms use different units');
   });
 
   it('excludes a Market that did not decode, and one whose Realm was never read, by name', () => {
@@ -177,32 +177,32 @@ describe('what the netting refuses rather than approximates', () => {
     expect(exposure.legCount).toBe(1);
     expect(exposure.bundles[0].ceilingAtoms).toBe('40');
     expect(exposure.excluded.map((item) => item.marketAddress)).toEqual(['MarketTwo', 'MarketThree']);
-    expect(exposure.excluded[0].reason).toContain('did not decode at this finalized floor');
-    expect(exposure.excluded[1].reason).toContain('the collateral mint these atoms are denominated in is unknown');
+    expect(exposure.excluded[0].reason).toContain('market data could not be decoded');
+    expect(exposure.excluded[1].reason).toContain('collateral mint is unknown');
   });
 
   it('states the boundary it will not cross instead of estimating past it', () => {
     const exposure = bundleExposureV1(portfolio([entry('MarketOne', ['10', '40'])]));
-    expect(exposure.boundary).toContain('the payoff basis records themselves, the knots and the degree');
-    expect(exposure.boundary).toContain('It states no number it cannot derive from bytes it read');
-    expect(exposure.bundles[0].netting).toContain('Netting is a question about two positions or more');
+    expect(exposure.boundary).toContain('Additional netting requires the payoff-basis records');
+    expect(exposure.boundary).toContain('the total uses separate position bounds');
+    expect(exposure.bundles[0].netting).toContain('One position: the displayed bounds apply to this holding alone');
   });
 });
 
 describe('settlement can only ever narrow the band', () => {
-  it('counts the settled legs and states the monotonicity as arithmetic, not a promise', () => {
+  it('counts settled legs and keeps payouts within their bounds', () => {
     const none = bundleExposureV1(portfolio([entry('MarketOne', ['10', '40']), entry('MarketTwo', ['1', '9'], { terms: TERMS_TWO })]));
     expect(none.bundles[0].settledLegs).toBe(0);
-    expect(none.bundles[0].settlement).toContain('None of these 2 Markets has settled yet');
-    expect(none.bundles[0].settlement).toContain('nothing here was ever borrowed');
+    expect(none.bundles[0].settlement).toContain('None of these 2 markets has settled yet');
+    expect(none.bundles[0].settlement).toContain('These holdings are fully collateralized');
 
     const one = bundleExposureV1(portfolio([
       entry('MarketOne', ['10', '40'], { settled: true }),
       entry('MarketTwo', ['1', '9'], { terms: TERMS_TWO }),
     ]));
     expect(one.bundles[0].settledLegs).toBe(1);
-    expect(one.bundles[0].settlement).toContain('1 of 2 Markets has settled');
-    expect(one.bundles[0].settlement).toContain('the band only ever narrows');
+    expect(one.bundles[0].settlement).toContain('1 of 2 markets has settled');
+    expect(one.bundles[0].settlement).toContain('it cannot expand the possible payout range');
   });
 });
 
@@ -281,8 +281,8 @@ describe('against the account bytes a live chain actually wrote', () => {
     expect(bundle.floorAtoms).toBe('500000000');
     expect(bundle.ceilingAtoms).toBe('500000000');
     expect(bundle.swingAtoms).toBe('0');
-    expect(bundle.headline).toContain('pays exactly 500000000 atoms whatever happens');
-    expect(bundle.headline).toContain('this is collateral parked rather than a stance on anything');
+    expect(bundle.headline).toContain('pays exactly 500000000 atoms regardless of the outcome');
+    expect(bundle.headline).toContain('Equal claim balances give a fixed payout');
   });
 
   it('opens the band the moment one claim balance falls below the others', async () => {

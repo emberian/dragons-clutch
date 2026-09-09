@@ -31,21 +31,20 @@ describe('the bundle panel', () => {
     expect(unrelated).toContain('140');
     expect(unrelated).toContain('15');
     expect(unrelated).toContain('125');
-    expect(unrelated).toContain('Arrives whatever happens');
-    expect(unrelated).toContain('The most it can pay');
-    expect(unrelated).toContain('Decided by the outcomes');
+    expect(unrelated).toContain('Payout floor');
+    expect(unrelated).toContain('Payout ceiling');
+    expect(unrelated).toContain('Outcome-dependent amount');
   });
 
-  it('states the refusal that is the whole feature', () => {
-    expect(unrelated).toContain('settle against different things');
-    expect(unrelated).toContain('That sum is the true maximum, not a cautious one');
-    expect(unrelated).toContain('will not put one into your arithmetic');
+  it('states the fallback to separate payout bounds', () => {
+    expect(unrelated).toContain('No compatible group with identical resolution terms was found');
+    expect(unrelated).toContain('without a netting adjustment');
     expect(unrelated).not.toContain('Cannot both be paid');
   });
 
   it('names the records it did not read instead of estimating past them', () => {
-    expect(unrelated).toContain('the payoff basis records themselves, the knots and the degree');
-    expect(unrelated).toContain('It states no number it cannot derive from bytes it read');
+    expect(unrelated).toContain('Additional netting requires the payoff-basis records');
+    expect(unrelated).toContain('the total uses separate position bounds');
   });
 
   it('shows a locked group as a conditional refinement, never as the headline', () => {
@@ -55,8 +54,8 @@ describe('the bundle panel', () => {
     ]);
     expect(locked).toContain('Cannot both be paid');
     expect(locked).toContain('Locked to each other');
-    expect(locked).toContain('walked to its own failure outcome on its own deadline');
-    expect(locked).toContain('the figures above the fold stay the sum');
+    expect(locked).toContain('enter its failure outcome independently after its deadline');
+    expect(locked).toContain('the headline keeps the separate bounds added together');
     // The headline tiles keep the sum; the narrower pair is stated beside them.
     expect(locked).toContain('>70<');
     expect(locked).toContain('45');
@@ -67,7 +66,7 @@ describe('the bundle panel', () => {
       bundleEntryV1('MarketOne', ['10', '40']),
       bundleEntryV1('MarketTwo', ['1', '1000'], { mint: BUNDLE_MINT_B_V1, terms: BUNDLE_TERMS_TWO_V1 }),
     ]);
-    expect(mixed).toContain('atoms of different mints are different units and are never added');
+    expect(mixed).toContain('Each mint has separate totals because their atoms use different units');
     expect(mixed).toContain('one collateral mint');
   });
 
@@ -77,7 +76,7 @@ describe('the bundle panel', () => {
       bundleEntryV1('MarketTwo', ['1', '1000'], { marketRefused: true }),
     ]);
     expect(excluded).toContain('left out of every bundle');
-    expect(excluded).toContain('did not decode at this finalized floor');
+    expect(excluded).toContain('market data could not be decoded');
   });
 
   it('presents raw atoms and never a market-data metric', () => {
