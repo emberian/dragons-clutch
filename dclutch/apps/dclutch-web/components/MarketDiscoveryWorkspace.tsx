@@ -235,7 +235,7 @@ function MarketCard({ card, clock, nowMs }: Readonly<{ card: MarketDiscoveryCard
     {/* FE-CHART mount: the recorded run, for the one market a run recorded. */}
     <MarketIssuanceHistory address={card.address} outcomes={editorial?.outcomes ?? null} />
     {card.hoard.status !== 'derived' && <p className="market-capability-refusal"><span>Vault {card.hoard.status}</span>{card.hoard.reason}</p>}
-    <p className="market-observation"><Anchor href={marketDetailHrefV1(card.address)}>See every field on this market →</Anchor></p>
+    <p className="market-observation"><Anchor href={marketDetailHrefV1(card.address)}>View market details →</Anchor></p>
     {card.collateral.status !== 'bound' && <p className="market-refusal">{card.collateral.reason}</p>}
     {card.liability.status !== 'bound' && <p className="market-refusal">{card.liability.reason}</p>}
     <CapabilityBadges capabilities={card.capabilities} clock={clock} nowMs={nowMs} />
@@ -316,7 +316,7 @@ export function RestOfTheRecord({
   return <section className="trade-v3-card">
     <header>
       <span>02</span>
-      <div><h2>Everything else here</h2><p>Accounts this deployment holds that are not open markets.</p></div>
+      <div><h2>Other markets</h2><p>Resolved markets, incomplete setups and older versions.</p></div>
     </header>
 
     {untradeable > 0 && <ListingGroup
@@ -324,9 +324,7 @@ export function RestOfTheRecord({
       note="trading can no longer be switched on"
     >
       <p className="market-empty">
-        Trading has to be switched on within a set window after a market is created, and on
-        {plural(untradeable, ' this one', ' these')} the window closed first. Nothing can turn it on now.
-        {plural(untradeable, ' Its', ' Their')} claims and collateral are still on the chain.
+        The deadline to enable trading has passed. Trading cannot open; existing claims and collateral remain in the market.
       </p>
       <div className="market-card-grid">{listing.untradeable.map((card) => <MarketCard key={card.address} card={card} clock={clock} nowMs={nowMs} />)}</div>
     </ListingGroup>}
@@ -343,15 +341,14 @@ export function RestOfTheRecord({
       note="setup stopped part-way"
     >
       <p className="market-empty">
-        Setting a market up takes a run of transactions, and {plural(founding, 'this one', 'these')} stopped part-way
-        through. There is nothing to trade against {plural(founding, 'it', 'them')}.
+        Setup is incomplete. Trading is unavailable until opening finishes.
       </p>
       <div className="market-card-grid">{listing.founding.map((card) => <MarketCard key={card.address} card={card} clock={clock} nowMs={nowMs} />)}</div>
     </ListingGroup>}
 
     {unreadable > 0 && <ListingGroup
       title={`${unreadable} account${plural(unreadable, '', 's')} we could not read`}
-      note="each one says why"
+      note="read failed"
     >
       <div className="market-card-grid">{listing.unreadable.map((card) => <MarketCard key={card.address} card={card} clock={clock} nowMs={nowMs} />)}</div>
     </ListingGroup>}
@@ -489,8 +486,8 @@ export default function MarketDiscoveryWorkspace() {
     <section className="trade-v3-hero hero-solo">
       <div>
         <p className="eyebrow">Markets on {deployment.label}</p>
-        <h1>Find a market.<br /><em>Follow its story.</em></h1>
-        <p>Markets you can trade come first. Below them: markets whose trading can never be switched on, setups that were never finished, and markets from an older version of the protocol.</p>
+        <h1>Browse markets.<br /><em>Compare the terms.</em></h1>
+        <p>Choose a market to review its outcomes, source, collateral and available actions.</p>
       </div>
     </section>
 
@@ -498,7 +495,7 @@ export default function MarketDiscoveryWorkspace() {
       <header>
         <span>01</span>
         <div><h2>Markets you can trade</h2></div>
-        <div className="direct-actions"><button type="button" onClick={() => void load()} disabled={state.kind === 'loading'}>{state.kind === 'loading' ? 'Reading…' : 'Re-read the chain'}</button></div>
+        <div className="direct-actions"><button type="button" onClick={() => void load()} disabled={state.kind === 'loading'}>{state.kind === 'loading' ? 'Reading…' : 'Refresh markets'}</button></div>
       </header>
       {state.kind === 'refused'
         ? <p className="market-refusal" aria-live="polite">{state.message}</p>
@@ -506,9 +503,9 @@ export default function MarketDiscoveryWorkspace() {
       {discovery !== null && listing !== null && state.kind === 'ready' && <>
         <div className="trade-v3-evidence">
           <article><span>Endpoint</span><strong>{state.facts.solanaCore}</strong><small>{clusterNameV1(state.facts.genesisHash)} · genesis {shortAddressV1(state.facts.genesisHash, 6)}</small></article>
-          <article><span>Finalized floor</span><strong>{discovery.floorSlot}</strong><small>{clock === null ? 'one observation epoch for every card' : `read at ${new Date(clock.observedAtMs).toLocaleTimeString()} · one observation epoch for every card`}</small></article>
+          <article><span>Finalized floor</span><strong>{discovery.floorSlot}</strong><small>{clock === null ? 'finalized market data' : `read at ${new Date(clock.observedAtMs).toLocaleTimeString()} · finalized market data`}</small></article>
           <article><span>Open now</span><strong>{wholeListing === null ? '—' : wholeListing.open.length}</strong><small>{asideCount} further account{plural(asideCount, '', 's')} named below</small></article>
-          <article><span>Core program</span><strong>{shortAddressV1(deployment.programs.core, 6)}</strong><small>{deployment.cluster === 'devnet' ? 'the cohort this build names' : 'the active deployment'}</small></article>
+          <article><span>Core program</span><strong>{shortAddressV1(deployment.programs.core, 6)}</strong><small>{deployment.cluster === 'devnet' ? 'selected devnet deployment' : 'the active deployment'}</small></article>
         </div>
         {discovery.enumeration.mode === 'refused' && <p className="market-refusal">{discovery.enumeration.reason}</p>}
         {discovery.cards.length > 0 && <MarketFilterBar
@@ -524,7 +521,7 @@ export default function MarketDiscoveryWorkspace() {
           : listing.open.length === 0
             ? searching && wholeListing !== null && wholeListing.open.length > 0
               ? <p className="market-empty">{noMatchSentenceV1(query, wholeListing.open.length)}</p>
-              : <p className="market-empty">Nothing on this deployment has finished founding yet.</p>
+              : <p className="market-empty">No markets are open for trading on this deployment.</p>
             : <div className="market-card-grid">{listing.open.map((card) => <MarketCard key={card.address} card={card} clock={clock} nowMs={nowMs} />)}</div>}
       </>}
     </section>

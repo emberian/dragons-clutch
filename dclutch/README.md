@@ -1,107 +1,54 @@
 # dClutch
 
-dClutch is a Solana protocol for markets on real-world numbers — where a
-price will be at a stated time, for example. A market splits the possible
-answers into buckets called **cells**. You buy claims on the cells you
-believe in; when the market resolves, each claim on the winning cell pays
-out one collateral unit, and every other claim pays zero.
+dClutch is a Solana protocol for markets with fully funded payouts. A market
+defines possible outcomes, how to select the result, and what each claim pays.
+For a price-range market, you buy claims on the range you expect. When it
+resolves, winning claims pay one collateral unit each; other claims pay zero.
 
-Every claim is backed by collateral locked in the market's vault (its
-**Hoard**) before the claim exists. There is no leverage, so there is no
-liquidation, no margin call, and no way for a market to owe more than it
-holds. The most you can ever lose is what you paid.
+Collateral is held in the market’s vault, called the **Hoard**. Trading fees,
+account rent and resolution funding are kept separate from that collateral.
 
-The recorded cohort 17 contains eight programs on Solana devnet. A new
-**cohort** is a full redeploy from one named commit with fresh program ids;
-the previous cohort is abandoned in place. The ids are not permanent. The
-site reads markets from its selected deployment
-([clutch.dregg.pro](https://clutch.dregg.pro)) and by the SDK's deployment
-manifest (`packages/dclutch-sdk/lib/deployments.ts`); each cohort's evidence
-is a dated document under [`docs/evidence/`](docs/evidence). Nothing on
-devnet is worth money: it is a public test network, and every market's
-collateral is a devnet test token. Current source is newer than that recorded
-deployment. The local execution work below must finish before the next full
-redeploy and public simulator launch.
+[Open dClutch](https://clutch.dregg.pro) to browse markets, inspect accounts,
+and use the console. Devnet markets use test tokens.
+[Read the guide](docs/guides/reader.md) for a worked trade and payout example.
 
-## What works today
+## Development status
 
-Evidence levels are distinct and the list says which one each item has:
-*devnet* means a finalized public-chain transaction named in a cohort
-document; *local validator* means transactions executed on an owned test
-chain; *SBF program test* means program bytes executed in a test bank. Native
-component tests establish only their named semantics. A successful build does
-not establish any of these execution results; none is mainnet evidence.
+The public deployment is cohort 17, with eight programs on Solana devnet.
+It has executed market creation, a Direct trade, resolution, payouts and
+market retirement. Current development is preparing a fresh deployment and a
+running simulator that visitors can watch and join.
 
-- **Founding, on devnet** — a market is projected, funded, founded and opened,
-  by the composed transaction or by the two-stage permit route below.
-- **Trading, on devnet** — strangers are admitted, a stranger's fee-bearing
-  Direct fill has crossed, and the fee leg was settled permissionlessly by a
-  third party in its own transaction.
-- **Resolution, on devnet** — the sponsored Pyth SOL/USD feed was captured
-  inside a market's window and the market settled on an honest certificate;
-  a market whose source went silent took its disclosed fallback by the
-  failure walk; a market with a funded recovery ladder is answered on its
-  second rung (SBF program test).
-- **Payout, on devnet** — winning claims, a stranger's included, were paid
-  into ordinary wallet token accounts. A cohort-17 market completed all four
-  retirement checkpoints: its Market, Hoard and related accounts closed, and
-  the recorded rent refund matched the balances. See the night addendum in
-  [the cohort-17 evidence](docs/evidence/COHORT17_SEATED_FILLED_RETIRING_2026_09_06.md).
-- **Dealer, on a local validator** — a founded market accepted Quote, a
-  nonzero nine-unit Fill and a one-unit Withdraw, with claim supply and
-  collateral movements checked. This [accepted campaign](docs/evidence/DEALER_ACCEPTED_LOCAL_VALIDATOR_2026_09_08.md)
-  does not establish terminal settlement or a public Dealer market.
-- **Optional families, at distinct stages** — General has founding and
-  OpenBatch execution, with the first nonempty complete lifecycle still owed.
-  Fractional claims have [local-validator Wrap, holder transfer and WholeUnwrap](docs/evidence/claims-fractional-validator-2026-09-08/README.md)
-  evidence. Series has [native recurrence tests](docs/evidence/SERIES_NATIVE_RECURRENCE_2026_09_08.md).
-  Complete current-source General, Dealer, Series and Structured lifecycles
-  remain active work.
-- Once the setup transactions have finalized, founding locks the collateral,
-  creates the market, and opens it for trading. There are two routes to that
-  outcome. The composed route does all of it in a single transaction that
-  either commits whole or rolls back, leaving nothing half-made. Because that
-  transaction runs at the edge of Solana's compute limit, there is also a
-  two-stage route: the first transaction commits the market and escrows a
-  one-shot permit, and a second, permissionless transaction consumes the
-  permit to open the market. The permit is what makes the outcome
-  all-or-nothing across the two transactions — the market cannot open on any
-  terms but the ones the first stage already committed to, and the escrow has
-  a pinned refund path so no value can strand between the stages.
-- Range and tail protection ("pays out if SOL ends below X") is just a
-  bundle of cell claims, so its price is exactly the sum of the cell
-  prices. No extra machinery, nothing to liquidate.
-- The web app ([`apps/dclutch-web`](apps/dclutch-web)) reads markets,
-  supplies and portfolios from the chain. Its detailed Market page can join
-  an eligible wallet and sign and submit a Direct fill; Console `/trade` is a
-  read-only arithmetic inspector. Its Representation console can
-  authenticate and transfer an ordinary Token-2022 bearer claim on a compatible
-  local or custom chain, including separate transfer-authority and fee-payer
-  wallets, one saved send, and a finalized balance check. No current devnet
-  market supplies that selected representation route. The app publishes no
-  authoritative prices; there is no independent indexer.
-- A TypeScript SDK ([`packages/dclutch-sdk`](packages/dclutch-sdk)) and two
-  command-line clients build and check the same flows
-  ([two clients](docs/guides/two-clients.md)): `dclutch` reads and authors
-  tickets and never submits; `dclutch-terminal` founds, joins and redeems
-  under a durable journal, while its `buy`, `sell` and failure-walk
-  submission still refuse by design.
+Recent local-validator work includes:
 
-The current work is to complete every retained family's accepted economic
-lifecycle on a local validator, including meaningful refusal and rollback
-cases, and then repeat them against one exact build of all eight programs.
-General's composed transactions currently encounter Solana's transaction
-compute ceiling; removing repeated work is part of that implementation task.
-The next deliverable is a fresh devnet cohort, a running load simulator that
-visitors can watch and join, and the renovated existing site. An older
-successful transaction does not make newer source a checked deployment.
-The [development wave](docs/design/DEVELOPMENT_WAVE_2026_09_07.md) and
-[completion contract](docs/MASTER_COMPLETION_CONTRACT.md) describe the scope;
-[GOAL.md](GOAL.md) indexes the dated execution evidence.
+- **Direct trading:** three nonzero fills, their fee payments, and recovery
+  after restarting the simulator.
+- **Dealer liquidity:** a trade, withdrawal, settlement, redemption and closure
+  of the Dealer accounts. Multiple-provider liquidity is being connected to
+  the CLI and browser.
+- **General clearing:** accepted Buy orders at two and three outcomes. Work
+  continues on Sell orders, wider markets and the complete clearing cycle.
+- **Structured claims:** receipt activation has run; coordinate activation is
+  being repaired.
+- **Series:** recurring-market setup and transaction drivers are in progress.
+
+The [development index](GOAL.md) links to detailed results and open work.
+The next deployment will use fresh program addresses from one committed build.
+
+## Tools
+
+- **[Web app](apps/dclutch-web):** market discovery, explorer, portfolio and
+  wallet actions. Open a market to trade or redeem; use the console for setup
+  and operations.
+- **[TypeScript SDK](packages/dclutch-sdk):** account decoding, transaction
+  construction and client helpers.
+- **[CLI clients](docs/guides/two-clients.md):** `dclutch` reads markets and
+  authors offers; `dclutch-terminal` provides transaction workflows. Each
+  command lists its inputs and supported actions.
 
 ## How a market works
 
-This is the design, end to end. All four steps have run on devnet.
+A price-range market has four main steps.
 
 1. **Someone creates it.** The creator fixes everything up front: the
    collateral token, the question and its cells, the price source, the
@@ -110,10 +57,10 @@ This is the design, end to end. All four steps have run on devnet.
    special powers over the live market.
 2. **People trade claims.** Depositing one collateral unit mints one claim
    on every cell (a **complete set**); returning a complete set redeems
-   the unit. Cell prices always sum to exactly one unit.
+   the unit. A complete set can be redeemed for one collateral unit.
 3. **The source resolves it.** The first valid observation from the pinned
    source inside the market's window settles the market. Every later
-   observation is rejected. No committee, no vote, no discretion.
+   observation is rejected. The market applies the source and comparison rules fixed at creation.
 4. **Winners redeem.** Claims on the winning cell pay one unit each, from
    the collateral that was there the whole time.
 

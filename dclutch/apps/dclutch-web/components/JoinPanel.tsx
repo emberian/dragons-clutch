@@ -74,7 +74,7 @@ function errorMessage(error: unknown): string {
 
 export const JOIN_MISSING_MEANING_V1: Readonly<Record<string, string>> = Object.freeze({
   'Position and admission':
-    'your Position account and its admission evidence — the accounts that make you a participant',
+    'the accounts that record your participation and claim balances',
   'collateral account':
     'your market collateral account — the token account your deposits and trade settlements move through',
 });
@@ -128,18 +128,18 @@ export function JoinStanding({
   }
   return <>
     <p className="direct-status">This wallet is not a participant here yet. Read at finalized slot {readiness.observedSlot}.</p>
-    <p className="detail-subhead">Joining creates, at addresses already derived from this Market and your wallet:</p>
+    <p className="detail-subhead">Joining creates these market accounts for your wallet:</p>
     <ul className="market-bindings">
       {readiness.missing.map((item) => <li key={item}>
         <strong>{item}</strong> — {JOIN_MISSING_MEANING_V1[item] ?? 'a required participant account'}
       </li>)}
     </ul>
     <dl className="detail-facts">
-      <div><dt>Your Position will live at</dt><dd><code>{readiness.coordinates.position}</code></dd></div>
+      <div><dt>Your Position address</dt><dd><code>{readiness.coordinates.position}</code></dd></div>
       <div><dt>Your collateral account</dt><dd><code>{readiness.coordinates.collateral}</code></dd></div>
     </dl>
     {joiningClosedForPhaseV1(marketPhase)
-      ? <p className="market-refusal">This market has already resolved, so joining it now would buy nothing: no further trades or claims are possible on a terminal market.</p>
+      ? <p className="market-refusal">This market has resolved. Joining and further trading are closed.</p>
       : <>
         <p className="detail-subhead">How to join</p>
         <AdmitInThisBrowser endpoint={endpoint} walletAddress={walletAddress} admission={admission} poststate={poststate} directory={directory} />
@@ -249,7 +249,7 @@ function AdmitInThisBrowser({
     for (let attempt = 0; attempt < 30; attempt += 1) {
       const status = (await client.signatureStatuses([signature]))[0];
       if (status?.known && status.succeeded === false) {
-        setState({ kind: 'submitted', prepared, signature, note: `The chain reports an error (${status.errorText ?? 'unnamed chain error'}). This submitted record stays saved because it cannot be safely replayed or discarded.` });
+        setState({ kind: 'submitted', prepared, signature, note: `The chain reports an error (${status.errorText ?? 'unnamed chain error'}). The transaction is saved. Check its signature before taking further action.` });
         return;
       }
       if (status?.known && status.succeeded === true && status.confirmationStatus === 'finalized') {
@@ -261,7 +261,7 @@ function AdmitInThisBrowser({
       }
       await new Promise<void>((resolve) => setTimeout(resolve, 1_000));
     }
-    setState({ kind: 'submitted', prepared, signature, note: 'Not finalized yet. You can close this page; reloading resumes this exact signature and never submits it again.' });
+    setState({ kind: 'submitted', prepared, signature, note: 'Confirmation is pending. Reload later to check this transaction.' });
   }
 
   const poststateKey = poststate === undefined ? null : [
@@ -279,7 +279,7 @@ function AdmitInThisBrowser({
           clusterGenesis: facts.genesisHash, market: admission.market, owner: walletAddress,
         }, 'user-position-admission-v1');
         if (!current || journal === null || journal.phase !== 'submitted') return;
-        setState({ kind: 'submitted', prepared: null, signature: journal.signature!, note: 'Resuming the saved admission signature and finalized poststate. Nothing is resubmitted.' });
+        setState({ kind: 'submitted', prepared: null, signature: journal.signature!, note: 'Checking your saved joining transaction…' });
         await pollSubmittedAdmission(journal, null);
       } catch (error) {
         if (current) setState({ kind: 'refused', reason: error instanceof Error ? error.message : 'admission recovery refused without a usable reason' });
@@ -291,7 +291,7 @@ function AdmitInThisBrowser({
   }, [endpoint, admission?.market, walletAddress, poststateKey]);
 
   if (admission === undefined) {
-    return <p className="direct-status">This deployment does not name every program the admission frame needs, so it is not offered here. Nothing about this market has refused.</p>;
+    return <p className="direct-status">Joining is unavailable: this deployment is missing required program addresses.</p>;
   }
 
   async function plan() {
@@ -334,13 +334,13 @@ function AdmitInThisBrowser({
       if (!signed.complete) throw new Error('the wallet did not complete the one required signature');
       const signature = transactionSignatureV1(signed.transaction.signatures[0]!);
       submitted = await markClientOperationSubmittedV1(browserStorage(), journal, signature, signed.wireBytes);
-      setState({ kind: 'submitted', prepared, signature, note: 'Saved before submission; sending the exact signed packet…' });
+      setState({ kind: 'submitted', prepared, signature, note: 'Submitting your signed transaction…' });
       const returned = await submitSignedTransactionV1(client, submittedClientOperationWireV1(submitted));
       requireSubmittedSignatureMatchV1(signature, returned);
       await pollSubmittedAdmission(submitted, prepared);
     } catch (error) {
       const reason = error instanceof Error ? error.message : 'admission refused without a usable reason';
-      if (submitted !== null) setState({ kind: 'submitted', prepared, signature: submitted.signature!, note: `${reason} The submitted record stays saved; reloading never resubmits it.` });
+      if (submitted !== null) setState({ kind: 'submitted', prepared, signature: submitted.signature!, note: `${reason} The transaction is saved. Reload to check its status.` });
       else setState({ kind: 'refused', reason });
     }
   }
@@ -349,11 +349,7 @@ function AdmitInThisBrowser({
     : state.kind === 'submitted' ? state.prepared : null;
 
   return <>
-    <p className="direct-status">Joining is composed in this browser by the <strong>compiled Rust planner</strong> — the same
-    `plan_user_position_admission_v1` the operator toolchain runs, built to WebAssembly and checked against
-    its recorded digest before it executes. It reads one finalized observation, derives every one of the
-    twenty-five accounts it authenticates, and returns the exact unsigned transaction. Nothing is signed
-    until you say so.</p>
+    <p className="direct-status">Review the refundable storage deposit for your market accounts, then sign to join. Joining creates your accounts; it does not buy claims.</p>
     <div className="direct-actions">
       <button type="button" disabled={state.kind === 'planning'} onClick={() => void plan()}>
         {state.kind === 'planning' ? 'Reading finalized state…' : 'Join this market'}
@@ -373,8 +369,8 @@ function AdmitInThisBrowser({
       </button>
     </div>}
     {state.kind === 'submitted' && <p className="direct-status" aria-live="polite">Submitted as <code>{state.signature}</code>. {state.note}</p>}
-    {(state.kind === 'planned' || state.kind === 'signing') && poststate === undefined && <p className="market-refusal">This deployment does not name every program required to verify admission poststate, so signing is not offered.</p>}
-    {state.kind === 'joined' && <p className="direct-status" aria-live="polite">You are a participant in this market. Signature <code>{state.signature}</code> finalized, and your Position and admission record were authenticated again at finalized slot {state.observedSlot}.</p>}
+    {(state.kind === 'planned' || state.kind === 'signing') && poststate === undefined && <p className="market-refusal">Joining is unavailable: this deployment is missing required program addresses.</p>}
+    {state.kind === 'joined' && <p className="direct-status" aria-live="polite">You joined this market. Signature <code>{state.signature}</code> finalized at slot {state.observedSlot}.</p>}
   </>;
 }
 
@@ -432,7 +428,7 @@ export default function JoinPanel({
   }
 
   return <section className="trade-v3-card" id="join">
-    <header><span>05</span><div><h2>Join this market</h2><p>Connect a wallet to see where you stand.</p></div></header>
+    <header><span>05</span><div><h2>Join this market</h2><p>Connect a wallet to check your participation.</p></div></header>
 
     <WalletDirectory directory={wallets} onConnected={() => setInspection({ kind: 'idle' })} />
 
@@ -440,7 +436,7 @@ export default function JoinPanel({
       ? <p className="direct-status">No wallet connected.</p>
       : <div className="direct-actions">
         <button type="button" onClick={() => { void inspect(); }} disabled={inspection.kind === 'working'}>
-          {inspection.kind === 'working' ? 'Reading your accounts…' : 'Check my standing on this market'}
+          {inspection.kind === 'working' ? 'Reading your accounts…' : 'Check my participation'}
         </button>
       </div>}
 

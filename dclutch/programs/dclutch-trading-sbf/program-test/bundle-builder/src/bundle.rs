@@ -407,6 +407,8 @@ fn build_bundle_with_admitted_candidate(
             effect_schema: facts.effect.schema,
             action: facts.action,
             general_place_order,
+            general_verify_candidate: decode_general_request_v3(input.scenario.family_request)
+                .is_ok_and(|request| request.action == GeneralAction::VerifyCandidateRow),
             waist: input.waist,
             tail_count,
             family_request: input.scenario.family_request,

@@ -113,9 +113,9 @@ export default function MarketTradePanel({
   const wallets = useWalletDirectoryV1();
   const deployment = useDeploymentV1();
   const [spine, setSpine] = useState<DirectTradeSpineV1 | null>(null);
-  const [spineStatus, setSpineStatus] = useState('The chain has not been asked about trading this Market yet.');
+  const [spineStatus, setSpineStatus] = useState('Check trading availability to begin.');
   const [participant, setParticipant] = useState<DirectParticipantReadinessV1 | null>(null);
-  const [participantStatus, setParticipantStatus] = useState('Connect your wallet, then ask the chain to check your Position, admission, and collateral account.');
+  const [participantStatus, setParticipantStatus] = useState('Connect your wallet to check your claims and collateral.');
   const [outcome, setOutcome] = useState<number | null>(null);
   const [desired, setDesired] = useState('');
   const [ticketText, setTicketText] = useState('');
@@ -286,16 +286,14 @@ export default function MarketTradePanel({
     */}
     {inspected !== null && <>
       {gate !== null && gate.kind === 'closed' && <p className="direct-status">
-        Trading is closed here, and joining is not. You can connect a wallet, read
-        your standing, and join this market now; the steps that trade appear when
-        the wall above is gone.
+        Trading is unavailable. Connect your wallet to view your accounts and check whether you can join.
       </p>}
 
       <FlowStep step={stepAt(1)}>
         <p className="direct-status" aria-live="polite">{participantStatus}</p>
         <WalletDirectory directory={wallets} onConnected={acceptWalletConnection} />
         {wallets.address === null
-          ? <p className="direct-status">Connect a wallet to see where you stand.</p>
+          ? <p className="direct-status">Connect a wallet to check your accounts.</p>
           : participant !== null && participant.status === 'ready'
             ? (() => {
               const spendable = formatQuantityV1(participant.spendableCollateralAtoms, denomination);
@@ -316,7 +314,7 @@ export default function MarketTradePanel({
                   </article>
                 </div>
                 <details className="trade-v3-bytes">
-                  <summary>Your accounts, exactly as the chain has them</summary>
+                  <summary>Your market accounts</summary>
                   <JoinStanding
                     readiness={participant}
                     marketPhase={inspected.phase}
@@ -419,13 +417,11 @@ export default function MarketTradePanel({
           // is rolled back — only when the fill executes. Saying "up to X" and
           // stopping there invites a reader to hear "X are waiting for you",
           // which no part of this protocol promises.
-          const ceiling = <small className="direct-note">This is the offer&rsquo;s ceiling, not a balance. Nothing
-          is set aside when a sell is signed; the chain moves the maker&rsquo;s claims when the
-          trade executes, or refuses the whole trade.</small>;
+          const ceiling = <small className="direct-note">An offer does not reserve the seller&rsquo;s claims. The seller must still hold enough when the trade executes.</small>;
           return fillOrKill
             ? <div className="size-fixed">
               <span>All or nothing — this offer is for exactly {most.display} claims.</span>
-              <small title={most.title}>{exactTwinV1(most, 'claim')}. Its maker signed it fill-or-kill, so a smaller size is not a smaller trade — it is no trade.</small>
+              <small title={most.title}>{exactTwinV1(most, 'claim')}. This fill-or-kill offer requires the full quantity.</small>
               {ceiling}
             </div>
             : <>
@@ -456,9 +452,9 @@ export default function MarketTradePanel({
             outcomeLabel={outcomeLabel}
           />
           : <>
-            <p className="direct-status">Nothing is signed by previewing. This asks the chain what this exact crossing would do, and checks it against what you hold.</p>
+            <p className="direct-status">Preview the payment, fees and claim changes before signing.</p>
             <div className="direct-actions">
-              <button type="button" disabled={execution.kind === 'working'} onClick={() => void previewIntent()}>Preview this exact crossing</button>
+              <button type="button" disabled={execution.kind === 'working'} onClick={() => void previewIntent()}>Preview trade</button>
             </div>
             {execution.kind === 'working' && <p className="direct-status" aria-live="polite">{execution.message}</p>}
           </>}

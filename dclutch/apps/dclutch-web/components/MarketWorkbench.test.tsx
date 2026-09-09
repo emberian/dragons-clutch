@@ -9,21 +9,21 @@ describe('market lifecycle workbench', () => {
   it('says what each authoring act needs before it can begin, and never greys a control', () => {
     const html = renderToStaticMarkup(<MarketWorkbench />);
     expect(html).toContain('Lifecycle readiness');
-    expect(html).toContain('read-only map of where a market has got to');
-    expect(html).toContain('does not create, trade, resolve, or redeem');
+    expect(html).toContain('Enter a market address to see its current stage');
+    expect(html).toContain('available actions and requirements');
     expect(html).toContain('Author &amp; fund');
     expect(html).toContain('Compile a Product record and its admission request');
     expect(html).toContain('Found a Market and admit its first participant');
     expect(html).toContain('Admit another participant');
     expect(html).toContain('Read the selected programs, and any Market you name, at one finalized floor first');
     expect(html).toContain('Where it runs');
-    expect(html).toContain('What it promises');
+    expect(html).toContain('What it does');
     // No disabled control anywhere: every card that cannot be opened links to
     // the page that answers why, which is always reachable.
     expect(html).not.toContain('disabled');
     expect(html.toLowerCase()).not.toContain('transaction unavailable');
     expect(html.toLowerCase()).not.toContain('greyed');
-    expect(html).toContain('Devnet supplies the six program addresses');
+    expect(html).toContain('Program addresses come from Devnet');
     expect(html).toContain('Program overrides · 6 filled from Devnet');
     expect(html).toContain('Filled from the Devnet deployment');
     expect(html).toContain('Optional state coordinates');
@@ -79,18 +79,18 @@ describe('market lifecycle workbench', () => {
     expect(html).toContain('Take an inventory-bounded immediate trade');
     // An act with no venue names its wall here too, in the same words and
     // with the same citation the census uses.
-    expect(html).toContain('Known wall');
+    expect(html).toContain('Requires:');
     expect(html).toContain('crates/dclutch-trading');
     expect(html).not.toContain('25,000');
     expect(html).not.toContain('Awaiting local chain');
   });
 
-  it('names the resolution route honestly and keeps it read-only', () => {
+  it('opens the resolution stage', () => {
     const html = renderToStaticMarkup(<MarketWorkbench surface="resolution" initialStage="resolve" />);
     expect(html).toContain('Resolution readiness');
-    expect(html).toContain('before a resolution route can begin preflight');
-    expect(html).toContain('opens at Resolve &amp; settle');
-    expect(html).toContain('it cannot resolve a market');
+    expect(html).toContain('See what the market needs to reach an outcome');
+    expect(html).toContain('Check the market’s resolution status');
+    expect(html).toContain('open the next available action');
     expect(html).not.toContain('<strong>Lifecycle readiness</strong>');
   });
 });

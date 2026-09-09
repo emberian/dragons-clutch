@@ -125,6 +125,9 @@ use crate::{
     series_lifecycle_campaign::read_authenticated_series_prefix_found_v2,
 };
 
+#[path = "series_operation_driver.rs"]
+pub(crate) mod operation;
+
 pub(crate) const SERIES_TERMINAL_JOURNAL_SCHEMA_V1: &str =
     "dclutch-owned-loopback-series-terminal-journal-v1";
 pub(crate) const SERIES_TERMINAL_ROLLBACK_SCHEMA_V1: &str =
@@ -329,7 +332,7 @@ struct SeriesAcquiredAddressFrameV2 {
 /// cannot authorize a release: the production operator requires the emitted
 /// ProgramSet, descriptor, ProfileV3, lifecycle, strategy, transition, and
 /// EffectV5 bytes to match the live finalized accounts byte-for-byte.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct SeriesCurrentSourceCorpusV1 {
     template_occurrence_count: u32,
@@ -535,6 +538,32 @@ pub(crate) fn acquire_series_prepare_from_addresses_v1(
     rpc: &mut Rpc,
     input: SeriesPrepareAddressFrameV1<'_>,
 ) -> Result<SeriesSelectedHotReportV5> {
+    let (recipe, source) = prepare_source_from_addresses_v1(&input)?;
+    let acquired = acquire_current_series_selected_v1(
+        rpc,
+        &recipe,
+        &source,
+        input.payer,
+        input.payer,
+        SeriesCampaignPolicyV1::for_act(SeriesActionV3::Prepare),
+    )?;
+    Ok(acquired.selected)
+}
+
+/// Durable journal phase. `Dispatching` is the fsync-before-send boundary.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum SeriesTerminalJournalPhaseV1 {
+    Planned,
+    Prepared,
+    Dispatching,
+    Submitted,
+    Finalized,
+}
+
+fn prepare_source_from_addresses_v1(
+    input: &SeriesPrepareAddressFrameV1<'_>,
+) -> Result<(SeriesHotAcquisitionRecipeV2, DecodedSeriesCurrentSourceV1)> {
     use dclutch_market::capability_program::hot_v3::*;
 
     let key = |coordinate: usize| {
@@ -622,26 +651,7 @@ pub(crate) fn acquire_series_prepare_from_addresses_v1(
         lifecycle_rent_credit: None,
         expire_permit: None,
     };
-    let acquired = acquire_current_series_selected_v1(
-        rpc,
-        &recipe,
-        &source,
-        input.payer,
-        input.payer,
-        SeriesCampaignPolicyV1::for_act(SeriesActionV3::Prepare),
-    )?;
-    Ok(acquired.selected)
-}
-
-/// Durable journal phase. `Dispatching` is the fsync-before-send boundary.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub(crate) enum SeriesTerminalJournalPhaseV1 {
-    Planned,
-    Prepared,
-    Dispatching,
-    Submitted,
-    Finalized,
+    Ok((recipe, source))
 }
 
 /// Planner-derived action label retained only for durable routing and evidence.
@@ -690,6 +700,11 @@ pub(crate) enum SeriesPhysicalMechanismV1 {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct SeriesLedgerIdentityV1 {
     pub(crate) canonical_ledger_path: String,
+    /// Public devnet origin. Local historical journals omit this field and
+    /// retain their byte-for-byte ledger identity. Exactly one identity form
+    /// is admitted; a public cluster never claims a local validator directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) cluster_origin: Option<String>,
     pub(crate) genesis_hash: String,
     pub(crate) identity_sha256: String,
 }
@@ -703,6 +718,7 @@ impl SeriesLedgerIdentityV1 {
         }
         let mut value = Self {
             canonical_ledger_path,
+            cluster_origin: None,
             genesis_hash,
             identity_sha256: String::new(),
         };
@@ -782,6 +798,15 @@ pub(crate) trait SelectedSeriesPhysicalActionV1 {
     fn selected_authority_ids(&self) -> SeriesSelectedAuthorityIdsV1;
     /// Authenticated action-specific physical roles.
     fn role_keys(&self) -> SeriesPhysicalRoleKeysV1;
+    /// Native Prepare's external funding wallet, when present. It may also
+    /// pay the outer transaction fee; protocol PDAs remain distinct.
+    fn funding_payer(&self) -> Option<Pubkey> {
+        None
+    }
+    /// Heap declaration required by this authenticated native Hot route.
+    fn heap_frame_bytes(&self) -> Option<u32> {
+        None
+    }
     /// Mechanism proven by the selected EffectV5 and lifecycle policy.
     fn mechanism(&self) -> SeriesPhysicalMechanismV1;
     /// Lifecycle consequence selected by the sole planner.
@@ -826,6 +851,13 @@ impl SelectedSeriesPhysicalActionV1 for SeriesSelectedHotReportV5 {
             transition: self.selected.artifact_ids.transition,
             effect_v5: self.selected.artifact_ids.effect,
         }
+    }
+
+    fn funding_payer(&self) -> Option<Pubkey> {
+        self.roles.payer
+    }
+    fn heap_frame_bytes(&self) -> Option<u32> {
+        Some(dclutch_market::capability_program::hot_v3::DIRECT_HOT_HEAP_FRAME_BYTES_V1)
     }
 
     fn role_keys(&self) -> SeriesPhysicalRoleKeysV1 {
@@ -2315,12 +2347,17 @@ fn try_finalize_landed_series_action_v1(
         .as_ref()
         .ok_or_else(|| refusal("active Series journal omitted its physical frame"))?
         .instruction()?;
-    Rpc::authenticate_signed_v0_packet(
+    Rpc::authenticate_signed_v0_packet_on_heap(
         series_rpc_label_v1(current.action),
         std::slice::from_ref(&instruction),
         parse_pubkey(&packet.payer, "Series packet payer")?,
         &table,
         &packet.signed,
+        current
+            .physical
+            .as_ref()
+            .expect("authenticated physical frame")
+            .heap_frame_bytes,
     )?;
     let resolved = resolve_series_packet_keys_v1(&packet.signed, lookup_table_key, &table)?;
     if resolved.iter().map(ToString::to_string).collect::<Vec<_>>() != packet.resolved_account_keys
@@ -2502,7 +2539,8 @@ fn observe_durable_series_projection_from_rpc_v1(
             .payer,
         "Series packet payer",
     )?;
-    if !keys.insert(payer) {
+    if !keys.insert(payer) && physical.funding_payer.as_deref() != Some(payer.to_string().as_str())
+    {
         return Err(refusal(
             "Series durable payer aliased projected protocol state",
         ));
@@ -3376,7 +3414,7 @@ fn selected_projection_from_acquisition_v1(
     if let Some(permit) = selected.roles.permit {
         keys.insert(permit);
     }
-    if !keys.insert(payer) {
+    if !keys.insert(payer) && selected.roles.payer != Some(payer) {
         return Err(refusal(
             "Series acquisition fee payer aliased projected protocol state",
         ));
@@ -3576,6 +3614,10 @@ struct DurableSeriesPhysicalActionV1 {
     root: String,
     ticket: Option<String>,
     rent_credit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    funding_payer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    heap_frame_bytes: Option<u32>,
     parent_market: String,
     parent_market_generation: u64,
     occurrence_market: Option<String>,
@@ -5047,6 +5089,11 @@ pub(crate) fn prepare_series_terminal_journal_v1<S: SelectedSeriesPhysicalAction
         .filter(|meta| meta.is_writable)
         .map(|meta| meta.pubkey)
         .collect::<BTreeSet<_>>();
+    if writable.contains(&payer) && selected.funding_payer() != Some(payer) {
+        return Err(refusal(
+            "Series fee payer aliased a writable protocol account",
+        ));
+    }
     let mut projected = writable.clone();
     projected.insert(roles.parent_market);
     if let Some(market) = roles.occurrence_market {
@@ -5077,7 +5124,8 @@ pub(crate) fn prepare_series_terminal_journal_v1<S: SelectedSeriesPhysicalAction
             ));
         }
     }
-    if prestate.accounts.len() != projected.len().saturating_add(1) {
+    projected.insert(payer);
+    if prestate.accounts.len() != projected.len() {
         return Err(refusal(
             "Series prestate contained accounts outside the writable frame and payer",
         ));
@@ -5183,6 +5231,8 @@ fn durable_physical_from_selected_v1<S: SelectedSeriesPhysicalActionV1>(
         request_sha256: journal.request_sha256.clone(),
         authority,
         root: roles.root.to_string(),
+        funding_payer: selected.funding_payer().map(|key| key.to_string()),
+        heap_frame_bytes: selected.heap_frame_bytes(),
         ticket: roles.ticket.map(|value| value.to_string()),
         rent_credit: roles.rent_credit.map(|value| value.to_string()),
         parent_market: roles.parent_market.to_string(),
@@ -5580,7 +5630,7 @@ pub(crate) fn observe_selected_series_projection_from_rpc_v1<S: SelectedSeriesPh
     if let Some(permit) = roles.occurrence_permit {
         keys.insert(permit);
     }
-    if keys.contains(&payer) {
+    if keys.contains(&payer) && selected.funding_payer() != Some(payer) {
         return Err(refusal(
             "Series fee payer aliased a writable protocol account",
         ));
@@ -5667,19 +5717,21 @@ pub(crate) fn dispatch_series_terminal_from_rpc_v1<S: SelectedSeriesPhysicalActi
         ));
     }
     authenticate_series_lookup_table_v1(lookup_table, lookup_table_key, lookup_table_sha256)?;
-    let signed = rpc.prepare_signed_v0_packet_with_signers(
+    let signed = rpc.prepare_signed_v0_packet_with_signers_on_heap(
         series_rpc_label_v1(prepared.action),
         std::slice::from_ref(&instruction),
         payer,
         additional_signers,
         lookup_table,
+        selected.heap_frame_bytes(),
     )?;
-    Rpc::authenticate_signed_v0_packet(
+    Rpc::authenticate_signed_v0_packet_on_heap(
         series_rpc_label_v1(prepared.action),
         std::slice::from_ref(&instruction),
         payer.pubkey(),
         lookup_table,
         &signed,
+        selected.heap_frame_bytes(),
     )?;
     let resolved = resolve_series_packet_keys_v1(&signed, lookup_table_key, lookup_table)?;
     let binding = build_series_terminal_packet_binding_v1(
@@ -5721,12 +5773,16 @@ pub(crate) fn advance_series_terminal_from_rpc_v1<S: SelectedSeriesPhysicalActio
     // ComputeBudget prefix) from the current frozen table before accepting the
     // durable signature as the action we intended to poll.
     authenticate_series_lookup_table_v1(lookup_table, lookup_table_key, lookup_table_sha256)?;
-    Rpc::authenticate_signed_v0_packet(
+    Rpc::authenticate_signed_v0_packet_on_heap(
         series_rpc_label_v1(current.action),
         std::slice::from_ref(&instruction),
         parse_pubkey(&packet.payer, "Series packet payer")?,
         lookup_table,
         &packet.signed,
+        current
+            .physical
+            .as_ref()
+            .and_then(|physical| physical.heap_frame_bytes),
     )?;
     let resolved = resolve_series_packet_keys_v1(&packet.signed, lookup_table_key, lookup_table)?;
     if resolved.iter().map(ToString::to_string).collect::<Vec<_>>() != packet.resolved_account_keys
@@ -6333,6 +6389,24 @@ fn authenticate_physical_v1(
         ));
     }
     physical.instruction()?;
+    if let Some(payer) = &physical.funding_payer {
+        parse_pubkey(payer, "Series native funding payer")?;
+        if journal.action != SeriesJournalActionV1::Prepare
+            || !physical
+                .accounts
+                .iter()
+                .any(|account| account.address == *payer && account.signer && account.writable)
+        {
+            return Err(refusal(
+                "Series funding payer was not the native Prepare wallet role",
+            ));
+        }
+    }
+    if physical.heap_frame_bytes.is_some_and(|bytes| {
+        bytes != dclutch_market::capability_program::hot_v3::DIRECT_HOT_HEAP_FRAME_BYTES_V1
+    }) {
+        return Err(refusal("Series native heap declaration changed"));
+    }
     parse_pubkey(&physical.root, "Series root")?;
     if let Some(ticket) = physical.ticket.as_ref() {
         parse_pubkey(ticket, "Series Ticket")?;
@@ -6777,7 +6851,19 @@ fn prepared_payer_v1(journal: &SeriesTerminalJournalV1) -> Result<String> {
 }
 
 fn authenticate_ledger_identity_v1(identity: &SeriesLedgerIdentityV1) -> Result<()> {
-    if !identity.canonical_ledger_path.starts_with('/')
+    let valid_origin = match &identity.cluster_origin {
+        None => identity.canonical_ledger_path.starts_with('/'),
+        Some(url) => {
+            identity.canonical_ledger_path.is_empty()
+                && crate::cluster::ClusterOriginV1::parse(url, Some(&identity.genesis_hash))
+                    .is_ok_and(|origin| {
+                        crate::cluster::ExpectedClusterV1::Devnet
+                            .authenticate(&origin)
+                            .is_ok()
+                    })
+        }
+    };
+    if !valid_origin
         || identity.genesis_hash.is_empty()
         || identity.identity_sha256 != ledger_identity_digest_v1(identity)?
     {
@@ -7110,7 +7196,7 @@ mod tests {
             consequence_for_action(action),
             &request(
                 action,
-                (action == SeriesActionV3::Retire).then_some([2; 32]),
+                (action != SeriesActionV3::Close).then_some([2; 32]),
                 9,
             ),
         )
@@ -7125,6 +7211,7 @@ mod tests {
         mechanism: SeriesPhysicalMechanismV1,
         roles: SeriesPhysicalRoleKeysV1,
         observation_slot: u64,
+        funding_payer: Option<Pubkey>,
     }
 
     impl SelectedSeriesPhysicalActionV1 for Selected {
@@ -7170,6 +7257,10 @@ mod tests {
             self.roles
         }
 
+        fn funding_payer(&self) -> Option<Pubkey> {
+            self.funding_payer
+        }
+
         fn mechanism(&self) -> SeriesPhysicalMechanismV1 {
             self.mechanism
         }
@@ -7181,7 +7272,7 @@ mod tests {
 
     fn selected(action: SeriesActionV3) -> Selected {
         let root = key(10);
-        let ticket = (action == SeriesActionV3::Retire).then_some(key(11));
+        let ticket = (action != SeriesActionV3::Close).then_some(key(11));
         let credit = action.then_terminal().then_some(key(12));
         let occurrence_market = action.occurrence_bound().then_some(key(31));
         let occurrence_permit = (action == SeriesActionV3::Expire).then_some(key(32));
@@ -7206,7 +7297,7 @@ mod tests {
             action,
             request: request(
                 action,
-                (action == SeriesActionV3::Retire).then_some([2; 32]),
+                (action != SeriesActionV3::Close).then_some([2; 32]),
                 9,
             ),
             instruction: Instruction {
@@ -7230,6 +7321,7 @@ mod tests {
                 occurrence_permit,
             },
             observation_slot: 40,
+            funding_payer: None,
         }
     }
 
@@ -7501,6 +7593,7 @@ mod tests {
                 occurrence_permit,
             },
             observation_slot: planner_slot,
+            funding_payer: None,
         };
         let payer_before = 10_000_u64 - u64::from(sequence) * 5;
         let ticket_lamports = 50_u64 + u64::from(ticket_byte);
@@ -8258,6 +8351,56 @@ mod tests {
             "writable": false,
         });
         assert!(serde_json::from_value::<SeriesFinalizedRecordAddressesV2>(legacy_record).is_err());
+    }
+
+    #[test]
+    fn prepare_journal_accepts_only_the_native_funding_wallet_as_writable_fee_payer() {
+        let payer = key(13);
+        let mut selected = selected(SeriesActionV3::Prepare);
+        selected.funding_payer = Some(payer);
+        selected
+            .instruction
+            .accounts
+            .push(AccountMeta::new(payer, true));
+        let prestate = build_series_chain_projection_v1(
+            &ledger(),
+            40,
+            vec![
+                observed(key(10), key(20), 100, &[1]),
+                observed(key(9), key(41), 500, &[8]),
+                absent(key(31)),
+                absent(key(11)),
+                observed(payer, solana_sdk_ids::system_program::ID, 10_000, &[]),
+            ],
+        )
+        .expect("one observation per unique account");
+        let planned = plan(SeriesActionV3::Prepare);
+        let prepared =
+            prepare_series_terminal_journal_v1(&planned, &selected, prestate.clone(), payer)
+                .expect("native funding wallet also pays transaction fee");
+        assert_eq!(
+            prepared.prestate.as_ref().expect("prestate").accounts.len(),
+            5
+        );
+        assert_eq!(
+            prepared.physical.as_ref().expect("physical").funding_payer,
+            Some(payer.to_string())
+        );
+        selected.funding_payer = None;
+        assert_eq!(
+            prepare_series_terminal_journal_v1(&planned, &selected, prestate.clone(), payer)
+                .expect_err("an unrelated writable role cannot pay the fee")
+                .to_string(),
+            "REFUSED Series terminal: Series fee payer aliased a writable protocol account"
+        );
+        selected.funding_payer = Some(key(10));
+        selected.instruction.accounts[0].is_signer = true;
+        assert_eq!(
+            prepare_series_terminal_journal_v1(&planned, &selected, prestate, key(10))
+                .expect_err("root cannot masquerade as an external funding wallet")
+                .to_string(),
+            "REFUSED Series terminal: Series protocol state must not alias the transaction fee payer"
+        );
     }
 
     #[test]

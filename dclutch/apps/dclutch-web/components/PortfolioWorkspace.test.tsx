@@ -27,7 +27,7 @@ describe('Portfolio route', () => {
   });
 
   it('asks only for an owner identity — every other input comes from the deployment', () => {
-    expect(html).toContain('Whose wallet?');
+    expect(html).toContain('Choose a wallet');
     expect(html).toContain('Or paste any owner address');
     expect(html).not.toContain('Finalized RPC endpoint');
     expect(html).not.toContain('Core program</span>');
@@ -59,8 +59,8 @@ describe('Portfolio route', () => {
     // arithmetic -- that two unrelated markets exclude nothing so the sum is
     // exact, "the true number, not a cautious one". The panel below states the
     // bound; the defence of it is deleted.
-    expect(html).toContain('Across everything you hold');
-    expect(html).toContain('The most and the least all of it can pay, added up.');
+    expect(html).toContain('Combined payouts');
+    expect(html).toContain('Minimum and maximum payouts across your holdings.');
     expect(html).not.toContain('not a cautious one');
   });
 
@@ -89,12 +89,12 @@ describe('Redemption route', () => {
     // resolved markets, which went false the day one resolved. All three are
     // refused by name. What stands is a statement about the page, and the
     // per-market fact is read live below where it cannot go stale.
-    expect(html).toContain('Your winning claims');
+    expect(html).toContain('winning claims');
     expect(html).not.toContain('Payout is not open yet');
     expect(html).not.toContain('Nothing has resolved yet');
     expect(html).not.toContain('no market on this deployment has reached an answer');
-    expect(html).toContain('Cashed in here');
-    expect(html).toContain('no file and no operator');
+    expect(html).toContain('Redeem your');
+    expect(html).toContain('you can redeem paying claims for collateral');
     expect(html).not.toContain('Redeem your winning claims');
     // Renegotiated 2026-08-31: the wallet panel no longer takes a `purpose`
     // string describing why this page wants an address. The heading says it.
@@ -113,7 +113,7 @@ describe('Redemption route', () => {
     // Renegotiated 2026-08-31 again: the surviving half was still a paragraph
     // about what this page does before it signs. The load-bearing fact for
     // somebody holding keys is which chains it will touch at all.
-    expect(html).toContain('Devnet only — mainnet and testnet are refused.');
+    expect(html).toContain('Redemption is available on devnet.');
     expect(html).not.toContain('Rust-authored');
   });
 });

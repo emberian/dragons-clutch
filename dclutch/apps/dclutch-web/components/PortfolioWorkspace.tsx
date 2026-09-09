@@ -59,8 +59,8 @@ function PositionEntry({ entry, redeem }: Readonly<{ entry: PortfolioEntryV1; re
   return <article className={`portfolio-entry${position.status === 'refused' ? ' refused' : ''}`}>
     <MarketHeading market={market} address={entry.marketAddress} />
     <dl className="market-card-facts">
-      <div><dt>Claims ledger for this market</dt><dd title={entry.aggregateAddress ?? undefined}>{entry.aggregateAddress === null ? 'could not be worked out' : shortAddressV1(entry.aggregateAddress, 8)}</dd></div>
-      <div><dt>Where your claims would sit</dt><dd title={entry.positionAddress ?? undefined}>{entry.positionAddress === null ? 'could not be worked out' : shortAddressV1(entry.positionAddress, 8)}</dd></div>
+      <div><dt>Claims ledger for this market</dt><dd title={entry.aggregateAddress ?? undefined}>{entry.aggregateAddress === null ? 'unavailable' : shortAddressV1(entry.aggregateAddress, 8)}</dd></div>
+      <div><dt>Position account</dt><dd title={entry.positionAddress ?? undefined}>{entry.positionAddress === null ? 'unavailable' : shortAddressV1(entry.positionAddress, 8)}</dd></div>
       <div><dt>Read at finalized slot</dt><dd>{position.observedSlot}</dd></div>
       {market.status === 'decoded' && <div><dt>Market generation</dt><dd>{market.generation}</dd></div>}
       {market.status === 'decoded' && market.collateral.status === 'bound' && <div><dt>Paid out in</dt><dd title={market.collateral.collateralMint}>{market.collateral.collateralMintShort}</dd></div>}
@@ -72,7 +72,7 @@ function PositionEntry({ entry, redeem }: Readonly<{ entry: PortfolioEntryV1; re
     {position.status === 'absent' && <p className="market-empty">{position.note}</p>}
     {position.status === 'refused' && <p className="market-refusal">{position.reason}</p>}
     {position.status === 'held' && <>
-      <h4 className="detail-subhead">What this wallet holds, per outcome</h4>
+      <h4 className="detail-subhead">Claims by outcome</h4>
       {/* FE-CHART mount: the same balances as bars, with the phase's own line
           through them; the list below stays as the exact-value twin. */}
       <PositionBars
@@ -94,12 +94,12 @@ function PositionEntry({ entry, redeem }: Readonly<{ entry: PortfolioEntryV1; re
         ))}
       </ol>
       {position.claim.kind === 'mergeable' && <div className="portfolio-claim">
-        <span>Complete sets you could hand back</span>
+        <span>Complete sets</span>
         <strong>{position.claim.completeSetsAtoms}</strong>
         <p>{position.claim.note}</p>
       </div>}
       {position.claim.kind === 'redeemable' && <div className="portfolio-claim">
-        <span>Winning claims you can cash in</span>
+        <span>Redeemable claims</span>
         <strong>{position.claim.redeemableAtoms}</strong>
         {/* A ZERO IS AN ANSWER, and it was only ever delivered as a refusal
             after the reader had clicked through two steps of a redemption they
@@ -107,8 +107,7 @@ function PositionEntry({ entry, redeem }: Readonly<{ entry: PortfolioEntryV1; re
             not waiting for anything, and saying so here is the difference
             between a finished market and a broken page. */}
         {BigInt(position.claim.redeemableAtoms) === 0n && <p className="portfolio-claim-zero">
-          This market has answered, and none of what you hold here was the
-          answer. There is nothing to cash in and nothing to wait for.
+          This market has resolved. Your claims pay zero, so there is no payout to redeem.
         </p>}
         <p>{position.claim.note}</p>
       </div>}
@@ -125,12 +124,12 @@ function PositionEntry({ entry, redeem }: Readonly<{ entry: PortfolioEntryV1; re
         resolutionProgramId={redeem.resolutionProgramId}
         directory={redeem.directory}
       />}
-      {position.claim.kind === 'unavailable' && <p className="market-capability-refusal"><span>nothing you can do right now</span>{position.claim.note}</p>}
+      {position.claim.kind === 'unavailable' && <p className="market-capability-refusal"><span>Action unavailable</span>{position.claim.note}</p>}
       <dl className="market-card-facts">
-        <div><dt>Ledger this Position names</dt><dd title={position.aggregateAddress}>{shortAddressV1(position.aggregateAddress, 8)}</dd></div>
+        <div><dt>Claims ledger</dt><dd title={position.aggregateAddress}>{shortAddressV1(position.aggregateAddress, 8)}</dd></div>
         <div><dt>Position revision</dt><dd>{position.revision}</dd></div>
         <div><dt>Outcomes</dt><dd>{position.claimCount}</dd></div>
-        <div><dt>Rule it pays by</dt><dd title={position.liabilityBasisId}>{position.liabilityBasisId.slice(0, 16)}…</dd></div>
+        <div><dt>Payout rule</dt><dd title={position.liabilityBasisId}>{position.liabilityBasisId.slice(0, 16)}…</dd></div>
       </dl>
     </>}
   </article>;
@@ -187,7 +186,7 @@ export default function PortfolioWorkspace({ mode = 'portfolio' }: Readonly<{ mo
 
     <section className="trade-v3-hero">
       <div>
-        <p className="eyebrow">{redemption ? 'Redeem · your connected wallet, exactly what it holds' : 'Portfolio · what one wallet holds'}</p>
+        <p className="eyebrow">{redemption ? 'Redeem your claims' : 'Wallet portfolio'}</p>
         {/*
           "Payout is not open yet" was false from the moment redemption
           shipped: the whole path -- terminal input, payout, replay account --
@@ -201,13 +200,13 @@ export default function PortfolioWorkspace({ mode = 'portfolio' }: Readonly<{ mo
           Which market has answered is read from the chain, below, per position,
           where it can never be stale.
         */}
-        <h1>{redemption ? <>Your winning claims.<br /><em>Cashed in here.</em></> : <>Everything one wallet<br /><em>holds here.</em></>}</h1>
+        <h1>{redemption ? <>Redeem your<br /><em>winning claims.</em></> : <>Your claims,<br /><em>market by market.</em></>}</h1>
         <p>{redemption
-          ? <>Connect your wallet to find every claim it holds. Redeeming runs right here, in this browser, with no file and no operator: every market you hold is read live, and where one has reached its answer and you hold the winning side, this is where you cash it in.</>
+          ? <>Connect your wallet to find your claims. When a market resolves, you can redeem paying claims for collateral.</>
           : <>Paste an address, or connect a wallet, to see what claims it holds in every market on this deployment.</>}</p>
       </div>
       <aside>
-        <span>All this page needs</span>
+        <span>Get started</span>
         <strong>{redemption ? 'Your wallet' : 'One address'}</strong>
         <p>{redemption
           ? 'Connecting reads your address. Signing is a separate step, later.'
@@ -216,8 +215,8 @@ export default function PortfolioWorkspace({ mode = 'portfolio' }: Readonly<{ mo
     </section>
 
     <section className="trade-v3-card route-card">
-      <header><span>01</span><div><h2>{redemption ? 'Connect your wallet' : 'Whose wallet?'}</h2></div></header>
-      <WalletDirectory directory={directory} purpose={redemption ? 'find the winning claims you hold' : 'read one owner identity'} onConnected={connected} />
+      <header><span>01</span><div><h2>{redemption ? 'Connect your wallet' : 'Choose a wallet'}</h2></div></header>
+      <WalletDirectory directory={directory} purpose={redemption ? 'find the winning claims you hold' : 'view your claims'} onConnected={connected} />
       {!redemption && <form className="portfolio-owner-row" onSubmit={readPasted}>
         <label><span>Or paste any owner address</span><input value={pasted} onChange={(event) => setPasted(event.target.value.trim())} spellCheck={false} placeholder="an owner’s public address" /></label>
         <div className="direct-actions">
@@ -225,19 +224,19 @@ export default function PortfolioWorkspace({ mode = 'portfolio' }: Readonly<{ mo
           {owner !== '' && state.kind !== 'loading' && <button type="button" className="secondary-action" onClick={() => void read(owner)}>Re-read</button>}
         </div>
       </form>}
-      {redemption && <p className="direct-status">Devnet only — mainnet and testnet are refused.</p>}
+      {redemption && <p className="direct-status">Redemption is available on devnet.</p>}
       <p className="direct-status" aria-live="polite">{state.message}</p>
     </section>
 
     <section className="trade-v3-card">
-      <header><span>02</span><div><h2>Across everything you hold</h2><p>The most and the least all of it can pay, added up.</p></div></header>
+      <header><span>02</span><div><h2>Combined payouts</h2><p>Minimum and maximum payouts across your holdings.</p></div></header>
       {portfolio === null
         ? <p className="market-empty">Nothing read yet.</p>
         : <BundleExposurePanel exposure={bundleExposureV1(portfolio)} />}
     </section>
 
     <section className="trade-v3-card">
-      <header><span>03</span><div><h2>{redemption ? 'What you can cash in' : 'Market by market'}</h2><p>One entry per market on this deployment.</p></div></header>
+      <header><span>03</span><div><h2>{redemption ? 'Available payouts' : 'Market by market'}</h2><p>One entry per market on this deployment.</p></div></header>
       {portfolio === null && <p className="market-empty">Nothing read yet.</p>}
       {portfolio !== null && state.kind === 'ready' && <>
         <div className="trade-v3-evidence">

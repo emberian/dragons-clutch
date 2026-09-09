@@ -1442,7 +1442,28 @@ impl Rpc {
         additional_signers: &[&Keypair],
         table: &ObservedAccount,
     ) -> Result<SignedVersionedPacketV1> {
-        let bounded = bounded_instructions(instructions, None)
+        self.prepare_signed_v0_packet_with_signers_on_heap(
+            label,
+            instructions,
+            payer,
+            additional_signers,
+            table,
+            None,
+        )
+    }
+
+    /// Persisted packet preparation with the caller's canonical native heap
+    /// requirement. The declaration is owned by bounded_instructions.
+    pub(crate) fn prepare_signed_v0_packet_with_signers_on_heap(
+        &mut self,
+        label: &str,
+        instructions: &[Instruction],
+        payer: &Keypair,
+        additional_signers: &[&Keypair],
+        table: &ObservedAccount,
+        heap_frame_bytes: Option<u32>,
+    ) -> Result<SignedVersionedPacketV1> {
+        let bounded = bounded_instructions(instructions, heap_frame_bytes)
             .map_err(|error| Error::new(format!("{label}: {error}")))?;
         let (blockhash, last_valid_block_height) = self.latest_blockhash_with_height()?;
         let routed = dclutch_versioned_message_operator::compile_v0_message(
@@ -1628,6 +1649,19 @@ impl Rpc {
         table: &ObservedAccount,
         packet: &SignedVersionedPacketV1,
     ) -> Result<Signature> {
+        Self::authenticate_signed_v0_packet_on_heap(label, instructions, payer, table, packet, None)
+    }
+
+    /// Recompile the exact persisted message with the same native heap
+    /// requirement used during signing; changing a declaration is refused.
+    pub(crate) fn authenticate_signed_v0_packet_on_heap(
+        label: &str,
+        instructions: &[Instruction],
+        payer: Pubkey,
+        table: &ObservedAccount,
+        packet: &SignedVersionedPacketV1,
+        heap_frame_bytes: Option<u32>,
+    ) -> Result<Signature> {
         let bytes = BASE64
             .decode(&packet.packet_base64)
             .map_err(|error| Error::new(format!("{label}: persisted packet base64: {error}")))?;
@@ -1651,7 +1685,7 @@ impl Rpc {
         if signature.to_string() != packet.signature {
             return Err(Error::new(format!("{label}: persisted signature changed")));
         }
-        let bounded = bounded_instructions(instructions, None)
+        let bounded = bounded_instructions(instructions, heap_frame_bytes)
             .map_err(|error| Error::new(format!("{label}: {error}")))?;
         let expected = dclutch_versioned_message_operator::compile_v0_message(
             payer,
@@ -3311,8 +3345,8 @@ mod tests {
                     assert!(body.contains("getTransaction"));
                     transaction.clone()
                 };
-                let response = json!({"jsonrpc": "2.0", "id": request_id, "result": result})
-                    .to_string();
+                let response =
+                    json!({"jsonrpc": "2.0", "id": request_id, "result": result}).to_string();
                 write!(
                     stream,
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -3450,6 +3484,65 @@ mod tests {
                 &packet,
             )
             .is_ok()
+        );
+
+        let heap = dclutch_market::capability_program::hot_v3::DIRECT_HOT_HEAP_FRAME_BYTES_V1;
+        let bounded_heap = bounded_instructions(std::slice::from_ref(&instruction), Some(heap))
+            .expect("native heap declaration");
+        let heap_plan = dclutch_versioned_message_operator::compile_v0_message(
+            payer.pubkey(),
+            &bounded_heap,
+            Hash::new_unique(),
+            observation,
+            std::slice::from_ref(&table),
+        )
+        .expect("heap route");
+        let heap_transaction =
+            VersionedTransaction::try_new(heap_plan.message, &[&payer]).expect("heap packet");
+        let heap_bytes = bincode::serialize(&heap_transaction).expect("heap serialization");
+        let heap_packet = SignedVersionedPacketV1 {
+            signature: heap_transaction.signatures[0].to_string(),
+            packet_base64: BASE64.encode(&heap_bytes),
+            packet_sha256: hex(&Sha256::digest(&heap_bytes)),
+            last_valid_block_height: 99,
+        };
+        assert_eq!(
+            Rpc::authenticate_signed_v0_packet_on_heap(
+                "heap",
+                std::slice::from_ref(&instruction),
+                payer.pubkey(),
+                &table,
+                &heap_packet,
+                Some(heap)
+            )
+            .expect("same exact heap"),
+            heap_transaction.signatures[0]
+        );
+        assert_eq!(
+            Rpc::authenticate_signed_v0_packet_on_heap(
+                "heap",
+                std::slice::from_ref(&instruction),
+                payer.pubkey(),
+                &table,
+                &heap_packet,
+                None
+            )
+            .expect_err("missing heap declaration")
+            .to_string(),
+            "heap: persisted transaction no longer matches the authenticated instruction"
+        );
+        assert_eq!(
+            Rpc::authenticate_signed_v0_packet_on_heap(
+                "heap",
+                std::slice::from_ref(&instruction),
+                payer.pubkey(),
+                &table,
+                &heap_packet,
+                Some(heap / 2)
+            )
+            .expect_err("changed heap declaration")
+            .to_string(),
+            "heap: persisted transaction no longer matches the authenticated instruction"
         );
 
         let mut changed_digest = packet.clone();

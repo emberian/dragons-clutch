@@ -100,20 +100,20 @@ function FeaturedMarketStandingForDeployment({ deployment, market }: Readonly<{
   const editorial = market === null ? null : marketEditorialV1(market);
   const title = editorial?.title ?? editorial?.coordinate?.label ?? null;
   if (market === null) {
-    return <>No featured market has been staged for this public build. Browse the <Anchor href="/markets">market list</Anchor> to read the selected deployment.</>;
+    return <>Browse the <Anchor href="/markets">market list</Anchor> to find a market.</>;
   }
   const link = <Anchor href={publicCutMarketHrefV1(PUBLIC_DEVNET_CUT_V1)}>
-    {title === null ? 'the one they run' : title}
+    {title === null ? 'the featured market' : title}
   </Anchor>;
   if (standing.kind === 'other-cohort') {
-    return <>This build&apos;s featured record, {link}, belongs to another cohort. It is not presented as an active market; <Anchor href="/markets">browse the selected deployment</Anchor> for markets its Core owns.</>;
+    return <>{link} belongs to an older deployment. <Anchor href="/markets">Browse current markets →</Anchor></>;
   }
   const phrase = frontDoorPhraseV1(standing);
   if (phrase === null) {
-    return <>This build names {link} as a featured record. Its cohort link and state are read from the chain when this page loads; <Anchor href="/markets">browse the selected deployment</Anchor> in the meantime.</>;
+    return <>Loading {link}. <Anchor href="/markets">Browse all markets →</Anchor></>;
   }
   if ('phase' in standing && (standing.phase === 'Retiring' || standing.phase === 'Retired')) {
     return <>The featured market, {link}, is <strong>{phrase}</strong>. <Anchor href="/markets">Browse the selected deployment</Anchor> for a market that is open.</>;
   }
-  return <>The featured market is {link} — <strong>{phrase}</strong>, read from its own record.</>;
+  return <>{link} is <strong>{phrase}</strong>.</>;
 }

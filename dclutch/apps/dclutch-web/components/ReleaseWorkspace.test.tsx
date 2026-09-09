@@ -7,7 +7,7 @@ describe('Registry release presentation', () => {
   it('exposes checked activation and reauthentication with an explicit external boundary', () => {
     const html = renderToStaticMarkup(<ReleaseWorkspace />);
     expect(html).toContain('Release activation.');
-    expect(html).toContain('Load the checked build and derive the activation walk');
+    expect(html).toContain('Load release files and prepare activation');
     expect(html).toContain('Reauthenticate one active role');
     expect(html).toContain('Inspect immutable protocol infrastructure');
     // Every artifact input names its producer and the file, offers a file
@@ -27,18 +27,18 @@ describe('Registry release presentation', () => {
     expect(html).toContain('Sign or export one role packet');
     // The un-gate is shut on a cold render and says so in the contract's terms.
     expect(html).toContain('closed');
-    expect(html).toContain('No activation plan is green against this chain.');
-    expect(html).toContain('Signing stays closed. It opens only when one activation plan is green against this chain');
+    expect(html).toContain('No activation plan prepared.');
+    expect(html).toContain('Prepare an activation plan and connect its fee-payer wallet to sign');
     expect(html).not.toContain('This browser observed a chain whose finalized Registry records');
     // Un-gating signing must never introduce a submit path.
-    expect(html).toContain('There is no submit path here, signed or unsigned.');
-    expect(html).toContain('Wallet signing only behind a green plan · no submit path');
+    expect(html).toContain('Submit exported transactions through your client');
+    expect(html).toContain('Release activation · sign and export');
     expect(html).not.toContain('No wallet connector · no submit path');
     expect(html).toContain('No manifest or chain request has been made.');
     expect(html).toContain('No infrastructure snapshot has been reacquired.');
     expect(html).toContain('Registry program');
-    expect(html).toContain('Activation only.');
-    expect(html).toContain('does not deploy or upgrade programs');
+    expect(html).toContain('Activate installed program releases');
+    expect(html).toContain('Activation takes one transaction per program role');
     expect(html).toContain('Filled from the Devnet deployment');
     expect(html).toContain('Activation compute-unit limit');
     expect(html).toContain('Reauthentication compute-unit limit');
@@ -50,8 +50,8 @@ describe('Registry release presentation', () => {
     expect(html).not.toContain('Registry / Core program');
     // Activation admits one role per transaction; five separately signed
     // packets, never one 26-account instruction the chain refuses outright.
-    expect(html).toContain('one ten-account action');
-    expect(html).toContain('five separate packets, not one');
+    expect(html).toContain('one transaction per program role');
+    expect(html).toContain('Connect the fee-payer wallet to sign');
     expect(html).not.toContain('26-account');
     expect(html).not.toContain('illustrative');
     expect(html).not.toContain('sample state');

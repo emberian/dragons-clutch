@@ -193,6 +193,14 @@ pub(crate) struct SeriesPrepareRoleLayoutV1<'a> {
     pub(crate) custody_program: SeriesPrepareRoleSourceV1<'a>,
 }
 
+fn require_prepare_source_address_v1(source: &SeriesPrepareRoleSourceV1<'_>) -> Result<()> {
+    let owner = match source {
+        SeriesPrepareRoleSourceV1::Finalized { expected_owner, .. } => Some(*expected_owner),
+        _ => None,
+    };
+    crate::series_consume_geometry::require_series_geometry_address_v1(source.address(), owner)
+}
+
 /// Read the complete current Prepare frame at one finalized slot and derive
 /// its 116 profile widths.  Alias coordinates must name the same physical
 /// address as their representative; this keeps the final account snapshot
@@ -208,9 +216,7 @@ pub(crate) fn observe_series_prepare_geometry_v1(
     let mut keys = Vec::new();
     for source in &sources {
         let address = source.address();
-        if address == Pubkey::default() {
-            return Err(Error::new("Series Prepare role named the default address"));
-        }
+        require_prepare_source_address_v1(source)?;
         if !keys.contains(&address) {
             keys.push(address);
         }
@@ -466,6 +472,40 @@ fn require_release_aliases_v1(
 mod tests {
     use super::*;
     use dclutch_vm::account_profile::v3::AccountProfileV3;
+
+    #[test]
+    fn prepare_system_source_uses_shared_native_owner_predicate() {
+        let system = SeriesPrepareRoleSourceV1::Finalized {
+            role: "System program",
+            address: solana_sdk_ids::system_program::ID,
+            expected_owner: solana_sdk_ids::native_loader::ID,
+            canonical_body: None,
+        };
+        require_prepare_source_address_v1(&system).expect("canonical native System");
+        let wrong_owner = SeriesPrepareRoleSourceV1::Finalized {
+            role: "System program",
+            address: solana_sdk_ids::system_program::ID,
+            expected_owner: solana_sdk_ids::bpf_loader_upgradeable::ID,
+            canonical_body: None,
+        };
+        assert_eq!(
+            require_prepare_source_address_v1(&wrong_owner)
+                .expect_err("wrong System owner")
+                .to_string(),
+            "Series geometry role named default Pubkey"
+        );
+        let vacancy = SeriesPrepareRoleSourceV1::PredictedVacancy {
+            role: "future PDA",
+            address: Pubkey::default(),
+            fixed_data_len: 0,
+        };
+        assert_eq!(
+            require_prepare_source_address_v1(&vacancy)
+                .expect_err("default future PDA")
+                .to_string(),
+            "Series geometry role named default Pubkey"
+        );
+    }
 
     fn observed(role: &'static str, data_len: u32) -> SeriesPrepareWidthV1 {
         // The public constructor takes an RPC account; this narrow test helper

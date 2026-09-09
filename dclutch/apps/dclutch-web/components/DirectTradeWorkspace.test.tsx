@@ -9,12 +9,12 @@ describe('Direct V3 trade workbench', () => {
     const html = renderToStaticMarkup(<DirectTradeWorkspace />);
     expect(html).toContain('Direct trade');
     expect(html).toContain('Operator tool');
-    expect(html).toContain('see the exact collateral arithmetic');
+    expect(html).toContain('calculate the buyer’s payment');
     expect(html).toContain('Route manifest · JSON');
     expect(html).toContain('infrastructure.checked');
     expect(html).toContain('2,360 bytes');
     expect(html).toContain('Review exact arithmetic');
-    expect(html).toContain('Execution remains closed');
+    expect(html).toContain('This calculator is read-only');
     // This console reads and never sends -- but it used to say "read-only
     // until the finalizer lands", which reads as "trading does not work",
     // while the market page's trade panel signs and submits. It now says
@@ -25,7 +25,7 @@ describe('Direct V3 trade workbench', () => {
     for (const forbidden of ['Connect identity', 'Sign this maker message', 'Sign as transaction payer', 'Download exact packet', 'Submit signed transaction']) {
       expect(html).not.toContain(forbidden);
     }
-    expect(html).toContain('No chain state has been read.');
+    expect(html).toContain('Load a market route to begin.');
     expect(html).not.toContain('sample market');
     expect(html).not.toContain('mock balance');
   });

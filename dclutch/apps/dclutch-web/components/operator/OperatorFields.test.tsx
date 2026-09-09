@@ -148,7 +148,7 @@ describe('DerivedProvenance', () => {
       source="the deployment this browser is pointed at"
     absent="Pick a cluster to fill this." />);
     expect(html).toContain('<strong>Filled from the deployment this browser is pointed at.</strong>');
-    expect(html).toContain('You can paste a different value');
+    expect(html).toContain('Editable.');
   });
 
   it('marks an override as an override, and prints what the read said', () => {

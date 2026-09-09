@@ -43,8 +43,8 @@ describe('the market-detail trade panel', () => {
     expect(DIRECT_PRESTATE_WALL_V1.name).toBe('prestate');
   });
 
-  it('starts from an honest empty state', () => {
-    expect(html).toContain('The chain has not been asked about trading this Market yet.');
+  it('starts with a trading-availability check', () => {
+    expect(html).toContain('Check trading availability to begin.');
     expect(html).toContain('Ask the chain about trading here');
   });
 

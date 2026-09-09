@@ -35,7 +35,7 @@ export function publicDeploymentEvidenceDocumentV1(): Readonly<Record<string, un
     sourceCommit: DEVNET_RELEASE_EVIDENCE_V1.sourceCommit,
     releaseGateSha256: DEVNET_RELEASE_EVIDENCE_V1.releaseGateSha256,
     evidence: DEVNET_RELEASE_EVIDENCE_V1.evidencePath,
-    note: 'Historical deployment evidence for these Solana devnet test programs. The recorded slots and addresses do not establish current liveness or unchanged code. Read the ProgramData accounts through the deployment inspector to check the current release. Every new cohort uses fresh identities.',
+    note: 'Solana devnet deployment record. Open the deployment inspector for current program versions.',
   });
 }
 
@@ -48,17 +48,17 @@ export default function PublicDeploymentEvidence({
   deployment,
 }: Readonly<{ deployment: DeploymentV1 }>) {
   if (!isPublishedDevnetDeploymentV1(deployment)) {
-    return <p className="direct-status">Selected deployment: {deployment.label}. No checked deployment record is attached to this selection.</p>;
+    return <p className="direct-status">Selected deployment: {deployment.label}. Deployment record unavailable.</p>;
   }
-  return <div className="direct-actions" aria-label="Checked deployment evidence">
+  return <div className="direct-actions" aria-label="Deployment details">
     <a
       className="secondary-action"
       href={docsHrefV1(DEVNET_RELEASE_EVIDENCE_V1.evidencePath.replace(/^docs\//, '').replace(/\.md$/, '.html'), DEVNET_RELEASE_EVIDENCE_V1.evidencePath)}
-    >Read the checked deployment record →</a>
+    >View deployment record →</a>
     <a
       className="secondary-action"
       download={PUBLIC_DEPLOYMENT_EVIDENCE_FILENAME_V1}
       href={publicDeploymentEvidenceDownloadHrefV1()}
-    >Download the eight addresses and the slots they were read at ↓</a>
+    >Download program addresses ↓</a>
   </div>;
 }

@@ -7,7 +7,6 @@ import FeaturedMarketStanding from '@/components/FeaturedMarketStanding';
 import PublicDeploymentEvidence from '@/components/PublicDeploymentEvidence';
 import LandingPulse from '@/components/charts/LandingPulse';
 
-import { deployedProgramRolesV1 } from '@dclutch/sdk/deployments';
 import { useDeploymentV1 } from '@/lib/deploymentStore';
 import { docsHrefV1, repositoryHrefV1, smokeStoryEnabledV1 } from '@/lib/flags';
 
@@ -38,11 +37,11 @@ export default function SiteLanding() {
     <section className="trade-v3-hero">
       <div>
         <p className="eyebrow">Fully collateralized markets on Solana</p>
-        <h1>Give your view<br /><em>a payoff.</em></h1>
-        <p>Where will a price land? Which outcome will happen? dClutch lets
-        a market define the possibilities and the claims that pay for each one.</p>
-        <p>The collateral is locked before claims are issued. The market fixes
-        its payout rules and resolution sources when it is created.</p>
+        <h1>Markets with<br /><em>fixed payouts.</em></h1>
+        <p>Trade claims on future prices and outcomes. Each market defines
+        which result wins and what a winning claim pays.</p>
+        <p>Collateral backs every claim before it is issued. The source,
+        outcome boundaries and payout rules are fixed before the market opens.</p>
         <div className="landing-actions">
           <Anchor className="secondary-action landing-primary" href="/markets">Explore markets →</Anchor>
           <Anchor className="secondary-action" href="/create">Design a market →</Anchor>
@@ -50,17 +49,17 @@ export default function SiteLanding() {
       </div>
       {/* The featured record is read through the existing deployment reader. */}
       <aside>
-        <span>Where this stands</span>
-        <strong>{deployment.cluster === 'devnet' ? 'On devnet — nothing for sale' : `${deployment.label} deployment selected`}</strong>
+        <span>Try dClutch</span>
+        <strong>{deployment.cluster === 'devnet' ? 'Devnet preview · test tokens' : `${deployment.label} deployment selected`}</strong>
         <p>{deployment.cluster === 'devnet'
-          ? <>This is a Solana devnet preview using test tokens. To try the devnet flows, devnet SOL is free from the <a href="https://faucet.solana.com" rel="noreferrer">public faucet</a>.</>
-          : <>The market reads below use your selected {deployment.label.toLowerCase()} deployment.</>}</p>
+          ? <>Use test tokens to try a market. Get free devnet SOL from the <a href="https://faucet.solana.com" rel="noreferrer">public faucet</a>.</>
+          : <>Browse markets on your selected {deployment.label.toLowerCase()} deployment.</>}</p>
         <p><FeaturedMarketStanding /></p>
       </aside>
     </section>
 
     <section className="trade-v3-card landing-observation">
-      <header><span>↗</span><div><h2>The selected deployment</h2><p>Market state read from {deployment.label}.</p></div><Anchor href="/pulse">Watch activity →</Anchor></header>
+      <header><span>↗</span><div><h2>Market activity</h2><p>{deployment.label} markets.</p></div><Anchor href="/pulse">Watch activity →</Anchor></header>
       <LandingPulse />
     </section>
 
@@ -73,7 +72,7 @@ export default function SiteLanding() {
           export has no image optimizer; the webp IS the optimized cut. */}
       <img
         src="/art/dragons-clutch-key-art-v1-1672w.webp"
-        alt="A dragon's claw cradling a glowing, faceted gem against a dark field — the dClutch key art."
+        alt="A dragon's claw cradling a glowing, faceted gem against a dark field."
         width={1672}
         height={941}
         loading="lazy"
@@ -81,23 +80,23 @@ export default function SiteLanding() {
     </figure>
 
     <section className="landing-explanation" aria-label="How a market works">
-      <div><p className="eyebrow">From a question to a claim</p><h2>Know what can happen.<br />Know what it pays.</h2>
+      <div><p className="eyebrow">From a question to a claim</p><h2>One question.<br />A payout for each outcome.</h2>
         <a href={docsHrefV1('guides/reader.html', 'docs/guides/reader.md')}>Read a worked example →</a></div>
       <ol>
-        <li><span>01</span><div><h3>Define the possibilities</h3><p>A price market divides its range into outcomes. Its rules also say what happens if the source cannot provide an answer.</p></div></li>
-        <li><span>02</span><div><h3>Back the claims</h3><p>Collateral covers the claims&rsquo; promised payouts. Trading changes who holds the claims; the backing remains in custody.</p></div></li>
-        <li><span>03</span><div><h3>Resolve and redeem</h3><p>The precommitted source and recovery rules determine the result. Holders redeem the payout their claims entitle them to.</p></div></li>
+        <li><span>01</span><div><h3>Define the possibilities</h3><p>Will SOL be below $90, from $90 to under $110, or at least $110? A market sets these ranges and names the price source and observation time.</p></div></li>
+        <li><span>02</span><div><h3>Back the claims</h3><p>One claim on each outcome makes a complete set, backed by one collateral unit. You can trade individual claims while that collateral stays in the market.</p></div></li>
+        <li><span>03</span><div><h3>Resolve and redeem</h3><p>The source price selects the winning range. In this example, each winning claim pays one collateral unit; the others pay zero. The market also sets a failure outcome if its source stays unavailable.</p></div></li>
       </ol>
     </section>
 
     <section className="trade-v3-card">
-      <header><span>01</span><div><h2>Find your way around</h2><p>{deployedProgramRolesV1(deployment).length} program addresses in the {deployment.label} configuration.</p></div></header>
+      <header><span>01</span><div><h2>Choose an action</h2><p>Browse market terms, view your holdings or design a market.</p></div></header>
       <div className="direct-actions">
         <Anchor className="secondary-action" href="/markets">Browse the markets →</Anchor>
-        <Anchor className="secondary-action" href="/portfolio">See what a wallet holds →</Anchor>
+        <Anchor className="secondary-action" href="/portfolio">View your holdings →</Anchor>
         <Anchor className="secondary-action" href="/create">Design a market →</Anchor>
-        <Anchor className="secondary-action" href="/pulse">Watch published activity →</Anchor>
-        <Anchor className="secondary-action" href="/explorer">Look up any account →</Anchor>
+        <Anchor className="secondary-action" href="/pulse">Watch activity →</Anchor>
+        <Anchor className="secondary-action" href="/explorer">Inspect an account →</Anchor>
         <Anchor className="secondary-action" href="/console">Operator tools →</Anchor>
       </div>
       <details className="landing-evidence"><summary>Deployment record and program addresses</summary>
@@ -106,7 +105,7 @@ export default function SiteLanding() {
     </section>
 
     {smokeStoryEnabledV1() && <section className="trade-v3-card">
-      <header><span>··</span><div><h2>Three markets, run in public</h2><p>A price market Pyth settles on its own, a market about a real mainnet event, and one abandoned on purpose for you to finish and collect the bounty.</p></div></header>
+      <header><span>··</span><div><h2>Three markets, run in public</h2><p>Follow a Pyth price market, a mainnet-event market and a market with a funded failure bounty.</p></div></header>
       <div className="direct-actions">
         <Anchor className="secondary-action" href="/smoke">Read the story →</Anchor>
         <Anchor className="secondary-action" href="/bounty">How the bounty works →</Anchor>
@@ -114,12 +113,12 @@ export default function SiteLanding() {
     </section>}
 
     <section className="trade-v3-card">
-      <header><span>02</span><div><h2>The documentation</h2><p>What a claim is, how protection works, how to run a market, how to build a client.</p></div></header>
+      <header><span>02</span><div><h2>The documentation</h2><p>Learn how to trade claims, create a market or build a client.</p></div></header>
       <div className="direct-actions">
         <a className="secondary-action" href={docsHrefV1('guides/README.html', 'docs/guides/README.md')}>Guides →</a>
-        <a className="secondary-action" href={docsHrefV1('readme.html', 'README.md')}>The README →</a>
-        <a className="secondary-action" href={docsHrefV1('reference/refusals.html', 'docs/reference/refusals.md')}>Every error code →</a>
-        <a className="secondary-action" href={docsHrefV1('reference/abi/README.html', 'docs/reference/abi/README.md')}>Exact byte layouts →</a>
+        <a className="secondary-action" href={docsHrefV1('readme.html', 'README.md')}>Project overview →</a>
+        <a className="secondary-action" href={docsHrefV1('reference/refusals.html', 'docs/reference/refusals.md')}>Error codes →</a>
+        <a className="secondary-action" href={docsHrefV1('reference/abi/README.html', 'docs/reference/abi/README.md')}>Account layouts →</a>
         <a className="secondary-action" href={docsHrefV1('notices.html', 'tools/sbom/NOTICES.md')}>Third-party notices →</a>
       </div>
     </section>
@@ -138,7 +137,7 @@ export default function SiteLanding() {
         no external font, script, or image, so it is served as-is rather than
         rebuilt into this app's chrome. */}
     <section className="trade-v3-card">
-      <header><span>04</span><div><h2>How this was built</h2><p>Two earlier builds, thrown away on purpose. Why that was the plan, and what survived each time.</p></div></header>
+      <header><span>04</span><div><h2>Project history</h2><p>The ideas and decisions behind dClutch.</p></div></header>
       <div className="direct-actions">
         <a className="secondary-action" href={FIELD_NOTES_HREF_V1}>Plan to compost at least three →</a>
       </div>

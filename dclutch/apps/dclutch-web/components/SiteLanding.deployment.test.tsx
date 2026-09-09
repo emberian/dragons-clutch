@@ -13,8 +13,8 @@ describe('the homepage follows the selected deployment', () => {
   it('shows local counts and provenance without attaching the devnet evidence download', () => {
     const html = renderToStaticMarkup(<SiteLanding />);
     expect(html).toContain('Local deployment selected');
-    expect(html).toContain('7 program addresses in the Local configuration');
-    expect(html).not.toContain('On devnet');
+    expect(html).toContain('Local markets.');
+    expect(html).not.toContain('Devnet preview');
     expect(html).not.toContain('dclutch-devnet-deployment-evidence-v1.json');
     expect(html).toContain('Selected deployment: Local');
   });

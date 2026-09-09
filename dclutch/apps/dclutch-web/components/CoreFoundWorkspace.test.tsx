@@ -7,9 +7,9 @@ describe('Core Found workspace', () => {
   it('leads with the current journaled campaign and keeps legacy Found37 diagnostic-only', () => {
     const html = renderToStaticMarkup(<CoreFoundWorkspace />);
     expect(html).toContain('Found a market');
-    expect(html).toContain('Found one current devnet Market');
+    expect(html).toContain('Found a devnet market');
     expect(html).toContain('dclutch-devnet-market-participant-operation-v1');
-    expect(html).toContain('Preview first; execute explicitly');
+    expect(html).toContain('Preview, then execute');
     expect(html).toContain('Market + first participant + session');
     expect(html).toContain('Rerun the same operation and journal');
     expect(html).toContain('Show preview and execute commands');
@@ -18,18 +18,18 @@ describe('Core Found workspace', () => {
     expect(html).toContain('--session-out');
     expect(html).toContain('--execute');
     expect(html).toContain('Open the legacy Found37 packet inspector');
-    expect(html).toContain('cannot perform the current atomic opening');
+    expect(html).toContain('Use the command-line workflow above to open a market');
     expect(html).toContain('Construct unsigned lifecycle + Found transactions');
     expect(html).toContain('Immutable rent refund wallet');
-    expect(html).toContain('No transaction has been constructed');
-    expect(html).toContain('No signing or submission here.');
+    expect(html).toContain('Enter the market record addresses');
+    expect(html).toContain('unsigned transactions');
     expect(html).toContain('Product Runtime V2 raw');
     expect(html).toContain('SourceMaterialV3 raw');
     expect(html).toContain('Linked basis raw');
     expect(html).not.toContain('Execution release set raw');
     expect(html).not.toContain('Illustrative');
     expect(html).not.toContain('sample balance');
-    expect(html.indexOf('Found one current devnet Market')).toBeLessThan(html.indexOf('Open the legacy Found37 packet inspector'));
+    expect(html.indexOf('Found a devnet market')).toBeLessThan(html.indexOf('Open the legacy Found37 packet inspector'));
   });
 });
 
@@ -42,23 +42,23 @@ describe('Core Found workspace: what each field is, and where its value comes fr
     // The payer's sentence moved from a static line to the derived-provenance
     // line, because the page reads it from the wallet now instead of asking.
     expect(html).toContain('Connect a wallet above to fill this, or paste the payer address.');
-    expect(html).toContain('Embedded once in the Market-bound RentCredit and immutable afterwards');
+    expect(html).toContain('cannot be changed after the RentCredit is created');
     // These two used to pin a byte range the browser had written down in its
     // own words. The coordinates now come from `lib/generated/coreFound.ts`,
     // so the sentence names the RECORD the value is read out of and the
     // number is nowhere in this component to drift.
-    expect(html).toContain('Read it out of the Product record above rather than finding it');
-    expect(html).toContain('Read it out of the SourceMaterialV3 record above rather than finding it');
-    expect(html).toContain('Its dependency graph must terminate; a cycle is refused.');
+    expect(html).toContain('selected by the Product');
+    expect(html).toContain('selected by SourceMaterialV3');
+    expect(html).toContain('listing the market’s trading and lifecycle services');
     // The one place a byte range could come back: nowhere on this page.
     expect(html).not.toContain('bytes 48..80');
     expect(html).not.toContain('bytes 208..240');
   });
 
-  it('is honest that the linked basis is never joined to the graph', () => {
+  it('identifies the required linked basis record', () => {
     // The audit's finding: it is the one record of the ten that is
     // rent- and PDA-authenticated and then never decoded.
-    expect(html).toContain('none of its bytes are joined to the semantic graph');
+    expect(html).toContain('The Registry address of the graded basis record required by Found37');
   });
 
   it('derives four of the five records another record already answers', () => {
@@ -67,14 +67,14 @@ describe('Core Found workspace: what each field is, and where its value comes fr
     // recorded rather than paid. Four are now read out of the parent record
     // that names them, so the console asks for ten addresses instead of
     // fourteen and four fewer places exist for a reader to be silently wrong.
-    const stillTyped = html.split('Derivable from that record once this console reads it').length - 1;
+    const stillTyped = html.split('Enter the capacity profile address selected by the source specification').length - 1;
     expect(stillTyped, 'only the capacity profile should still be named debt').toBe(1);
     // The one that remains says exactly why, and names the Rust that owes the
     // constant: an unexplained leftover is how four become five again.
-    expect(html).toContain('SourceSpecV1 writes that coordinate as a bare number with no named constant');
+    expect(html).toContain('Enter the capacity profile address selected by the source specification');
     // Four fields, each pointing at the parent it is read out of.
-    const product = html.split('Read it out of the Product record above').length - 1;
-    const source = html.split('Read it out of the SourceMaterialV3 record above').length - 1;
+    const product = html.split('selected by the Product').length - 1;
+    const source = html.split('selected by SourceMaterialV3').length - 1;
     expect(product).toBe(2);
     expect(source).toBe(2);
   });
@@ -84,7 +84,7 @@ describe('Core Found workspace: what each field is, and where its value comes fr
     // a status somebody typed. Until the button runs, the four say what they
     // are and that they are waiting.
     expect(html).toContain('Read the four dependent records');
-    expect(html).toContain('No dependent record has been read.');
+    expect(html).toContain('Enter Product and SourceMaterialV3 addresses, then read their dependent records.');
     // The post-read provenance line, which names a finalized slot, must not
     // appear before a read has produced one.
     expect(html).not.toContain('at finalized slot');
@@ -94,7 +94,7 @@ describe('Core Found workspace: what each field is, and where its value comes fr
     // These two were already pre-filled before this pass -- with no line
     // anywhere saying they had been.
     expect(html).toContain('<strong>Filled from the deployment this browser is pointed at.</strong>');
-    expect(html).toContain('Both arrive filled from the cluster picked in the header.');
+    expect(html).toContain('These addresses come from the selected deployment.');
   });
 
   it('groups the sixteen fields under the four questions they answer', () => {
@@ -121,7 +121,7 @@ describe('Core Found workspace: what each field is, and where its value comes fr
     // Before: one `aria-live` line served all sixteen fields. The slot still
     // exists for refusals nothing owns; what changed is that a routed refusal
     // renders at its field instead.
-    expect(html).toContain('No transaction has been constructed');
+    expect(html).toContain('Enter the market record addresses');
     expect(html).not.toContain('role="alert"');
   });
 });
@@ -136,20 +136,20 @@ describe('the payer is read from the wallet, not asked for', () => {
     // reader's own browser — asking them to transcribe their own public key is
     // the purest case of the rule.
     expect(html).toContain('Connect a wallet to fill the payer');
-    expect(html).toContain('Connecting reads your address');
+    expect(html).toContain('Choose the rent refund wallet carefully');
   });
 
   it('is explicit that connecting still signs nothing here', () => {
     // This console's whole contract is that it exports unsigned bytes and asks
     // for no key. Reading an address is not signing, and the page has to say
     // which one it is doing.
-    expect(html).toContain('Nothing is signed on this page');
+    expect(html).toContain('This inspector exports unsigned transactions');
   });
 
   it('still lets the refund wallet differ from the payer', () => {
     // It is immutable once embedded in the Market-bound RentCredit, so
     // defaulting it silently to the payer would decide something permanent for
     // a reader who never looked at the field.
-    expect(html).toContain('Often the payer, and it does not have to be');
+    expect(html).toContain('It may differ from the payer');
   });
 });

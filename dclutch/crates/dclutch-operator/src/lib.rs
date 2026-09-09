@@ -71,6 +71,9 @@ pub mod claims_conservation_v1;
 /// Chain-derived unsigned Dealer junior-equity Hot execution construction.
 #[cfg(feature = "dealer-series")]
 pub mod dealer_equity_hot_v3;
+/// Production host projection of Dealer Hot profile, lifecycle, transition, and Effect semantics.
+#[cfg(feature = "dealer-series")]
+pub mod dealer_hot_projection_v1;
 /// Chain-derived unsigned Dealer LP Open/Close Hot construction.
 #[cfg(feature = "dealer-series")]
 pub mod dealer_lp_hot_v4;
@@ -139,6 +142,8 @@ pub mod series_founding_children_v1;
 /// Chain-derived Series V3 Hot lifecycle and packet construction.
 #[cfg(feature = "dealer-series")]
 pub mod series_hot_v3;
+/// Portable user-intent binding for recurring-Series actions.
+pub mod series_intent_v1;
 /// Chain-derived selection of the next recurring-Series lifecycle act.
 #[cfg(feature = "dealer-series")]
 pub mod series_lifecycle_v3;

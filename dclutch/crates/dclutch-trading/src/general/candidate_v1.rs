@@ -832,6 +832,32 @@ pub fn candidate_verify_manifest_orders_v1(
     )?)
 }
 
+/// Authenticate the declared row geometry and forecast its terminal flag.
+///
+/// Lifecycle preparation uses this before the evaluator runs. The forecast
+/// binds the closed Batch, Candidate identity, submission and selected Page;
+/// it does not validate an Order, advance a cursor or authorize a payout.
+/// Verification still checks the complete row and requires its resulting
+/// terminal flag to agree with this same selector.
+pub fn candidate_verify_terminal_step_v1(
+    batch: GeneralBatchV2,
+    submission: GeneralCandidateV1,
+    candidate: &[u8],
+    page: &[u8],
+    expected_page_index: u32,
+    expected_row_index: u32,
+) -> GeneralCandidateResultV1<bool> {
+    let (_, terminal) = select_row_from_records(
+        batch,
+        submission,
+        candidate,
+        page,
+        expected_page_index,
+        expected_row_index,
+    )?;
+    Ok(terminal)
+}
+
 /// Verify one candidate execution row, permissionlessly and on chain.
 ///
 /// **This is the caller `evaluate_runtime_consider_row_with_manifest_v2` has
@@ -1019,14 +1045,33 @@ type SelectedRow<'a> = (crate::general::runtime_width::ExecutionV2<'a>, bool);
 fn select_row<'a>(
     view: &CandidateVerifyRowViewV1<'a>,
 ) -> GeneralCandidateResultV1<SelectedRow<'a>> {
-    if view.batch.state().status != BatchStatusV1::Closed {
+    select_row_from_records(
+        view.batch,
+        view.submission,
+        view.candidate,
+        view.page,
+        view.expected_page_index,
+        view.expected_row_index,
+    )
+}
+
+fn select_row_from_records<'a>(
+    batch: GeneralBatchV2,
+    submission: GeneralCandidateV1,
+    candidate_bytes: &'a [u8],
+    page_bytes: &'a [u8],
+    expected_page_index: u32,
+    expected_row_index: u32,
+) -> GeneralCandidateResultV1<SelectedRow<'a>> {
+    if batch.state().status != BatchStatusV1::Closed {
         return Err(GeneralCollectionErrorV1::NotClosed.into());
     }
     let candidate =
-        CandidateV2::decode(view.candidate).map_err(|_| GeneralCandidateErrorV1::Substitution)?;
+        CandidateV2::decode(candidate_bytes).map_err(|_| GeneralCandidateErrorV1::Substitution)?;
     authenticate_candidate_identity_v1(candidate)?;
-    let opening = view.submission.opening();
+    let opening = submission.opening();
     let header = candidate.header();
+    authenticate_batch_candidate_v1(batch, header)?;
     if header.candidate_id != opening.candidate_id
         || header.batch_id != opening.batch_id
         || header.outcome_count != opening.outcome_count
@@ -1034,10 +1079,9 @@ fn select_row<'a>(
     {
         return Err(GeneralCandidateErrorV1::Substitution);
     }
-    let page = PageV2::decode(view.page).map_err(|_| GeneralCandidateErrorV1::Substitution)?;
+    let page = PageV2::decode(page_bytes).map_err(|_| GeneralCandidateErrorV1::Substitution)?;
     let page_header = page.header();
-    let expected_coordinate = view
-        .expected_page_index
+    let expected_coordinate = expected_page_index
         .checked_add(1)
         .ok_or(GeneralCandidateErrorV1::ArithmeticOverflow)?;
     // The page revision is the submission's, not the caller's. Without this pin
@@ -1051,14 +1095,14 @@ fn select_row<'a>(
     {
         return Err(GeneralCandidateErrorV1::Substitution);
     }
-    if view.expected_row_index >= page.row_count() {
+    if expected_row_index >= page.row_count() {
         return Err(GeneralCandidateErrorV1::Substitution);
     }
     let execution = page
-        .execution(view.expected_row_index)
+        .execution(expected_row_index)
         .map_err(|_| GeneralCandidateErrorV1::Substitution)?;
-    let terminal_step = view.expected_page_index.checked_add(1) == Some(opening.page_count)
-        && view.expected_row_index.checked_add(1) == Some(page.row_count());
+    let terminal_step = expected_page_index.checked_add(1) == Some(opening.page_count)
+        && expected_row_index.checked_add(1) == Some(page.row_count());
     Ok((execution, terminal_step))
 }
 

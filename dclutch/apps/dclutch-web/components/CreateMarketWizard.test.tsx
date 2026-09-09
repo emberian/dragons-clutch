@@ -53,7 +53,7 @@ describe('the wizard says where the coordinate actually falls', () => {
     // wizard used to print `DegenerateOutcomePartition` from a check of its
     // own, and a client that names the compiler's refusal without having asked
     // the compiler is the thing this whole unit removed.
-    expect(html).toContain('Loading the compiled partition gate');
+    expect(html).toContain('Loading the outcome-range check');
     expect(html).not.toContain('DegenerateOutcomePartition');
     expect(html).not.toContain('provisional unit-sanity bound');
   });

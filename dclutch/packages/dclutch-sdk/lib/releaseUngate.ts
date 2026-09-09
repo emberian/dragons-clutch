@@ -16,7 +16,7 @@ import { type RegistryActivationPlanV1 } from './releaseRegistry';
 /// the checked release's geometry and digests exactly. A plan in hand IS that
 /// conjunction. The only thing left for this gate to decide is whether the
 /// wallet now connected is the one the plan already declared it would pay with.
-export const UNGATE_SHUT_V1 = 'Signing stays closed. It opens only when one activation plan is green against this chain and the connected wallet is exactly that plan’s declared fee payer.';
+export const UNGATE_SHUT_V1 = 'Prepare an activation plan and connect its fee-payer wallet to sign.';
 
 /// The single sentence a green plan licenses, and its explicit limits.
 ///
@@ -25,7 +25,7 @@ export const UNGATE_SHUT_V1 = 'Signing stays closed. It opens only when one acti
 /// transfer to devnet or mainnet." That is rendered next to the buttons it
 /// unlocks, so the limit travels with the capability instead of living in a
 /// document nobody opens while clicking.
-export const UNGATE_LICENCE_V1 = 'This browser observed a chain whose finalized Registry records and Loader accounts match a named checked release set built from a named commit. That is the whole claim. It does not make these addresses official, does not make this frontend official, and does not transfer to devnet or mainnet.';
+export const UNGATE_LICENCE_V1 = 'Ready to sign with the connected fee payer.';
 
 export type ReleaseUngateV1 = Readonly<{ open: boolean; reason: string }>;
 
@@ -36,7 +36,7 @@ export type ReleaseUngateV1 = Readonly<{ open: boolean; reason: string }>;
 /// gate never carries the licence sentence, so no caller can render an
 /// authorization the chain did not support.
 export function releaseUngateV1(plan: RegistryActivationPlanV1 | null, connectedWallet: string | null): ReleaseUngateV1 {
-  if (plan === null) return Object.freeze({ open: false, reason: `No activation plan is green against this chain. ${UNGATE_SHUT_V1}` });
+  if (plan === null) return Object.freeze({ open: false, reason: `No activation plan prepared. ${UNGATE_SHUT_V1}` });
   if (connectedWallet === null || connectedWallet.length === 0) return Object.freeze({ open: false, reason: `No browser wallet is connected. ${UNGATE_SHUT_V1}` });
   if (connectedWallet !== plan.payer) return Object.freeze({ open: false, reason: `Connected wallet ${connectedWallet} is not the plan’s declared fee payer ${plan.payer}. ${UNGATE_SHUT_V1}` });
   return Object.freeze({ open: true, reason: UNGATE_LICENCE_V1 });

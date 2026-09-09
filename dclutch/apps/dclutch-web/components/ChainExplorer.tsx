@@ -20,7 +20,7 @@ import {
   type ProtocolHomeV1,
   type ProtocolProgramCardV1,
 } from '@/lib/explorer/protocolHome';
-import { SBF_DEFAULT_HEAP_BYTES_V1, SBF_RUNTIME_VERSIONS_V1 } from '@/lib/generated/sbfRuntimeV1';
+import { SBF_DEFAULT_HEAP_BYTES_V1 } from '@/lib/generated/sbfRuntimeV1';
 import { attributionTitle, describeAttribution, hexCode } from '@/lib/explorer/refusals';
 import {
   inspectTransaction,
@@ -139,7 +139,7 @@ function Notice({ kind, title, message }: Readonly<{ kind: 'loading' | 'error' |
   );
 }
 
-function Honest({ children }: Readonly<{ children: ReactNode }>) {
+function Note({ children }: Readonly<{ children: ReactNode }>) {
   return <p className="xp-honest">{children}</p>;
 }
 
@@ -200,7 +200,7 @@ function FieldValue({ field }: Readonly<{ field: DecodedField }>) {
 
 function RecordFields({ decoded }: Readonly<{ decoded: DecodedRecord }>) {
   if (decoded.fields.length === 0) {
-    return <Honest>{decoded.spec.note}</Honest>;
+    return <Note>{decoded.spec.note}</Note>;
   }
   return (
     <>
@@ -224,11 +224,11 @@ function RecordFields({ decoded }: Readonly<{ decoded: DecodedRecord }>) {
           {decoded.rows.states !== null
             ? <ol className="xp-scalars">{decoded.rows.states.map((entry) => <li key={entry.row}><em>{entry.row}</em>{entry.name ?? `unnamed tag ${entry.tag}`}</li>)}</ol>
             : decoded.rows.scalars === null
-              ? <Honest>The rows are wider than one scalar, so they are counted rather than expanded.</Honest>
+              ? <Note>Row count shown. Expanded rows are unavailable for this format.</Note>
               : <ol className="xp-scalars">{decoded.rows.scalars.map((entry, index) => <li key={index}><em>{index}</em>{entry}</li>)}</ol>}
         </div>
       )}
-      {decoded.spec.note === null ? null : <Honest>{decoded.spec.note}</Honest>}
+      {decoded.spec.note === null ? null : <Note>{decoded.spec.note}</Note>}
     </>
   );
 }
@@ -296,7 +296,7 @@ function AccountView({ state }: Readonly<{ state: Async<ExplorerAccountResult> }
           <div><dt>Finalized at</dt><dd>slot {account.observedSlot} (floor {account.floorSlot})</dd></div>
         </dl>
         <p className="xp-quiet">{account.rent.note}</p>
-        {account.note === null ? null : <Honest>{account.note}</Honest>}
+        {account.note === null ? null : <Note>{account.note}</Note>}
         {decoded === null ? <p className="xp-raw">{account.headHex}…</p> : null}
       </article>
 
@@ -329,14 +329,11 @@ function AccountView({ state }: Readonly<{ state: Async<ExplorerAccountResult> }
           <p className="eyebrow">Content-addressed record</p>
           <dl className="fact-list">
             <div><dt>Content identity</dt><dd className="xp-hex">{account.record.contentDigest}</dd></div>
-            <div><dt>Schema</dt><dd>{account.record.schema ?? 'no emitted schema reproduces this address under this owner'}</dd></div>
+            <div><dt>Schema</dt><dd>{account.record.schema ?? 'Unknown schema'}</dd></div>
             {account.record.stagingAddress === null ? null : (
               <div><dt>Staging cursor</dt><dd><Jump view="account" value={account.record.stagingAddress}>{compact(account.record.stagingAddress, 8)}</Jump></dd></div>
             )}
           </dl>
-          {account.record.schema === null
-            ? <Honest>sha256 of these exact bytes is shown because any finalized record is addressed by it. That no schema reproduces this address is not a claim the account is invalid — only that it is not one of the record schemas this browser was emitted with.</Honest>
-            : <Honest>The schema was not read out of the content. It is the one whose raw-record PDA lands on this exact address, under this account&rsquo;s actual owner.</Honest>}
         </section>
       )}
     </div>
@@ -378,12 +375,11 @@ function InstructionCard({ instruction }: Readonly<{ instruction: ExplorerInstru
         </ul>
       )}
       {decoded.routes.length > 1 ? (
-        <Honest>
-          The census enumerates {decoded.routes.length} routes behind this one magic. The leading bytes alone do not
-          choose between them, so all of them are shown.
-        </Honest>
+        <Note>
+          This instruction prefix is shared by {decoded.routes.length} routes, listed above.
+        </Note>
       ) : null}
-      {decoded.note === null ? null : <Honest>{decoded.note}</Honest>}
+      {decoded.note === null ? null : <Note>{decoded.note}</Note>}
 
       {decoded.body === null ? null : (
         <details className="xp-body">
@@ -394,7 +390,7 @@ function InstructionCard({ instruction }: Readonly<{ instruction: ExplorerInstru
       {decoded.inner === null ? null : (
         <details className="xp-body">
           <summary>Wrapped family request · {decoded.inner.bytes} bytes{decoded.inner.magic === null ? '' : ` · ${decoded.inner.magic}`}</summary>
-          {decoded.inner.routes.length === 0 ? <Honest>{decoded.inner.note ?? 'No route is selected by the wrapped magic.'}</Honest> : (
+          {decoded.inner.routes.length === 0 ? <Note>{decoded.inner.note ?? 'No route is selected by the wrapped magic.'}</Note> : (
             <ul className="xp-routes">
               {decoded.inner.routes.map((route) => <li key={route.routeId}><code>{route.routeId}</code>{route.summary === null ? null : <p>{route.summary}</p>}</li>)}
             </ul>
@@ -425,7 +421,7 @@ function InstructionCard({ instruction }: Readonly<{ instruction: ExplorerInstru
 
 function TransactionView({ state }: Readonly<{ state: Async<ExplorerTransactionResult> }>) {
   if (state.kind === 'idle') {
-    return <Notice kind="quiet" title="Paste a signature." message="Each instruction is decoded against the route the census says its magic selects, the CPI frames come from the chain’s own metadata, and a refusal is named rather than numbered." />;
+    return <Notice kind="quiet" title="Paste a transaction signature." message="View instructions, account changes, compute usage and errors." />;
   }
   if (state.kind === 'loading') return <Notice kind="loading" title="Reading the transaction" message={state.message} />;
   if (state.kind === 'error') return <Notice kind="error" title="Transaction read refused" message={state.message} />;
@@ -456,7 +452,7 @@ function TransactionView({ state }: Readonly<{ state: Async<ExplorerTransactionR
           <div><dt>Heap requested</dt><dd>{transaction.budget.heapFrameBytes === null ? `none · the ${SBF_DEFAULT_HEAP_BYTES_V1.toLocaleString('en-US')}-byte default` : `${transaction.budget.heapFrameBytes.toLocaleString('en-US')} bytes`}</dd></div>
           <div><dt>Instructions</dt><dd>{transaction.instructions.filter((entry) => entry.innerIndex === null).length} outer · {transaction.instructions.filter((entry) => entry.innerIndex !== null).length} inner</dd></div>
         </dl>
-        {transaction.note === null ? null : <Honest>{transaction.note}</Honest>}
+        {transaction.note === null ? null : <Note>{transaction.note}</Note>}
       </article>
 
       {refusal === null ? null : (
@@ -479,11 +475,6 @@ function TransactionView({ state }: Readonly<{ state: Async<ExplorerTransactionR
               <div><dt>Declared at</dt><dd className="xp-hex">{refusal.attribution.refusal.provenance}</dd></div>
             ) : null}
           </dl>
-          <Honest>
-            The code is the last custom error in the log, because a frame that catches a child&rsquo;s refusal and raises its
-            own has the last word. The program is the first frame to report that code, because a propagated refusal is
-            re-reported by every frame it unwinds through and only the innermost one originated it.
-          </Honest>
         </article>
       )}
 
@@ -529,17 +520,6 @@ function TransactionView({ state }: Readonly<{ state: Async<ExplorerTransactionR
           {transaction.abortDiagnosis.remedy === null ? null : (
             <p className="observation"><strong>What can be done:</strong> {transaction.abortDiagnosis.remedy}</p>
           )}
-          <Honest>
-            An abort is not a refusal: the program never returned a code, so there is no band and no dClutch name to give.
-            What there is instead is the virtual machine&rsquo;s own sentence, matched against the `#[error]` format strings
-            of the pinned runtime (solana-sbpf {SBF_RUNTIME_VERSIONS_V1.sbpf}, solana-syscalls {SBF_RUNTIME_VERSIONS_V1.syscalls}),
-            and the fault address placed in the memory map those same crates declare.
-            {transaction.abortDiagnosis.confidence === 'named'
-              ? ' The runtime’s vocabulary names this one.'
-              : transaction.abortDiagnosis.confidence === 'placed'
-                ? ' No pinned format string prints this exact sentence — the reading rests on the address, which is read separately for that reason.'
-                : ' Nothing in the pinned vocabulary prints this sentence, so it is shown verbatim and nothing is inferred from it.'}
-          </Honest>
         </article>
       )}
 
@@ -547,7 +527,6 @@ function TransactionView({ state }: Readonly<{ state: Async<ExplorerTransactionR
         <article className="account-card refused">
           <div className="card-topline"><p className="account-kind">Runtime refusal</p><Chip tone="fail">no custom code</Chip></div>
           <h3>{transaction.runtimeError}</h3>
-          <Honest>This refusal came from the Solana runtime, not from a program&rsquo;s own refusal enum, so it has no band and no dClutch name. It is shown in the runtime&rsquo;s own words.</Honest>
         </article>
       )}
 
@@ -730,7 +709,7 @@ function ProtocolHomeView({ state, deployment }: Readonly<{ state: Async<Protoco
     return <Notice kind="loading" title={`Reading the ${deployment.label} deployment`} message={`Probing the endpoint, then reading the ${deployedProgramRolesV1(deployment).length} programs at one finalized observation and the node’s recent signature history for them…`} />;
   }
   if (state.kind === 'error') {
-    return <Notice kind="error" title="The deployment read refused" message={`${state.message} — the ${deployedProgramRolesV1(deployment).length} baked addresses are still shown in the cluster picker’s deployment; nothing about the protocol is inferred from a failed read.`} />;
+    return <Notice kind="error" title="Could not load the deployment" message={state.message} />;
   }
   const home = state.value;
   return (
@@ -740,8 +719,7 @@ function ProtocolHomeView({ state, deployment }: Readonly<{ state: Async<Protoco
           <div className="card-topline"><p className="account-kind">Wrong chain</p><Chip tone="fail">genesis mismatch</Chip></div>
           <h3>This endpoint serves {home.clusterName}, not the cluster this deployment’s addresses live on.</h3>
           <p className="refusal-reason">
-            The chain’s own genesis hash is {compact(home.facts.genesisHash, 8)}; the manifest expects a different one. The
-            program cards below are reads of THIS chain and say what it holds at those addresses — which may be nothing.
+            Endpoint genesis: {compact(home.facts.genesisHash, 8)}. Select the matching network in the cluster picker.
           </p>
         </article>
       )}
@@ -749,7 +727,7 @@ function ProtocolHomeView({ state, deployment }: Readonly<{ state: Async<Protoco
       <section className="xp-panel">
         <p className="eyebrow">Recent protocol transactions</p>
         {home.activity.length === 0 ? null : <ActivityRows rows={home.activity} />}
-        <Honest>{home.activityNote}</Honest>
+        <Note>{home.activityNote}</Note>
       </section>
 
       <section className="xp-panel">
@@ -759,8 +737,7 @@ function ProtocolHomeView({ state, deployment }: Readonly<{ state: Async<Protoco
         <div className="xp-node-grid">
           {home.cards.map((card) => <ProgramCard key={card.role} card={card} />)}
         </div>
-        <Honest>{deployment.provenance}</Honest>
-        <Honest>An executable Program account can outlive its code. <Anchor href="/operate">Inspect the deployment</Anchor> to check its ProgramData and release.</Honest>
+        <Note><Anchor href="/operate">View deployment details →</Anchor></Note>
       </section>
     </div>
   );
@@ -1093,8 +1070,7 @@ export default function ChainExplorer() {
       </details>
 
       <footer>
-        <p>Untrusted static projection of the active deployment&rsquo;s infrastructure.</p>
-        <p>No wallet adapter. No transaction construction, signing, or submission.</p>
+        <p>dClutch explorer · accounts, transactions and market activity</p>
       </footer>
     </PageShell>
   );
@@ -1117,10 +1093,9 @@ function ScanView({ state }: Readonly<{ state: Async<Readonly<{ facts: Connectio
           <div><dt>Genesis hash</dt><dd title={facts.genesisHash}>{compact(facts.genesisHash, 8)}</dd></div>
           <div><dt>Scan slot</dt><dd>{snapshot.scanSlot}</dd></div>
         </dl>
-        <Honest>
-          This sweep uses the older projection in <code>lib/decoders.ts</code>, which recognizes two record shapes. Open
-          any address in the Account view for the full schema decode.
-        </Honest>
+        <Note>
+          Open an address to view its decoded fields.
+        </Note>
       </article>
       <section className="xp-panel">
         <p className="eyebrow">Accounts observed</p>
@@ -1139,14 +1114,14 @@ function ScanView({ state }: Readonly<{ state: Async<Readonly<{ facts: Connectio
 }
 
 function RecordView({ state }: Readonly<{ state: Async<RecordObservation> }>) {
-  if (state.kind === 'idle') return <Notice kind="quiet" title="Records are headerless content." message="Supply the authenticated schema/release ID and content digest; both PDAs are derived, both are fetched at one finalized floor, and the staging cursor is required to be absent." />;
+  if (state.kind === 'idle') return <Notice kind="quiet" title="Find a record." message="Enter its schema or release ID and content digest to load the record and its publication status." />;
   if (state.kind === 'loading') return <Notice kind="loading" title="Reading the exact record pair" message={state.message} />;
   if (state.kind === 'error') return <Notice kind="error" title="Record observation refused" message={state.message} />;
   const observation = state.value;
   return (
     <article className="account-card">
       <div className="card-topline">
-        <p className="account-kind">Structural record evidence</p>
+        <p className="account-kind">Record publication status</p>
         <Chip tone={observation.status === 'structurally-final' ? 'pass' : 'fail'}>{observation.status}</Chip>
       </div>
       <p className="observation">Finalized floor {observation.floorSlot} · content bytes {observation.contentBytes ?? 'unavailable'}</p>
@@ -1159,7 +1134,7 @@ function RecordView({ state }: Readonly<{ state: Async<RecordObservation> }>) {
           </li>
         ))}
       </ul>
-      <Honest>Structural finality is not a claim that the content has valid protocol semantics. Open the record in the Account view to decode it against its own magic.</Honest>
+      <Note>Open the record address to view its decoded fields.</Note>
     </article>
   );
 }

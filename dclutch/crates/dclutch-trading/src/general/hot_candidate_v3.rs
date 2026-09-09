@@ -82,6 +82,10 @@ use crate::general::collection_v1::{
     general_order_len_v2, general_signed_order_terms_len_v2,
 };
 
+#[path = "hot_candidate_v3/verify_preplan.rs"]
+mod verify_preplan;
+pub use verify_preplan::{GeneralVerifyPreplanErrorV3, seed_general_verify_preplan_terminal_v3};
+
 /// Exact common scalar-register count in the General Hot38 ABI.
 ///
 /// Coordinates 0..=89 are the settlement bank; 90..=150 are the GEN-SEVEN
@@ -7883,6 +7887,7 @@ mod tests {
             expected_row_index: 0,
             expected_revision: 0,
         };
+        verify_preplan::assert_terminal_seed_controls(&view);
         // Give the borrowed empty states stable storage before using the view.
         let empty_cursor = view.cursor_before.to_vec();
         let empty_result = view.verified_before.to_vec();

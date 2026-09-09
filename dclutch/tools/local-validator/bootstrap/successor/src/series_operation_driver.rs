@@ -1,0 +1,524 @@
+//! Production Series operation inputs and durable local/devnet transport.
+//!
+//! A source is emitted by the typed native constructor, then reauthenticated
+//! against finalized selected accounts on every acquisition. It grants no
+//! authority by itself. Journal execution reuses the Series terminal engine.
+
+use super::*;
+use crate::cluster::{ClusterOriginV1, DEVNET_ACKNOWLEDGMENT_FLAG, ExpectedClusterV1};
+use crate::rpc::WritePolicyV1;
+use dclutch_operator::series_intent_v1::SeriesOperationIntentV1;
+
+pub(crate) const LOCAL_COMMAND: &str = "local-private-validator-series-act-v1";
+pub(crate) const DEVNET_COMMAND: &str = "devnet-series-act-v1";
+const SOURCE_SCHEMA: &str = "dclutch-series-operation-source-v1";
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct SeriesOperationSourceV1 {
+    schema: String,
+    genesis_hash: String,
+    payer: String,
+    lookup_table: String,
+    lookup_table_sha256: String,
+    accepted_root: String,
+    accepted_request_base64: String,
+    current_source: SeriesCurrentSourceCorpusV1,
+    acquisition: SeriesHotAcquisitionRecipeV2,
+}
+
+impl DecodedSeriesCurrentSourceV1 {
+    fn document(&self) -> Result<SeriesCurrentSourceCorpusV1> {
+        Ok(SeriesCurrentSourceCorpusV1 {
+            template_occurrence_count: self.template_occurrence_count,
+            consume_shadow_certificate_program: hex32(
+                self.consume_shadow_certificate_program.to_bytes(),
+            ),
+            prepare_fixed_data_lengths: self.prepare_fixed_data_lengths.to_vec(),
+            prepare_ticket_rent_lamports: self.prepare_ticket_rent_lamports,
+            prepare_projected_initialize_base64: BASE64.encode(self.prepare_projected_initialize),
+            prepare_projected_open_base64: BASE64.encode(self.prepare_projected_open),
+            prepare_replay_initialize_base64: BASE64.encode(self.prepare_replay_initialize),
+            prepare_escrow_open_base64: BASE64.encode(self.prepare_escrow_open),
+            prepare_escrow_lock_base64: BASE64.encode(self.prepare_escrow_lock),
+            consume_fixed_data_lengths: self.consume_fixed_data_lengths.to_vec(),
+            consume_lock_base64: BASE64.encode(self.consume_lock),
+            consume_core_base64: BASE64.encode(self.consume_core),
+            consume_realize_base64: BASE64.encode(self.consume_realize),
+            consume_claims_base64: BASE64.encode(self.consume_claims),
+            consume_funding_count: self.consume_funding_count,
+            expire_fixed_data_lengths: self.expire_fixed_data_lengths.to_vec(),
+            expire_refund_base64: BASE64.encode(self.expire_refund),
+            expire_close_vault_base64: BASE64.encode(self.expire_close_vault),
+            expire_close_replay_base64: BASE64.encode(self.expire_close_replay),
+            expire_projected_abort_base64: BASE64.encode(self.expire_projected_abort),
+            expire_permit_expiry_base64: BASE64.encode(
+                self.expire_permit_expiry.encode().map_err(|error| {
+                    refusal(format!("Series permit source encoding: {error:?}"))
+                })?,
+            ),
+            expire_core_base64: BASE64.encode(
+                self.expire_core
+                    .encode()
+                    .map_err(|error| refusal(format!("Series Core source encoding: {error:?}")))?,
+            ),
+        })
+    }
+}
+
+/// Emit the first production continuation from the same typed source that
+/// constructed its accepted native Prepare instruction. No raw corpus entry
+/// or physical privilege is accepted from a launcher.
+pub(crate) fn write_prepare_source(
+    path: &Path,
+    input: &SeriesPrepareAddressFrameV1<'_>,
+    selected: &SeriesSelectedHotReportV5,
+    genesis_hash: String,
+    lookup: &ObservedAccount,
+) -> Result<String> {
+    let (acquisition, current) = prepare_source_from_addresses_v1(input)?;
+    let request = SeriesActionRequestV3::decode(&selected.selected.request_bytes)
+        .map_err(|error| refusal(format!("Series accepted request decode: {error:?}")))?;
+    let _intent = SeriesOperationIntentV1::from_request(selected.roles.root.to_bytes(), request)
+        .map_err(|error| refusal(format!("Series accepted intent: {error:?}")))?;
+    let source = SeriesOperationSourceV1 {
+        schema: SOURCE_SCHEMA.into(),
+        genesis_hash,
+        payer: input.payer.to_string(),
+        lookup_table: lookup.key.to_string(),
+        lookup_table_sha256: sha256_hex(&lookup.data),
+        accepted_root: selected.roles.root.to_string(),
+        accepted_request_base64: BASE64.encode(&selected.selected.request_bytes),
+        current_source: current.document()?,
+        acquisition,
+    };
+    create_series_canonical_json_v1(path, &source, "Series operation source")?;
+    Ok(sha256_hex(&fs::read(path)?))
+}
+
+/// One operation, using the same native acquisition and durable packet engine
+/// on either admitted cluster. A public origin is bound to the actual devnet
+/// genesis; no local validator path is invented for it.
+pub(crate) fn run(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<()> {
+    let mut values = BTreeMap::new();
+    let mut execute = false;
+    let mut args = arguments.into_iter();
+    while let Some(flag) = args.next() {
+        if flag == "--execute" {
+            if execute {
+                return Err(refusal("Series act repeats --execute"));
+            }
+            execute = true;
+            continue;
+        }
+        if !matches!(
+            flag.as_str(),
+            "--source"
+                | "--expected-source-sha256"
+                | "--rpc-url"
+                | "--journal"
+                | "--fee-payer-keypair"
+                | "--ledger"
+                | DEVNET_ACKNOWLEDGMENT_FLAG
+        ) {
+            return Err(refusal(format!("Series act rejects {flag}")));
+        }
+        let value = args
+            .next()
+            .ok_or_else(|| refusal(format!("Series act {flag} needs a value")))?;
+        if values.insert(flag.clone(), value).is_some() {
+            return Err(refusal(format!("Series act repeats {flag}")));
+        }
+    }
+    let required = |flag: &str| {
+        values
+            .get(flag)
+            .cloned()
+            .ok_or_else(|| refusal(format!("Series act requires {flag}")))
+    };
+    let origin = ClusterOriginV1::parse(
+        &required("--rpc-url")?,
+        values.get(DEVNET_ACKNOWLEDGMENT_FLAG).map(String::as_str),
+    )?;
+    expected.authenticate(&origin)?;
+    let source_path = PathBuf::from(required("--source")?);
+    let journal_path = PathBuf::from(required("--journal")?);
+    if !source_path.is_absolute() || !journal_path.is_absolute() || journal_path == source_path {
+        return Err(refusal(
+            "Series source and journal require distinct absolute paths",
+        ));
+    }
+    let bytes = fs::read(&source_path)?;
+    let source_sha256 = sha256_hex(&bytes);
+    if source_sha256 != required("--expected-source-sha256")? {
+        return Err(refusal("Series operation source digest changed"));
+    }
+    let source: SeriesOperationSourceV1 = serde_json::from_slice(&bytes)?;
+    if source.schema != SOURCE_SCHEMA || source.acquisition.sequence != 0 {
+        return Err(refusal(
+            "Series operation source schema or sequence changed",
+        ));
+    }
+    let origin_identity = match expected {
+        ExpectedClusterV1::OwnedLoopback => {
+            let path = PathBuf::from(required("--ledger")?);
+            if !path.is_absolute() || !path.is_dir() || fs::canonicalize(&path)? != path {
+                return Err(refusal(
+                    "Series local operation needs its canonical existing ledger",
+                ));
+            }
+            SeriesLedgerIdentityV1::admit(path.display().to_string(), source.genesis_hash.clone())?
+        }
+        ExpectedClusterV1::Devnet => {
+            if values.contains_key("--ledger") {
+                return Err(refusal(
+                    "Series devnet operation does not accept a local ledger",
+                ));
+            }
+            let mut identity = SeriesLedgerIdentityV1 {
+                canonical_ledger_path: String::new(),
+                cluster_origin: Some(origin.url().to_owned()),
+                genesis_hash: source.genesis_hash.clone(),
+                identity_sha256: String::new(),
+            };
+            identity.identity_sha256 = ledger_identity_digest_v1(&identity)?;
+            authenticate_ledger_identity_v1(&identity)?;
+            identity
+        }
+    };
+    let mut rpc = Rpc::connect_cluster(
+        &origin,
+        if execute {
+            WritePolicyV1::Writes
+        } else {
+            WritePolicyV1::ReadsOnly
+        },
+    )?;
+    let genesis = rpc.call("getGenesisHash", &serde_json::json!([]))?;
+    if genesis.as_str() != Some(&source.genesis_hash) {
+        return Err(refusal("Series operation genesis changed"));
+    }
+    let payer = parse_pubkey(&source.payer, "Series operation payer")?;
+    let lookup = parse_pubkey(&source.lookup_table, "Series operation lookup table")?;
+    let decoded = DecodedSeriesCurrentSourceV1::decode(&source.current_source)?;
+    let accepted = decode_base64(&source.accepted_request_base64, "Series accepted request")?;
+    let accepted_request = SeriesActionRequestV3::decode(&accepted)
+        .map_err(|error| refusal(format!("Series accepted request: {error:?}")))?;
+    let intent = SeriesOperationIntentV1::from_request(
+        parse_pubkey(&source.accepted_root, "Series accepted root")?.to_bytes(),
+        accepted_request,
+    )
+    .map_err(|error| refusal(format!("Series intent: {error:?}")))?;
+    let current = if journal_path.exists() {
+        Some(read_series_terminal_journal_file_v1(&journal_path)?)
+    } else {
+        None
+    };
+    if let Some(current) = &current {
+        if current.campaign_sha256 != source_sha256 || current.ledger != origin_identity {
+            return Err(refusal(
+                "Series operation journal changed source or cluster",
+            ));
+        }
+        if current.phase == SeriesTerminalJournalPhaseV1::Finalized {
+            print_series_terminal_progress_v1(
+                &journal_path,
+                current,
+                "finalized",
+                "Accepted packet and native poststate remain durable.",
+            );
+            return Ok(());
+        }
+        if matches!(
+            current.phase,
+            SeriesTerminalJournalPhaseV1::Dispatching | SeriesTerminalJournalPhaseV1::Submitted
+        ) {
+            if let Some((journal, _)) = try_finalize_landed_series_action_v1(
+                &mut rpc,
+                &journal_path,
+                current,
+                &decoded,
+                lookup,
+                &source.lookup_table_sha256,
+            )? {
+                print_series_terminal_progress_v1(
+                    &journal_path,
+                    &journal,
+                    "finalized",
+                    "Recovered exact accepted packet and native poststate.",
+                );
+                return Ok(());
+            }
+        }
+    }
+    let acquired = acquire_current_series_selected_v1(
+        &mut rpc,
+        &source.acquisition,
+        &decoded,
+        payer,
+        lookup,
+        SeriesCampaignPolicyV1::for_act(intent.action),
+    )?;
+    let fresh_request = SeriesActionRequestV3::decode(&acquired.selected.selected.request_bytes)
+        .map_err(|error| refusal(format!("Series fresh request: {error:?}")))?;
+    intent
+        .require_matches(acquired.selected.roles.root.to_bytes(), fresh_request)
+        .map_err(|error| refusal(format!("Series fresh plan changed intent: {error:?}")))?;
+    let lookup_observed = operator_account_v1(
+        required_series_account_v1(&acquired.accounts, lookup, "Series lookup table")?,
+        acquired.observation,
+    )?;
+    authenticate_series_lookup_table_v1(&lookup_observed, lookup, &source.lookup_table_sha256)?;
+    authenticate_permissionless_series_signers_v1(&acquired.selected.instruction, payer)?;
+    let prepared = if let Some(current) = current {
+        reauthenticate_series_selected_action_v1(&current, &acquired.selected)?;
+        current
+    } else {
+        let planned = plan_series_terminal_journal_v1(
+            SeriesPlannerObservationV1 {
+                campaign_sha256: source_sha256,
+                ledger: origin_identity.clone(),
+                finalized_slot: acquired.observation.slot,
+                snapshot_sha256: acquired_series_snapshot_digest_v1(
+                    acquired.observation,
+                    &acquired.accounts,
+                ),
+            },
+            0,
+            &acquired.lifecycle,
+        )?;
+        let prestate = selected_projection_from_acquisition_v1(
+            &origin_identity,
+            &acquired.selected,
+            payer,
+            acquired.observation.slot,
+            &acquired.accounts,
+        )?;
+        let prepared =
+            prepare_series_terminal_journal_v1(&planned, &acquired.selected, prestate, payer)?;
+        create_series_terminal_journal_file_v1(&journal_path, &prepared)?;
+        prepared
+    };
+    if !execute {
+        print_series_terminal_progress_v1(
+            &journal_path,
+            &prepared,
+            "prepared",
+            "Native frame and observed prestate persisted; no signing key read.",
+        );
+        return Ok(());
+    }
+    let active = if prepared.phase == SeriesTerminalJournalPhaseV1::Prepared {
+        let key = Keypair::new_from_array(read_keypair_file(
+            Path::new(&required("--fee-payer-keypair")?),
+            "Series fee payer",
+        )?);
+        if key.pubkey() != payer {
+            return Err(refusal("Series signing wallet changed"));
+        }
+        dispatch_series_terminal_from_rpc_v1(
+            &mut rpc,
+            &journal_path,
+            &prepared,
+            &acquired.selected,
+            &key,
+            &[],
+            lookup,
+            &source.lookup_table_sha256,
+            &lookup_observed,
+        )?
+    } else {
+        prepared
+    };
+    if active.phase == SeriesTerminalJournalPhaseV1::Dispatching {
+        let packet = active
+            .packet
+            .as_ref()
+            .ok_or_else(|| refusal("Series dispatch omitted packet"))?;
+        let bytes = decode_series_packet_v1(&packet.signed)?;
+        let simulation_path = journal_path.with_extension("simulation.json");
+        if !simulation_path.exists() {
+            let simulation = rpc.simulate_versioned_v1("Series exact durable packet", &bytes)?;
+            let evidence = serde_json::json!({
+                "schema": "dclutch-series-exact-packet-simulation-v1",
+                "packetSha256": packet.signed.packet_sha256,
+                "packetBytes": bytes.len(),
+                "accountKeyCount": packet.resolved_account_keys.len(),
+                "simulation": simulation,
+            });
+            create_series_canonical_json_v1(
+                &simulation_path,
+                &evidence,
+                "Series packet simulation",
+            )?;
+            eprintln!("Series durable packet simulation: {evidence}");
+            if simulation
+                .get("value")
+                .unwrap_or(&simulation)
+                .get("err")
+                .is_none_or(|value| !value.is_null())
+            {
+                return Err(refusal(format!(
+                    "Series exact durable packet simulation refused: {simulation}"
+                )));
+            }
+        } else {
+            let evidence: serde_json::Value =
+                read_series_canonical_json_v1(&simulation_path, "Series packet simulation")?;
+            if evidence
+                .get("packetSha256")
+                .and_then(serde_json::Value::as_str)
+                != Some(&packet.signed.packet_sha256)
+                || evidence
+                    .pointer("/simulation/value/err")
+                    .or_else(|| evidence.pointer("/simulation/err"))
+                    .is_none_or(|value| !value.is_null())
+            {
+                return Err(refusal("Series persisted simulation changed or refused"));
+            }
+        }
+    }
+    let advanced = advance_series_terminal_from_rpc_v1(
+        &mut rpc,
+        &journal_path,
+        &active,
+        &acquired.selected,
+        lookup,
+        &source.lookup_table_sha256,
+        &lookup_observed,
+    )?;
+    match advanced {
+        SeriesTerminalRpcAdvanceV1::Finalized { journal, .. } => print_series_terminal_progress_v1(
+            &journal_path,
+            &journal,
+            "finalized",
+            "Exact packet and accepted native poststate are durable.",
+        ),
+        SeriesTerminalRpcAdvanceV1::Dispatching(journal)
+        | SeriesTerminalRpcAdvanceV1::Pending(journal) => print_series_terminal_progress_v1(
+            &journal_path,
+            &journal,
+            "pending",
+            "Rerun this command to recover the same signature; no fresh signature is authorized.",
+        ),
+    }
+    Ok(())
+}
+
+/// The Found entrance drives the same durable public operation command. A
+/// bounded local finality wait never creates another transaction identity.
+pub(crate) fn execute_local_prepare_source(
+    rpc: &mut Rpc,
+    source_path: &Path,
+    source_sha256: &str,
+    rpc_url: &str,
+    ledger: &Path,
+    payer_keypair: &Path,
+    journal_path: &Path,
+) -> Result<(crate::model::TransactionEvidence, serde_json::Value)> {
+    let arguments = vec![
+        "--source".into(),
+        source_path.display().to_string(),
+        "--expected-source-sha256".into(),
+        source_sha256.into(),
+        "--rpc-url".into(),
+        rpc_url.into(),
+        "--ledger".into(),
+        ledger.display().to_string(),
+        "--journal".into(),
+        journal_path.display().to_string(),
+        "--fee-payer-keypair".into(),
+        payer_keypair.display().to_string(),
+        "--execute".into(),
+    ];
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
+        run(arguments.clone(), ExpectedClusterV1::OwnedLoopback)?;
+        let journal = read_series_terminal_journal_file_v1(journal_path)?;
+        if let Some(finalization) = &journal.finalization {
+            let signature = Signature::from_str(&finalization.signature)
+                .map_err(|error| refusal(format!("Series finalized signature: {error}")))?;
+            let finalized = rpc
+                .finalized_signed_packet("durable first Series Prepare", signature, false)?
+                .ok_or_else(|| refusal("Series finalized journal omitted transaction history"))?;
+            let simulation = read_series_canonical_json_v1(
+                &journal_path.with_extension("simulation.json"),
+                "Series packet simulation",
+            )?;
+            return Ok((finalized.evidence, simulation));
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(refusal(format!(
+                "Series Prepare remains pending; resume the same source and journal {}",
+                journal_path.display()
+            )));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(400));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn series_operation_source_round_trips_the_native_child_bank() {
+        use crate::series_found_prepare_campaign::{
+            compile_series_found_prepare_selection_v1,
+            tests::{compiler_input, prepared_founder},
+        };
+        let founder = prepared_founder();
+        let input = compiler_input(
+            &founder,
+            Pubkey::new_unique(),
+            &founder.admitted.tickets()[0],
+        );
+        let compiled = compile_series_found_prepare_selection_v1(
+            input,
+            ContentId::new([61; 32]).expect("certificate"),
+        )
+        .expect("native complete compiler");
+        let template = dclutch_trading::series::template_content_id(founder.admitted.template())
+            .expect("native Template");
+        let release = crate::series_found_prepare_driver::series_current_release_v1(
+            &compiled,
+            founder.admitted.template(),
+            ContentId::new([61; 32]).expect("certificate"),
+            2,
+            1,
+        )
+        .expect("native release input");
+        let decoded = DecodedSeriesCurrentSourceV1::from_release_v1(release).expect("typed source");
+        let document = decoded.document().expect("native document encoders");
+        let bytes = serde_json::to_vec(&document).expect("source document");
+        let reread: SeriesCurrentSourceCorpusV1 =
+            serde_json::from_slice(&bytes).expect("hostile document read");
+        let round_trip =
+            DecodedSeriesCurrentSourceV1::decode(&reread).expect("native child decoders");
+        let original = emit_current_series_release_source_v5(decoded.input(template))
+            .expect("original native source");
+        let recovered = emit_current_series_release_source_v5(round_trip.input(template))
+            .expect("recovered native source");
+        assert_eq!(original, recovered);
+        let mut hostile = reread;
+        hostile.prepare_fixed_data_lengths.pop();
+        assert_eq!(
+            DecodedSeriesCurrentSourceV1::decode(&hostile)
+                .err()
+                .expect("truncated native geometry")
+                .to_string(),
+            "REFUSED Series terminal: Series Prepare fixed-width corpus changed cardinality"
+        );
+    }
+
+    #[test]
+    fn series_operation_cluster_guard_refuses_cross_cluster_before_files() {
+        let args = vec!["--rpc-url".into(), "http://127.0.0.1:31100".into()];
+        assert_eq!(
+            run(args, ExpectedClusterV1::Devnet)
+                .expect_err("devnet verb cannot use local bank")
+                .to_string(),
+            "public executor requires acknowledged Solana devnet and refuses loopback"
+        );
+    }
+}

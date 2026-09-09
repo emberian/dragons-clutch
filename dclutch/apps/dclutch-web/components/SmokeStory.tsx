@@ -26,42 +26,42 @@ export default function SmokeStory() {
 
     <section className="trade-v3-hero">
       <div>
-        <p className="eyebrow">The smoke · three markets, three kinds of truth</p>
-        <h1>Can a market settle itself?<br /><em>Three public tests.</em></h1>
-        <p>A dClutch market is a promise: put money behind an answer, and when the facts arrive, the right side gets paid — automatically, with nobody in the middle to appeal to or be surprised by. Before anything real runs on this protocol, we will run three small public markets on Solana devnet. Each one tests a different way the facts can arrive.</p>
+        <p className="eyebrow">Solana devnet examples</p>
+        <h1>Three ways a market<br /><em>reaches an outcome.</em></h1>
+        <p>These example markets use a price feed, a report from another network, and a fallback when a source stops responding. Each market sets its rules before opening.</p>
       </div>
       <aside>
-        <span>Where this stands</span>
+        <span>Market status</span>
         <strong>{live ? 'Live on Solana devnet' : 'Not live yet'}</strong>
         {live
-          ? <p>The protocol substrate is deployed on Solana devnet — at this cohort&apos;s addresses, which change with every redeploy — and the markets below link straight to their live on-chain accounts as each one is founded. Devnet SOL is free test money — this is a public rehearsal, not an investment.</p>
-          : <p>The seven protocol programs are deployed on Solana devnet at the addresses this build names; devnet is redeployed from scratch and those addresses change with it. None of these three smoke markets exists yet. Each one is rehearsed on local test machines against those same compiled programs — the graduation market below now opens there, start to finish, on a real test network. When each market is founded on devnet, this page will link straight to its account.</p>}
+          ? <p>Open the linked markets below to view their accounts and activity. They use devnet test tokens.</p>
+          : <p>These example markets are not listed on devnet yet. Their links will appear below when available.</p>}
       </aside>
     </section>
 
     <section className="trade-v3-card">
-      <header><span>01</span><div><h2>Oracle truth · the price market</h2><p>Will SOL/USD finish inside a chosen range at a chosen time?</p></div></header>
-      <p className="direct-status">The answer comes from Pyth, the same price feed most of Solana already trusts. When the window closes, anyone can submit Pyth&apos;s signed price and the market pays the range it landed in. Nobody decides the outcome — the price does. If Pyth publishes nothing usable in the window, the market falls to a fallback outcome that was named before it opened, so your money is never stuck.</p>
+      <header><span>01</span><div><h2>A price feed</h2><p>Which range will SOL/USD finish in?</p></div></header>
+      <p className="direct-status">The market reads a Pyth price for its chosen time window and selects the range containing that price. Claims on the selected range can then be redeemed. If no usable price arrives before the deadline, the market uses its preset fallback.</p>
       {marketLink(SMOKE_MARKETS_V1.price)}
     </section>
 
     <section className="trade-v3-card">
-      <header><span>02</span><div><h2>Cross-chain truth · the graduation market</h2><p>Did this token graduate on Solana mainnet? A market on devnet pays out on it.</p></div></header>
-      <p className="direct-status">The event happens on one network; the market lives on another. A disclosed messenger reads mainnet and signs exactly what it saw — the raw bytes, never an interpretation. You are trusting that messenger not to lie, and the market says so up front instead of hiding it. Two things keep it honest: every statement it signs can be checked against mainnet by anyone, forever; and if it goes silent, the market does not hang — it walks to its named fallback.</p>
+      <header><span>02</span><div><h2>A report from another network</h2><p>Did this token graduate on Solana mainnet?</p></div></header>
+      <p className="direct-status">A designated reporter reads the token&apos;s mainnet account and signs a report for the devnet market. The market relies on that reporter for the observation. You can compare the signed report with the mainnet account. If the reporter stops responding, the market uses its preset fallback after the deadline.</p>
       {marketLink(SMOKE_MARKETS_V1.graduation)}
     </section>
 
     <section className="trade-v3-card">
-      <header><span>03</span><div><h2>Adversarial truth · the abandoned market</h2><p>We will switch the messenger off on purpose. Then you finish the market and get paid for it.</p></div></header>
-      <p className="direct-status">This is the test most markets never dare to run: what happens when everyone responsible walks away? Here, the market has already set money aside for exactly this moment. Once the deadline passes, any wallet — yours — can send one ordinary transaction that closes the market to its pre-announced fallback outcome and collects the posted bounty for doing it. No permission, no account, no special software. <strong>That is how it will work; none of these markets is open yet</strong>, so today this is a description rather than an invitation.</p>
+      <header><span>03</span><div><h2>A source stops responding</h2><p>Submit the fallback and collect the bounty.</p></div></header>
+      <p className="direct-status">In this example, the reporter is switched off. Once the deadline passes, anyone can submit the market&apos;s preset fallback outcome and collect its posted bounty.</p>
       <div className="direct-actions">
         <Anchor className="secondary-action" href="/bounty">How to collect the bounty →</Anchor>
       </div>
     </section>
 
     <footer className="product-footer">
-      <span>Three markets, founded once, run in public, then wound down</span>
-      <span>{live ? 'The substrate is live on devnet; each market links above as it founds' : 'Live dates: none yet — this page will say so when that changes'}</span>
+      <span>Example markets on Solana devnet</span>
+      <span>{live ? 'Available markets are linked above' : 'No launch date set'}</span>
     </footer>
   </PageShell>;
 }

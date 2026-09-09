@@ -1,0 +1,2744 @@
+//! Production host projection of emitted Hot artifact semantics.
+//!
+//! This is the Hot executor's register pipeline run on the host, through the
+//! same shared kernels the chain runs, in the same phase order
+//! (`hot_v3.rs::process_hot_execution_v3` is the reference):
+//!
+//! 1. seed the parent request digest and the trusted-environment registers,
+//! 2. project the account observations through the AccountProfile,
+//! 3. project the lifecycle policy's current-Rent quotes,
+//! 4. seed native-signature identities from the Ed25519 evidence (Signed
+//!    request profiles),
+//! 5. project the family request through the RequestProfile,
+//! 6. run the lifecycle preplan (which derives every to-be-created PDA),
+//! 7. execute the transition fold, or the selected authenticated accelerator's
+//!    opt-in candidate projector for admitted AOT,
+//! 8. project the Effect program (which yields the child-request bank).
+//!
+//! One deliberate difference from the chain: where the chain *refuses* an
+//! account whose key differs from a derivation, this engine *reports* the
+//! derived key so a caller can acquire it and re-run. Construction
+//! is the authority pipeline with adoption in place of refusal; the on-chain
+//! gate then runs the refusing version over the adopted bundle.
+
+use dclutch_claims::signed_delta_v3::{SIGNED_DELTA_PLAN_MAGIC_V3, SignedDeltaPlanV3};
+use dclutch_core_contract::ContentId;
+use dclutch_custody::{
+    CustodyRequestLayoutV1, DELEGATED_CUSTODY_REQUEST_MAGIC_V2, PROJECTED_CUSTODY_REQUEST_BYTES_V1,
+    PROJECTED_CUSTODY_REQUEST_MAGIC_V1, ProjectedCustodyCallerSeedsV1, ProjectedCustodyRequestV1,
+};
+use dclutch_market::capability_program::hot_v3::HOT_PARENT_REQUEST_DIGEST_IDENTITY_V3;
+use dclutch_market::execution_strategy::shadow_digest_v3::{
+    AcceleratorCallerKindV1, accelerator_caller_authority_digest_v1,
+};
+use dclutch_market::execution_strategy::v2::{
+    BankTransportV2, ExecutionStrategyProgramV2, StrategyDispositionV2, classify_bank_transport_v2,
+};
+use dclutch_market::rent::lifecycle_v2::LifecycleRentCreditV2;
+use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_vm::account_profile::{
+    AccountObservationV1,
+    lifecycle_v3::{
+        AuthenticatedRentCreditV3, AuthenticatedRentMinimumV3, AuthenticatedRentQuoteV5,
+        LifecycleContextV3, LifecycleOperationV3, LifecycleProtectedRegisterBuffersV3,
+        LifecycleRegistersV3, LifecycleRentQuoteBuffersV5, LifecycleSeedInputValueV3,
+        PlannedObservationsV3, StateLifecyclePlanV3, StateLifecyclePolicyV5,
+        plan_lifecycle_with_protected_outputs_atomic,
+    },
+    v2::{
+        AccountPrestateV2, AccountProfileV2, DynamicFixedSpanV2, ProjectionRegistersV2,
+        TrustedEnvironmentV2, derive_effect_permissions,
+        derive_effect_permissions_with_dynamic_spans, project_atomic as project_accounts_atomic,
+        project_dynamic_fixed_spans_atomic,
+    },
+};
+use dclutch_vm::effect::{
+    v2::{AccountInput, AccountPermission},
+    v3::{ProjectionV3, ResolvedInvocationV3},
+    v4::{
+        ProgramV4 as EffectProgramV4, ResolvedWriteRangeV4,
+        SCHEMA_RELEASE_ID_V4 as EFFECT_SCHEMA_RELEASE_ID_V4, project_atomic_visiting,
+    },
+    v5::{ProgramV5 as EffectProgramV5, SCHEMA_RELEASE_ID_V5 as EFFECT_SCHEMA_RELEASE_ID_V5},
+};
+use dclutch_vm::request_profile::{
+    ProjectionRegisterKindV1, ProjectionRegisterSpaceV1, ProjectionRegistersV1, ProjectionTargetV1,
+    RequestProfileV1, SCHEMA_RELEASE_ID as REQUEST_PROFILE_SCHEMA_ID_V1,
+    project_atomic as project_request_atomic,
+    v2::{
+        NativeEd25519InstructionViewV1, NativeSignatureRegistersV1,
+        REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID, RequestProfileV2, seed_authenticated_signers_atomic,
+    },
+    v3::{REQUEST_PROFILE_V3_SCHEMA_RELEASE_ID, RequestProfileV3},
+};
+use dclutch_vm::v3::{
+    HEADER_BYTES as TRANSITION_HEADER_BYTES, INSTRUCTION_BYTES as TRANSITION_INSTRUCTION_BYTES,
+    ProgramV3 as TransitionProgramV3, RegisterInput, RegisterOutput, execute_fold_atomic,
+};
+use sha2::{Digest, Sha256};
+use solana_program::{hash::hash, pubkey::Pubkey, rent::Rent};
+use solana_sdk_ids::system_program;
+
+/// Stable refusal from pure Hot profile, request, lifecycle, transition, and effect projection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HotProjectionErrorV1 {
+    /// AccountProfile geometry or alias traversal refused.
+    Profile(u32),
+    /// Request, account, transition, or Effect projection refused at the named phase.
+    Projection(&'static str),
+    /// Dynamic fixed-span derivation refused at the named phase.
+    Spans(&'static str),
+    /// Lifecycle planning refused at the named phase.
+    Lifecycle(&'static str),
+    /// Checked width or offset arithmetic overflowed.
+    Arithmetic,
+}
+
+/// Release-waist facts used by pure Hot projection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HotProjectionWaistV1 {
+    /// Current Trading program.
+    pub trading_program: Pubkey,
+    /// Immutable execution release-set identity.
+    pub release_set: [u8; 32],
+}
+
+/// One exact projected Dealer child invocation and its logical frame start.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DealerChildInvocationV1<'a> {
+    /// Child role selected by the decoded Effect program.
+    pub role: dclutch_vm::effect::v2::FixedRole,
+    /// Logical coordinate at which the child frame begins.
+    pub fixed_account_start: u16,
+    /// Exact projected child request bytes.
+    pub request: &'a [u8],
+}
+
+/// One production-derived child caller-authority coordinate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DealerChildAuthorityV1 {
+    /// Logical coordinate carrying the authority.
+    pub coordinate: usize,
+    /// Canonical caller-authority PDA.
+    pub authority: Pubkey,
+    /// SHA-256 of the exact projected request.
+    pub request_digest: [u8; 32],
+}
+
+/// Exact inputs for one admitted accelerator caller-authority PDA.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DealerAdmittedAuthorityInputV1 {
+    /// Current Trading program owning the authority.
+    pub trading_program: Pubkey,
+    /// Immutable execution release set.
+    pub release_set: [u8; 32],
+    /// Core Market.
+    pub market: Pubkey,
+    /// Dealer capability root.
+    pub root: Pubkey,
+    /// Domain-separated digest of the exact family request.
+    pub family_request_digest: [u8; 32],
+    /// Canonical accelerator chunk ordinal.
+    pub chunk_index: u32,
+}
+
+/// Stable refusal from Dealer child/caller authority discovery.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DealerAuthorityDiscoveryErrorV1 {
+    /// The Effect selected a role or request kind outside Dealer's production routes.
+    UnsupportedRoute,
+    /// Request bytes refused their native hostile decoder.
+    InvalidRequest,
+    /// A required content identity was zero.
+    ZeroIdentity,
+}
+
+/// Derive a Dealer child caller authority from the exact Effect projection.
+pub fn derive_dealer_child_authority_v1(
+    invocation: DealerChildInvocationV1<'_>,
+    release_set: [u8; 32],
+    trading_program: Pubkey,
+) -> Result<DealerChildAuthorityV1, DealerAuthorityDiscoveryErrorV1> {
+    use dclutch_vm::effect::v2::FixedRole;
+
+    let request_digest = hash(invocation.request).to_bytes();
+    if invocation.role == FixedRole::Custody
+        && (invocation.request.len() == PROJECTED_CUSTODY_REQUEST_BYTES_V1
+            || invocation
+                .request
+                .get(..PROJECTED_CUSTODY_REQUEST_MAGIC_V1.len())
+                == Some(PROJECTED_CUSTODY_REQUEST_MAGIC_V1.as_slice()))
+    {
+        let request = ProjectedCustodyRequestV1::decode(invocation.request)
+            .map_err(|_| DealerAuthorityDiscoveryErrorV1::InvalidRequest)?;
+        if request.caller_program != trading_program.to_bytes() {
+            return Err(DealerAuthorityDiscoveryErrorV1::InvalidRequest);
+        }
+        let seeds = ProjectedCustodyCallerSeedsV1::new(request, request_digest);
+        return Ok(DealerChildAuthorityV1 {
+            coordinate: usize::from(invocation.fixed_account_start),
+            authority: Pubkey::find_program_address(&seeds.as_slices(), &trading_program).0,
+            request_digest,
+        });
+    }
+    let (market, context) = match invocation.role {
+        FixedRole::Custody => custody_market_and_context_v1(invocation.request)?,
+        FixedRole::Claims
+            if invocation.request.get(..SIGNED_DELTA_PLAN_MAGIC_V3.len())
+                == Some(SIGNED_DELTA_PLAN_MAGIC_V3.as_slice()) =>
+        {
+            let request = SignedDeltaPlanV3::decode(invocation.request)
+                .map_err(|_| DealerAuthorityDiscoveryErrorV1::InvalidRequest)?;
+            (request.market(), request.request_id())
+        }
+        _ => return Err(DealerAuthorityDiscoveryErrorV1::UnsupportedRoute),
+    };
+    let seeds = CallerAuthoritySeedsV1::new(
+        ContentId::new(release_set).map_err(|_| DealerAuthorityDiscoveryErrorV1::ZeroIdentity)?,
+        market,
+        ExecutionRoleV1::Trading,
+        context,
+        request_digest,
+    )
+    .map_err(|_| DealerAuthorityDiscoveryErrorV1::ZeroIdentity)?;
+    Ok(DealerChildAuthorityV1 {
+        coordinate: usize::from(invocation.fixed_account_start),
+        authority: Pubkey::find_program_address(&seeds.as_slices(), &trading_program).0,
+        request_digest,
+    })
+}
+
+/// Derive one release-pinned admitted accelerator caller authority.
+pub fn derive_dealer_admitted_authority_v1(
+    input: DealerAdmittedAuthorityInputV1,
+) -> Result<Pubkey, DealerAuthorityDiscoveryErrorV1> {
+    let role_request_digest = accelerator_caller_authority_digest_v1(
+        AcceleratorCallerKindV1::Admitted,
+        ContentId::new(input.family_request_digest)
+            .map_err(|_| DealerAuthorityDiscoveryErrorV1::ZeroIdentity)?,
+        input.chunk_index,
+    )
+    .map_err(|_| DealerAuthorityDiscoveryErrorV1::InvalidRequest)?;
+    let seeds = CallerAuthoritySeedsV1::new(
+        ContentId::new(input.release_set)
+            .map_err(|_| DealerAuthorityDiscoveryErrorV1::ZeroIdentity)?,
+        input.market.to_bytes(),
+        ExecutionRoleV1::Trading,
+        input.root.to_bytes(),
+        role_request_digest.to_bytes(),
+    )
+    .map_err(|_| DealerAuthorityDiscoveryErrorV1::ZeroIdentity)?;
+    Ok(Pubkey::find_program_address(&seeds.as_slices(), &input.trading_program).0)
+}
+
+fn custody_market_and_context_v1(
+    request: &[u8],
+) -> Result<([u8; 32], [u8; 32]), DealerAuthorityDiscoveryErrorV1> {
+    let base = if request.get(..8) == Some(DELEGATED_CUSTODY_REQUEST_MAGIC_V2.as_slice()) {
+        dclutch_custody::DelegatedCustodyRequestLayoutV2::BASE
+    } else {
+        0
+    };
+    let read = |offset: usize| {
+        request
+            .get(base + offset..base + offset + 32)
+            .and_then(|bytes| bytes.try_into().ok())
+            .ok_or(DealerAuthorityDiscoveryErrorV1::InvalidRequest)
+    };
+    Ok((
+        read(CustodyRequestLayoutV1::MARKET)?,
+        read(CustodyRequestLayoutV1::CONTEXT)?,
+    ))
+}
+
+mod profile_ops {
+    use super::HotProjectionErrorV1;
+    use dclutch_vm::account_profile::v2::{
+        AccountProfileV2, PhysicalAccountDataGeometryV2, PhysicalAccountGeometryV2,
+    };
+
+    fn checked(profile: AccountProfileV2<'_>, spans: &[u32]) -> Result<bool, HotProjectionErrorV1> {
+        let dynamic = profile.uses_dynamic_fixed_spans();
+        if dynamic {
+            if spans.len() != usize::from(profile.dynamic_fixed_span_count()) {
+                return Err(HotProjectionErrorV1::Profile(line!()));
+            }
+        } else if !spans.is_empty() {
+            return Err(HotProjectionErrorV1::Profile(line!()));
+        }
+        Ok(dynamic)
+    }
+
+    pub fn logical_count(
+        profile: AccountProfileV2<'_>,
+        tail: u32,
+        spans: &[u32],
+    ) -> Result<usize, HotProjectionErrorV1> {
+        if checked(profile, spans)? {
+            profile.logical_account_count_with_dynamic_spans(tail, spans)
+        } else {
+            profile.logical_account_count(tail)
+        }
+        .map_err(|_| HotProjectionErrorV1::Profile(line!()))
+    }
+    pub fn representative(
+        profile: AccountProfileV2<'_>,
+        tail: u32,
+        spans: &[u32],
+        coordinate: usize,
+    ) -> Result<usize, HotProjectionErrorV1> {
+        if checked(profile, spans)? {
+            profile.representative_with_dynamic_spans(tail, spans, coordinate)
+        } else {
+            profile.representative(tail, coordinate)
+        }
+        .map_err(|_| HotProjectionErrorV1::Profile(line!()))
+    }
+    pub fn physical_count(
+        profile: AccountProfileV2<'_>,
+        tail: u32,
+        spans: &[u32],
+    ) -> Result<usize, HotProjectionErrorV1> {
+        if checked(profile, spans)? {
+            profile.physical_account_count_with_dynamic_spans(tail, spans)
+        } else {
+            profile.physical_account_count(tail)
+        }
+        .map_err(|_| HotProjectionErrorV1::Profile(line!()))
+    }
+    pub fn ordinal(
+        profile: AccountProfileV2<'_>,
+        tail: u32,
+        spans: &[u32],
+        coordinate: usize,
+    ) -> Result<usize, HotProjectionErrorV1> {
+        if checked(profile, spans)? {
+            profile.physical_account_ordinal_with_dynamic_spans(tail, spans, coordinate)
+        } else {
+            profile.physical_account_ordinal(tail, coordinate)
+        }
+        .map_err(|_| HotProjectionErrorV1::Profile(line!()))
+    }
+    pub fn geometry(
+        profile: AccountProfileV2<'_>,
+        tail: u32,
+        spans: &[u32],
+        ordinal: usize,
+    ) -> Result<PhysicalAccountGeometryV2, HotProjectionErrorV1> {
+        if checked(profile, spans)? {
+            profile.physical_account_geometry_with_dynamic_spans(tail, spans, ordinal)
+        } else {
+            profile.physical_account_geometry(tail, ordinal)
+        }
+        .map_err(|_| HotProjectionErrorV1::Profile(line!()))
+    }
+    #[allow(dead_code)]
+    fn _keep(_: PhysicalAccountDataGeometryV2) {}
+}
+
+/// One logical coordinate's account facts as the builder currently holds them.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ObservedAccountV1 {
+    /// Account key (a placeholder until an adoption round settles it).
+    pub key: [u8; 32],
+    /// Owner program.
+    pub owner: [u8; 32],
+    /// Native balance.
+    pub lamports: u64,
+    /// Exact account data.
+    pub data: Vec<u8>,
+    /// Transaction signer privilege at this coordinate.
+    pub signer: bool,
+    /// Writable privilege at this coordinate.
+    pub writable: bool,
+    /// Executable bit.
+    pub executable: bool,
+}
+
+/// Content digests substituted as projection keys for the shared runtime
+/// prefix, exactly as `logical_projection_key_v3` substitutes them on-chain.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ContentProjectionKeysV1 {
+    /// Selected config record digest (runtime coordinate 1).
+    pub selected_config: [u8; 32],
+    /// Product record digest (runtime coordinate 2).
+    pub product_root: [u8; 32],
+    /// Portfolio record digest (runtime coordinate 3).
+    pub portfolio: [u8; 32],
+    /// Linked basis record digest (runtime coordinate 4).
+    pub linked_basis: [u8; 32],
+}
+
+/// Everything the register pipeline consumes.
+pub struct EngineInputV1<'a> {
+    /// Decoded account profile.
+    pub profile: AccountProfileV2<'a>,
+    /// Request profile record bytes plus the schema the descriptor names.
+    pub request_profile_bytes: &'a [u8],
+    /// Schema release identity of the request profile.
+    pub request_profile_schema: [u8; 32],
+    /// Lifecycle policy record bytes.
+    pub lifecycle_bytes: &'a [u8],
+    /// Transition program record bytes.
+    pub transition_bytes: &'a [u8],
+    /// Effect program record bytes.
+    pub effect_bytes: &'a [u8],
+    /// Schema release identity of the effect program.
+    pub effect_schema: [u8; 32],
+    /// Selected action (for lifecycle plan selection).
+    pub action: u32,
+    /// Whether this admitted route is General's typed PlaceOrder action.
+    ///
+    /// `action` is an ordinal shared by capability families, so the host must
+    /// not infer General semantics from that number alone.
+    pub general_place_order: bool,
+    /// Whether this typed General request needs its structural Verify forecast.
+    pub general_verify_candidate: bool,
+    /// Release-waist facts.
+    pub waist: HotProjectionWaistV1,
+    /// Product-authenticated runtime item count.
+    pub tail_count: u32,
+    /// Family request bytes (after the Hot envelope).
+    pub family_request: &'a [u8],
+    /// Complete nested Hot instruction data (envelope plus request); the
+    /// native-signature message coordinates are relative to these bytes.
+    pub instruction_data: &'a [u8],
+    /// Ed25519 evidence instruction data, for Signed request profiles.
+    pub ed25519_evidence: Option<&'a [u8]>,
+    /// Top-level index of the Hot-carrying instruction (1 on the canonical
+    /// continuation: evidence at 0, Registry at 1).
+    pub native_message_instruction_index: u16,
+    /// Trusted current slot.
+    pub clock_slot: u64,
+    /// Market the envelope names.
+    pub market: [u8; 32],
+    /// Capability generation the envelope names.
+    pub generation: u64,
+    /// One observation per logical coordinate.
+    pub observations: &'a [ObservedAccountV1],
+    /// Content digests for the shared runtime prefix.
+    pub content_keys: ContentProjectionKeysV1,
+    /// Authenticated dynamic fixed-span widths, one per declared span; empty
+    /// for a profile that declares none. Derived by
+    /// [`derive_dynamic_span_widths`], never stated by a campaign.
+    pub span_counts: &'a [u32],
+    /// Current rent schedule.
+    pub rent: &'a Rent,
+}
+
+fn decode_execution_effect_program<'a>(
+    schema: [u8; 32],
+    bytes: &'a [u8],
+) -> Result<EffectProgramV4<'a>, ()> {
+    match schema {
+        EFFECT_SCHEMA_RELEASE_ID_V4 => EffectProgramV4::decode(bytes).map_err(|_| ()),
+        EFFECT_SCHEMA_RELEASE_ID_V5 => EffectProgramV5::decode(bytes)
+            .map(EffectProgramV5::base)
+            .map_err(|_| ()),
+        _ => Err(()),
+    }
+}
+
+/// One lifecycle-derived state address the builder must realize.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LifecycleStateDerivationV1 {
+    /// Representative logical coordinate holding the state.
+    pub coordinate: usize,
+    /// Adapter-derived PDA for that coordinate.
+    pub derived: Pubkey,
+    /// The plan the policy produced for it; absent on a discovery round, when
+    /// the observed key was not yet the derived one and the plan kernel was
+    /// not consulted.
+    pub plan: Option<StateLifecyclePlanV3>,
+}
+
+/// One resolved child invocation with its projected request.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DerivedInvocationV1 {
+    /// Route ordinal in the Effect program.
+    pub route: u16,
+    /// Invocation ordinal within the route.
+    pub invocation: u32,
+    /// The kernel-resolved invocation geometry.
+    pub resolved: ResolvedInvocationV3,
+    /// Exact projected child-request bytes for this invocation.
+    pub request: Vec<u8>,
+}
+
+/// Everything the pipeline derives.
+#[derive(Clone, Debug)]
+pub struct EngineOutputV1 {
+    /// Register bank presented to the selected execution strategy, after
+    /// request projection and lifecycle preplanning but before the transition.
+    pub input_scalars: Vec<u64>,
+    /// Identity half of the exact pre-transition strategy input bank.
+    pub input_identities: Vec<[u8; 32]>,
+    /// Transition output scalars (the candidate registers).
+    pub scalars: Vec<u64>,
+    /// Transition output identities.
+    pub identities: Vec<[u8; 32]>,
+    /// The projected child-request bank.
+    pub request_bank: Vec<u8>,
+    /// Every lifecycle invocation's derived state.
+    pub lifecycle_states: Vec<LifecycleStateDerivationV1>,
+    /// Every resolved child invocation, in walk order.
+    pub invocations: Vec<DerivedInvocationV1>,
+    /// Whether every phase ran. False on a discovery round: a lifecycle state
+    /// coordinate did not yet hold its derived key, so the plan kernel and
+    /// every later phase were skipped and the caller must adopt and re-run.
+    pub complete: bool,
+}
+
+/// Seed the exact authenticated span widths into their AccountProfile-owned
+/// selector registers before account projection.
+///
+/// Profile13's projection kernel deliberately checks the selector bank rather
+/// than trusting the account-vector length. `derive_dynamic_span_geometry`
+/// has already authenticated these widths from the selected request/effect/
+/// strategy artifacts; this is the host equivalent of Hot copying that
+/// authenticated result into the pre-projection bank. The u32 width is
+/// zero-extended to u64, never narrowed, and every coordinate comes from the
+/// decoded profile.
+fn seed_authenticated_dynamic_span_counts(
+    profile: AccountProfileV2<'_>,
+    span_counts: &[u32],
+    scalars: &mut [u64],
+) -> Result<(), HotProjectionErrorV1> {
+    if span_counts.len() != usize::from(profile.dynamic_fixed_span_count()) {
+        return Err(HotProjectionErrorV1::Spans("span-selector-count"));
+    }
+    let mut index = 0_u16;
+    while index < profile.dynamic_fixed_span_count() {
+        let span = profile
+            .dynamic_fixed_span(index)
+            .map_err(|_| HotProjectionErrorV1::Spans("span-selector-decode"))?;
+        let count = *span_counts
+            .get(usize::from(index))
+            .ok_or(HotProjectionErrorV1::Spans("span-selector-count"))?;
+        span.validate_count(count)
+            .map_err(|_| HotProjectionErrorV1::Spans("span-selector-width"))?;
+        *scalars
+            .get_mut(usize::from(span.count_scalar()))
+            .ok_or(HotProjectionErrorV1::Spans("span-selector-register"))? = u64::from(count);
+        index = index
+            .checked_add(1)
+            .ok_or(HotProjectionErrorV1::Arithmetic)?;
+    }
+    Ok(())
+}
+
+/// Opt-in semantic owner for an admitted-AOT candidate register bank.
+///
+/// The slices are initialized with the exact post-lifecycle preplan bank that
+/// Trading presents to the authenticated accelerator. Implementations mutate
+/// them commit-last into the candidate bank the accelerator would return. The
+/// ordinary interpreted path never receives a projector and continues to
+/// execute the selected Transition artifact byte-for-byte.
+pub type AdmittedCandidateProjectorV1<'a> =
+    dyn Fn(&mut [u64], &mut [[u8; 32]]) -> Result<(), HotProjectionErrorV1> + 'a;
+
+fn digest32(bytes: &[u8]) -> [u8; 32] {
+    Sha256::digest(bytes).into()
+}
+
+/// Run the full register pipeline. See the module documentation for phases.
+#[allow(clippy::too_many_lines)]
+pub fn run_engine(input: &EngineInputV1<'_>) -> Result<EngineOutputV1, HotProjectionErrorV1> {
+    run_engine_with_admitted_candidate(input, None)
+}
+
+/// Run the register pipeline with an optional authenticated admitted-AOT
+/// candidate evaluator.
+///
+/// The projector replaces only phase 7. Phases 1--6 still derive the exact
+/// preplan-owned input bank, and phase 8 still projects the selected Effect
+/// and child requests from the resulting candidate exactly as Hot does.
+#[allow(clippy::too_many_lines)]
+pub fn run_engine_with_admitted_candidate(
+    input: &EngineInputV1<'_>,
+    candidate_projector: Option<&AdmittedCandidateProjectorV1<'_>>,
+) -> Result<EngineOutputV1, HotProjectionErrorV1> {
+    let profile = input.profile;
+    let tail_count = input.tail_count;
+    let lifecycle_digest = digest32(input.lifecycle_bytes);
+    let lifecycle = StateLifecyclePolicyV5::decode_selected(
+        lifecycle_digest,
+        lifecycle_digest,
+        input.lifecycle_bytes,
+    )
+    .map_err(|_| HotProjectionErrorV1::Projection("lifecycle-decode"))?;
+    // FOR THIS ACTION -- the host-side twin of the join `hot_v3/seal.rs` runs.
+    // The builder already selects plans and quotes by action; the profile join
+    // is the third thing that has to, for the same reason.
+    let profile_join = lifecycle
+        .validate_account_profile_join_for_action(profile, input.action)
+        .map_err(|_| HotProjectionErrorV1::Projection("profile-join"))?;
+    let transition = TransitionProgramV3::decode(input.transition_bytes)
+        .map_err(|_| HotProjectionErrorV1::Projection("transition-decode"))?;
+    let effect = decode_execution_effect_program(input.effect_schema, input.effect_bytes)
+        .map_err(|_| HotProjectionErrorV1::Projection("effect-decode"))?;
+    let effect_base = effect.base();
+
+    let scalar_count = effect_base
+        .scalar_count(tail_count)
+        .map_err(|_| HotProjectionErrorV1::Projection("scalar-count"))?;
+    let identity_count = effect_base
+        .identity_count(tail_count)
+        .map_err(|_| HotProjectionErrorV1::Projection("identity-count"))?;
+    let request_bytes = effect_base
+        .request_bytes(tail_count)
+        .map_err(|_| HotProjectionErrorV1::Projection("request-bytes"))?;
+
+    let span_counts = input.span_counts;
+    let logical_count = profile_ops::logical_count(profile, tail_count, span_counts)?;
+    if input.observations.len() != logical_count {
+        return Err(HotProjectionErrorV1::Projection("observation-width"));
+    }
+    let aliases = (0..logical_count)
+        .map(|coordinate| profile_ops::representative(profile, tail_count, span_counts, coordinate))
+        .collect::<Result<Vec<usize>, _>>()?;
+
+    // Phase 2 inputs: the observation bank, with the shared runtime prefix's
+    // content-digest projection keys substituted for physical keys.
+    let request_digest = digest32(input.family_request);
+    // These two records are authenticated by the shared Hot adapter before
+    // AccountProfile runs: selected config through the finalized selection,
+    // and linked basis through the Product runtime graph. Other child-owned
+    // variable bodies stay opaque to this outer profile and are authenticated
+    // by their own child route.
+    let selected_config_is_variable = projected_account_uses_variable_marker(profile, 1)?;
+    let linked_basis_is_variable = projected_account_uses_variable_marker(profile, 4)?;
+    let projected_keys = [
+        input.content_keys.selected_config,
+        input.content_keys.product_root,
+        input.content_keys.portfolio,
+        input.content_keys.linked_basis,
+    ];
+    let observation_keys = input
+        .observations
+        .iter()
+        .enumerate()
+        .map(|(coordinate, observed)| {
+            let representative = *aliases.get(coordinate).unwrap_or(&coordinate);
+            match representative {
+                1..=4 => projected_keys
+                    .get(representative - 1)
+                    .copied()
+                    .unwrap_or(observed.key),
+                _ => observed.key,
+            }
+        })
+        .collect::<Vec<[u8; 32]>>();
+    // The Product record's data digest. `ProjectDataDigest` projects a fact the
+    // ADAPTER establishes rather than teaching the interpreter to hash, and
+    // this engine is the host-side adapter -- so the supply has to exist here
+    // too, or the host projection refuses `DataDigestUnavailable` while the
+    // chain succeeds. That is exactly how this surfaced: the chain-side supply
+    // landed first and the bundle then failed host-side with
+    // `Projection("account-projection")`, which is the primitive working as
+    // designed. Coordinate 2 is the Product in the Hot runtime frame, spelled
+    // the way the two markers below spell 1 and 4.
+    let product_record_data_digest = input
+        .observations
+        .get(2)
+        .map(|observed| solana_program::hash::hash(&observed.data).to_bytes());
+    let observations = input
+        .observations
+        .iter()
+        .zip(&observation_keys)
+        .enumerate()
+        .map(|(coordinate, (observed, key))| {
+            if (coordinate == 1 && selected_config_is_variable)
+                || (coordinate == 4 && linked_basis_is_variable)
+            {
+                AccountObservationV1::new_adapter_authenticated_variable_data(
+                    key,
+                    &observed.owner,
+                    observed.lamports,
+                    &observed.data,
+                    observed.signer,
+                    observed.writable,
+                    observed.executable,
+                )
+            } else {
+                let observation = AccountObservationV1::new(
+                    key,
+                    &observed.owner,
+                    observed.lamports,
+                    observed.data.as_slice(),
+                    observed.signer,
+                    observed.writable,
+                    observed.executable,
+                );
+                match (coordinate, product_record_data_digest.as_ref()) {
+                    (2, Some(digest)) => observation.with_adapter_data_digest(digest),
+                    _ => observation,
+                }
+            }
+        })
+        .collect::<Vec<AccountObservationV1<'_>>>();
+
+    // Phase 1: seed the parent digest and the trusted environment.
+    let mut current_scalars = vec![0_u64; scalar_count];
+    let mut current_identities = vec![[0_u8; 32]; identity_count];
+    *current_identities
+        .get_mut(HOT_PARENT_REQUEST_DIGEST_IDENTITY_V3)
+        .ok_or(HotProjectionErrorV1::Projection("parent-digest-register"))? = request_digest;
+    if let TrustedEnvironmentV2::CurrentSlot { destination } = profile.trusted_environment() {
+        *current_scalars
+            .get_mut(usize::from(destination))
+            .ok_or(HotProjectionErrorV1::Projection("slot-register"))? = input.clock_slot;
+    }
+    if let Some(destination) = profile.trusted_current_executing_program_identity() {
+        *current_identities
+            .get_mut(usize::from(destination))
+            .ok_or(HotProjectionErrorV1::Projection("program-register"))? =
+            input.waist.trading_program.to_bytes();
+    }
+    if let Some(destination) = profile.trusted_system_program_identity() {
+        *current_identities
+            .get_mut(usize::from(destination))
+            .ok_or(HotProjectionErrorV1::Projection("system-register"))? =
+            system_program::ID.to_bytes();
+    }
+    seed_authenticated_dynamic_span_counts(profile, span_counts, &mut current_scalars)?;
+
+    let mut scratch_scalars = vec![0_u64; scalar_count];
+    let mut scratch_identities = vec![[0_u8; 32]; identity_count];
+    let mut next_scalars = vec![0_u64; scalar_count];
+    let mut next_identities = vec![[0_u8; 32]; identity_count];
+
+    // Phase 2: account projection.
+    {
+        let registers = ProjectionRegistersV2 {
+            input_scalars: &current_scalars,
+            input_identities: &current_identities,
+            scratch_scalars: &mut scratch_scalars,
+            scratch_identities: &mut scratch_identities,
+            output_scalars: &mut next_scalars,
+            output_identities: &mut next_identities,
+        };
+        if profile.uses_dynamic_fixed_spans() {
+            project_dynamic_fixed_spans_atomic(
+                profile,
+                tail_count,
+                span_counts,
+                &observations,
+                registers,
+                None,
+            )
+        } else {
+            project_accounts_atomic(profile, tail_count, &observations, registers, None)
+        }
+        .map_err(|error| {
+            std::eprintln!("account projection kernel refused: {error:?}");
+            // The kernel names the RULE it broke and not the coordinates that
+            // broke it, and for the alias rules that is the whole question:
+            // `CrossItemAlias` says two distinct representatives share a key
+            // without saying which two, and the frame here is fifty-odd
+            // coordinates wide. Re-deriving the partition costs nothing on the
+            // host and turns one word into a pair of coordinates.
+            report_alias_partition_collisions(profile, tail_count, span_counts, &observations);
+            report_data_length_mismatches(profile, tail_count, &observations);
+            HotProjectionErrorV1::Projection("account-projection")
+        })?;
+    }
+    core::mem::swap(&mut current_scalars, &mut next_scalars);
+    core::mem::swap(&mut current_identities, &mut next_identities);
+
+    // General owns the affine order rows. AccountProfile has authenticated the
+    // exact signed header above; its rows are derived from that header and are
+    // therefore materialized here rather than read from nonexistent evidence
+    // padding. This is the host twin of Trading's typed adapter step.
+    if input.general_place_order {
+        let evidence = dclutch_trading::general::state_artifacts_v3::general_readonly_evidence_v3(
+            dclutch_trading::general_codec::Action::PlaceOrder,
+            0,
+        )
+        .map_err(|_| HotProjectionErrorV1::Projection("general-place-order-evidence"))?;
+        let terms = input
+            .observations
+            .get(usize::from(evidence.coordinate))
+            .ok_or(HotProjectionErrorV1::Projection(
+                "general-place-order-evidence",
+            ))?;
+        dclutch_trading::general::hot_candidate_v3::seed_general_place_order_terms_from_signed_terms_v3(
+            tail_count,
+            &terms.data,
+            &mut current_scalars,
+            &mut current_identities,
+        )
+        .map_err(|_| HotProjectionErrorV1::Projection("general-place-order-terms"))?;
+        // The signed header names the maker; it does not get to assert the
+        // authority of the external account Custody will debit.  Read that
+        // fact through the selected Realm token profile from the exact Custody
+        // frame coordinates, matching Trading's typed adapter step below.
+        let custody = |role| {
+            let coordinate = dclutch_trading::general::account_rules_v3::general_place_order_transfer_custody_coordinate_v3(role)
+                .map_err(|_| HotProjectionErrorV1::Projection("general-place-order-custody-frame"))?;
+            observations.get(usize::from(coordinate)).copied().ok_or(
+                HotProjectionErrorV1::Projection("general-place-order-custody-frame"),
+            )
+        };
+        let realm = custody(dclutch_custody::CustodyFrameRoleV1::RealmRecord)?;
+        let mint = custody(dclutch_custody::CustodyFrameRoleV1::Mint)?;
+        let token_program = custody(dclutch_custody::CustodyFrameRoleV1::TokenProgram)?;
+        let source = custody(dclutch_custody::CustodyFrameRoleV1::TransferSource)?;
+        let destination = custody(dclutch_custody::CustodyFrameRoleV1::TransferDestination)?;
+        let custody_authority = custody(dclutch_custody::CustodyFrameRoleV1::CustodyAuthority)?;
+        let claims = |role| {
+            let coordinate = dclutch_trading::general::account_rules_v3::general_place_order_affine_claims_coordinate_v3(role)
+                .map_err(|_| HotProjectionErrorV1::Projection("general-place-order-claims-frame"))?;
+            observations.get(usize::from(coordinate)).copied().ok_or(
+                HotProjectionErrorV1::Projection("general-place-order-claims-frame"),
+            )
+        };
+        let core_market = claims(dclutch_claims::frame_spec_v1::ClaimsFrameRoleV1::CoreMarket)?;
+        let core_program = claims(dclutch_claims::frame_spec_v1::ClaimsFrameRoleV1::CoreProgram)?;
+        let registry_program =
+            claims(dclutch_claims::frame_spec_v1::ClaimsFrameRoleV1::RegistryProgram)?;
+        let claims_program =
+            claims(dclutch_claims::frame_spec_v1::ClaimsFrameRoleV1::ClaimsProgram)?;
+        let claims_market = claims(dclutch_claims::frame_spec_v1::ClaimsFrameRoleV1::ClaimsMarket)?;
+        let maker_position =
+            claims(dclutch_claims::frame_spec_v1::ClaimsFrameRoleV1::AffinePosition(0))?;
+        let claims_admit = |role| {
+            let coordinate = dclutch_trading::general::account_rules_v3::general_place_order_admit_claims_coordinate_v3(role)
+                .map_err(|_| HotProjectionErrorV1::Projection("general-place-order-claims-admit-frame"))?;
+            observations.get(usize::from(coordinate)).copied().ok_or(
+                HotProjectionErrorV1::Projection("general-place-order-claims-admit-frame"),
+            )
+        };
+        let protocol_position =
+            claims_admit(dclutch_claims::frame_spec_v1::ClaimsFrameRoleV1::ProtocolPosition)?;
+        let protocol_position_admission = claims_admit(
+            dclutch_claims::frame_spec_v1::ClaimsFrameRoleV1::ProtocolPositionAdmission,
+        )?;
+        let rent_credit =
+            claims_admit(dclutch_claims::frame_spec_v1::ClaimsFrameRoleV1::RentCredit)?;
+        let rent_program =
+            claims_admit(dclutch_claims::frame_spec_v1::ClaimsFrameRoleV1::RentProgram)?;
+        dclutch_trading::general::hot_candidate_v3::seed_general_place_order_actual_identities_v2(
+            dclutch_trading::general::hot_candidate_v3::GeneralPlaceOrderActualFrameV2 {
+                core_market_key: core_market.key(),
+                core_market_owner: core_market.owner(),
+                core_market_data: core_market.data(),
+                core_program_key: core_program.key(),
+                registry_program_key: registry_program.key(),
+                realm_key: realm.key(),
+                realm_owner: realm.owner(),
+                realm_data: realm.data(),
+                claims_program_key: claims_program.key(),
+                claims_market_key: claims_market.key(),
+                claims_market_owner: claims_market.owner(),
+                claims_market_data: claims_market.data(),
+                maker_position_key: maker_position.key(),
+                maker_position_owner: maker_position.owner(),
+                maker_position_data: maker_position.data(),
+                protocol_position_lamports: protocol_position.lamports(),
+                protocol_position_admission_lamports: protocol_position_admission.lamports(),
+                linked_basis_record_digest: input.content_keys.linked_basis,
+                rent_credit_key: rent_credit.key(),
+                rent_credit_owner: rent_credit.owner(),
+                rent_credit_data: rent_credit.data(),
+                rent_program_key: rent_program.key(),
+                mint_key: mint.key(),
+                token_program_key: token_program.key(),
+                source_key: source.key(),
+                source_program: source.owner(),
+                source_data: source.data(),
+                destination_key: destination.key(),
+                custody_authority_key: custody_authority.key(),
+                order_owner_key: claims_admit(dclutch_claims::frame_spec_v1::ClaimsFrameRoleV1::PositionOwnerIdentity)?.key(),
+            },
+            &mut current_scalars,
+            &mut current_identities,
+        )
+        .map_err(|error| match error {
+            dclutch_trading::general::hot_candidate_v3::GeneralPlaceOrderTokenObservationErrorV1::InvalidCapacity => {
+                HotProjectionErrorV1::Projection("general-place-order-source-owner-capacity")
+            }
+            dclutch_trading::general::hot_candidate_v3::GeneralPlaceOrderTokenObservationErrorV1::FrameIdentity => {
+                HotProjectionErrorV1::Projection("general-place-order-source-owner-frame-identity")
+            }
+            dclutch_trading::general::hot_candidate_v3::GeneralPlaceOrderTokenObservationErrorV1::Realm => {
+                HotProjectionErrorV1::Projection("general-place-order-source-owner-realm")
+            }
+            dclutch_trading::general::hot_candidate_v3::GeneralPlaceOrderTokenObservationErrorV1::RealmTokenProgram => {
+                HotProjectionErrorV1::Projection("general-place-order-source-owner-realm-token-program")
+            }
+            dclutch_trading::general::hot_candidate_v3::GeneralPlaceOrderTokenObservationErrorV1::RealmMint => {
+                HotProjectionErrorV1::Projection("general-place-order-source-owner-realm-mint")
+            }
+            dclutch_trading::general::hot_candidate_v3::GeneralPlaceOrderTokenObservationErrorV1::AdapterRelease => {
+                HotProjectionErrorV1::Projection("general-place-order-source-owner-adapter-release")
+            }
+            dclutch_trading::general::hot_candidate_v3::GeneralPlaceOrderTokenObservationErrorV1::SourceProgram => {
+                HotProjectionErrorV1::Projection("general-place-order-source-owner-token-program")
+            }
+            dclutch_trading::general::hot_candidate_v3::GeneralPlaceOrderTokenObservationErrorV1::SourceToken => {
+                HotProjectionErrorV1::Projection("general-place-order-source-owner-token")
+            }
+            dclutch_trading::general::hot_candidate_v3::GeneralPlaceOrderTokenObservationErrorV1::SourceMint => {
+                HotProjectionErrorV1::Projection("general-place-order-source-owner-mint")
+            }
+            dclutch_trading::general::hot_candidate_v3::GeneralPlaceOrderTokenObservationErrorV1::CoreMarket => {
+                HotProjectionErrorV1::Projection("general-place-order-source-owner-core-market")
+            }
+            dclutch_trading::general::hot_candidate_v3::GeneralPlaceOrderTokenObservationErrorV1::RealmBinding => {
+                HotProjectionErrorV1::Projection("general-place-order-source-owner-realm-binding")
+            }
+            dclutch_trading::general::hot_candidate_v3::GeneralPlaceOrderTokenObservationErrorV1::ClaimsAggregate => {
+                HotProjectionErrorV1::Projection("general-place-order-source-owner-claims-aggregate")
+            }
+            dclutch_trading::general::hot_candidate_v3::GeneralPlaceOrderTokenObservationErrorV1::ClaimsPosition => {
+                HotProjectionErrorV1::Projection("general-place-order-source-owner-claims-position")
+            }
+            dclutch_trading::general::hot_candidate_v3::GeneralPlaceOrderTokenObservationErrorV1::ClaimsRentCredit => {
+                HotProjectionErrorV1::Projection("general-place-order-source-owner-claims-rent-credit")
+            }
+        })?;
+    }
+
+    // Phase 3: current-Rent quote projection.
+    let quotes = current_rent_quotes(lifecycle, input.rent, input.action)?;
+    lifecycle
+        .project_authenticated_current_rent_quotes_atomic(
+            profile,
+            Some(profile_join),
+            tail_count,
+            input.action,
+            &current_scalars,
+            &quotes,
+            LifecycleRentQuoteBuffersV5 {
+                scalar_scratch: &mut scratch_scalars,
+                output_scalars: &mut next_scalars,
+            },
+        )
+        .map_err(|_| HotProjectionErrorV1::Projection("rent-quotes"))?;
+    core::mem::swap(&mut current_scalars, &mut next_scalars);
+
+    // Phase 4: native-signature seeding for Signed request profiles.
+    let request_profile = decode_request_profile(input)?;
+    if let RequestProfileKind::Signed(signed) = request_profile {
+        let evidence = input
+            .ed25519_evidence
+            .ok_or(HotProjectionErrorV1::Projection("missing-ed25519-evidence"))?;
+        next_identities.copy_from_slice(&current_identities);
+        seed_authenticated_signers_atomic(
+            signed,
+            tail_count,
+            NativeEd25519InstructionViewV1 {
+                ed25519_data: evidence,
+                ed25519_instruction_index: input
+                    .native_message_instruction_index
+                    .checked_sub(1)
+                    .ok_or(HotProjectionErrorV1::Projection(
+                        "native-signature-adjacency",
+                    ))?,
+                authenticated_message_data: input.instruction_data,
+                message_instruction_index: input.native_message_instruction_index,
+                message_offset_bias: 0,
+            },
+            NativeSignatureRegistersV1 {
+                input_identities: &current_identities,
+                scratch_identities: &mut scratch_identities,
+                output_identities: &mut next_identities,
+            },
+        )
+        .map_err(|_| HotProjectionErrorV1::Projection("native-signatures"))?;
+        core::mem::swap(&mut current_identities, &mut next_identities);
+    }
+
+    // Phase 5: request projection.
+    request_profile.project_atomic(
+        tail_count,
+        input.family_request,
+        ProjectionRegistersV1 {
+            input_scalars: &current_scalars,
+            input_identities: &current_identities,
+            scratch_scalars: &mut scratch_scalars,
+            scratch_identities: &mut scratch_identities,
+            output_scalars: &mut next_scalars,
+            output_identities: &mut next_identities,
+        },
+        "request-projection",
+    )?;
+    core::mem::swap(&mut current_scalars, &mut next_scalars);
+    core::mem::swap(&mut current_identities, &mut next_identities);
+
+    if input.general_verify_candidate {
+        let request =
+            dclutch_trading::general::artifacts_v3::decode_general_request_v3(input.family_request)
+                .map_err(|_| HotProjectionErrorV1::Projection("general-verify-request"))?;
+        dclutch_trading::general::hot_candidate_v3::seed_general_verify_preplan_terminal_v3(
+            request,
+            tail_count,
+            input.waist.trading_program.to_bytes(),
+            &observations,
+            &mut current_scalars,
+        )
+        .map_err(|error| {
+            std::eprintln!("general-verify-preplan: {error:?}");
+            HotProjectionErrorV1::Projection("general-verify-preplan")
+        })?;
+    }
+
+    // Phase 6: lifecycle preplan, in adopt mode.
+    let preplan = preplan_lifecycle(
+        input,
+        lifecycle,
+        profile,
+        profile_join,
+        &observations,
+        &aliases,
+        &current_scalars,
+        &current_identities,
+    )?;
+    if !preplan.complete {
+        return Ok(EngineOutputV1 {
+            input_scalars: Vec::new(),
+            input_identities: Vec::new(),
+            scalars: Vec::new(),
+            identities: Vec::new(),
+            request_bank: Vec::new(),
+            lifecycle_states: preplan.states,
+            invocations: Vec::new(),
+            complete: false,
+        });
+    }
+    current_scalars = preplan.scalars;
+    current_identities = preplan.identities;
+    let input_scalars = current_scalars.clone();
+    let input_identities = current_identities.clone();
+
+    // Phase 7: either the ordinary interpreted fold or the admitted-AOT
+    // candidate evaluator. The latter starts from the same preplan bank and
+    // is commit-last: a refusing projector cannot expose a partial candidate.
+    next_scalars.copy_from_slice(&current_scalars);
+    next_identities.copy_from_slice(&current_identities);
+    if let Some(projector) = candidate_projector {
+        let mut candidate_scalars = current_scalars.clone();
+        let mut candidate_identities = current_identities.clone();
+        // THE PROJECTOR'S OWN REFUSAL, not one word for every way it can refuse.
+        // This site discarded the cause behind `Projection("admitted-candidate")`
+        // until 2026-09-04, and the first General action that was not `OpenBatch`
+        // met it immediately: a family half that publishes eleven distinct
+        // projector stages reported one string, and the difference between "the
+        // bank width is wrong" and "the semantic owner refused this batch" was a
+        // bisect. The projector already returns `HotProjectionErrorV1`; wrapping it was
+        // pure loss.
+        projector(&mut candidate_scalars, &mut candidate_identities)?;
+        next_scalars.copy_from_slice(&candidate_scalars);
+        next_identities.copy_from_slice(&candidate_identities);
+    } else {
+        scratch_scalars.copy_from_slice(&current_scalars);
+        scratch_identities.copy_from_slice(&current_identities);
+        execute_fold_atomic(
+            transition,
+            tail_count,
+            RegisterInput {
+                scalars: &current_scalars,
+                identities: &current_identities,
+            },
+            RegisterOutput {
+                scalars: &mut scratch_scalars,
+                identities: &mut scratch_identities,
+            },
+            RegisterOutput {
+                scalars: &mut next_scalars,
+                identities: &mut next_identities,
+            },
+        )
+        .map_err(|error| {
+            // THE SAME PROBE THE ACCOUNT PHASE ALREADY HAD, and it is here for
+            // the reason that phase's probe earned: `DataLengthMismatch` was a
+            // reading until its probe printed the offending coordinate's
+            // declared and observed widths, and then it was a measurement that
+            // named seven coordinates and closed six of them. This phase
+            // discarded its error entirely, so `Projection("transition")` was
+            // the whole of what a lane got. Declared-versus-observed is the
+            // shape that worked, so it is the shape printed: the fold's own
+            // header widths against the banks it was handed, and the tail count
+            // that scales them.
+            std::eprintln!(
+                "transition fold refused: {error:?} (tail_count={tail_count}, \
+                 declared common_scalars={} item_scalar_stride={} \
+                 common_identities={} item_identity_stride={}, \
+                 expected scalars={} identities={}, \
+                 observed scalars={} identities={})",
+                transition.common_scalar_count(),
+                transition.item_scalar_stride(),
+                transition.common_identity_count(),
+                transition.item_identity_stride(),
+                usize::from(transition.common_scalar_count())
+                    + usize::from(transition.item_scalar_stride())
+                        * usize::try_from(tail_count).unwrap_or(usize::MAX),
+                usize::from(transition.common_identity_count())
+                    + usize::from(transition.item_identity_stride())
+                        * usize::try_from(tail_count).unwrap_or(usize::MAX),
+                current_scalars.len(),
+                current_identities.len(),
+            );
+            match first_refusing_transition_operation(
+                transition,
+                tail_count,
+                &current_scalars,
+                &current_identities,
+            ) {
+                Some((index, class, row)) => std::eprintln!(
+                    "transition fold refused at operation {index} ({class}), row={row}"
+                ),
+                None => std::eprintln!(
+                    "transition fold refusal could not be localized to one operation"
+                ),
+            }
+            std::eprintln!("transition scalars={current_scalars:?}");
+            std::eprintln!(
+                "transition identities={:?}",
+                current_identities
+                    .iter()
+                    .map(|value| std::format!(
+                        "{:02x}{:02x}..{:02x}",
+                        value[0],
+                        value[1],
+                        value[31]
+                    ))
+                    .collect::<Vec<_>>()
+            );
+            HotProjectionErrorV1::Projection("transition")
+        })?;
+    }
+    let transition_scalars = next_scalars.clone();
+    let transition_identities = next_identities.clone();
+
+    // Phase 8: effect projection over the lifecycle-candidate account inputs.
+    let mut account_inputs = observations
+        .iter()
+        .map(|observation| AccountInput {
+            lamports: observation.lamports(),
+            data_len: observation.data().len(),
+        })
+        .collect::<Vec<_>>();
+    apply_candidates(&preplan.states, &aliases, &mut account_inputs)?;
+    let effect_account_count = effect
+        .account_count(tail_count, &transition_scalars)
+        .map_err(|_| HotProjectionErrorV1::Projection("effect-account-count"))?;
+    let mut permissions = vec![AccountPermission::read_only(); logical_count];
+    if profile.uses_dynamic_fixed_spans() {
+        derive_effect_permissions_with_dynamic_spans(
+            profile,
+            tail_count,
+            span_counts,
+            &mut permissions,
+        )
+    } else {
+        derive_effect_permissions(profile, tail_count, &mut permissions)
+    }
+    .map_err(|_| HotProjectionErrorV1::Projection("effect-permissions"))?;
+    let mut scratch_lamports = vec![0_u64; effect_account_count];
+    let mut output_lamports = account_inputs
+        .iter()
+        .map(|account| account.lamports)
+        .collect::<Vec<_>>();
+    let mut request_bank = vec![0_u8; request_bytes];
+    let mut write_ranges = vec![
+        ResolvedWriteRangeV4::vacant();
+        effect
+            .data_write_operation_count(tail_count)
+            .map_err(|_| HotProjectionErrorV1::Projection("write-ranges"))?
+    ];
+    project_atomic_visiting(
+        effect,
+        tail_count,
+        ProjectionV3 {
+            scalars: &transition_scalars,
+            identities: &transition_identities,
+            aliases: aliases
+                .get(..effect_account_count)
+                .ok_or(HotProjectionErrorV1::Projection("effect-aliases"))?,
+            accounts: account_inputs
+                .get(..effect_account_count)
+                .ok_or(HotProjectionErrorV1::Projection("effect-accounts"))?,
+            permissions: permissions
+                .get(..effect_account_count)
+                .ok_or(HotProjectionErrorV1::Projection("effect-permission-window"))?,
+            scratch_lamports: &mut scratch_lamports,
+            output_lamports: output_lamports
+                .get_mut(..effect_account_count)
+                .ok_or(HotProjectionErrorV1::Projection("effect-lamport-window"))?,
+            requests: &mut request_bank,
+        },
+        &mut write_ranges,
+        &mut |_| Ok(()),
+    )
+    .map_err(|_| HotProjectionErrorV1::Projection("effect-projection"))?;
+
+    // Walk the routes and slice each invocation's projected request.
+    let invocations = resolve_invocations(
+        effect,
+        tail_count,
+        &transition_scalars,
+        &transition_identities,
+        &request_bank,
+        input.family_request,
+        candidate_projector.is_none(),
+    )?;
+
+    Ok(EngineOutputV1 {
+        input_scalars,
+        input_identities,
+        scalars: transition_scalars,
+        identities: transition_identities,
+        request_bank,
+        lifecycle_states: preplan.states,
+        invocations,
+        complete: true,
+    })
+}
+
+/// Name every pair of DISTINCT representatives that observed the same key.
+///
+/// `AccountProfileV2`'s alias rules refuse when two coordinates that the
+/// profile says are separate accounts turn out to be one. The kernel refuses
+/// with `CrossItemAlias` and no coordinates, so this walks the same partition
+/// the kernel walked and prints the pairs -- which is the difference between
+/// "the frame aliases somewhere" and "coordinate 19 and coordinate 33 are both
+/// the Core Market".
+fn report_alias_partition_collisions(
+    profile: AccountProfileV2<'_>,
+    tail_count: u32,
+    span_counts: &[u32],
+    observations: &[AccountObservationV1<'_>],
+) {
+    let mut found = false;
+    for (coordinate, account) in observations.iter().enumerate() {
+        let Ok(representative) =
+            profile_ops::representative(profile, tail_count, span_counts, coordinate)
+        else {
+            continue;
+        };
+        if representative != coordinate {
+            continue;
+        }
+        for (prior, other) in observations
+            .get(..coordinate)
+            .unwrap_or(&[])
+            .iter()
+            .enumerate()
+        {
+            if other.key() != account.key() {
+                continue;
+            }
+            if profile_ops::representative(profile, tail_count, span_counts, prior) == Ok(prior) {
+                found = true;
+                std::eprintln!(
+                    "alias-partition collision: coordinates {prior} and {coordinate} are \
+                     distinct representatives holding one key {:?}",
+                    account.key()
+                );
+            }
+        }
+    }
+    if !found {
+        std::eprintln!(
+            "no two distinct representatives share a key; the refusal is another alias rule"
+        );
+    }
+}
+
+/// Name every FIXED coordinate whose observed data width is not the one its
+/// own rule declares.
+///
+/// `DataLengthMismatch` is the same shape `CrossItemAlias` was before the
+/// partition reporter above: the kernel names the RULE it broke and not the
+/// coordinate that broke it, and a General frame is fifty-odd coordinates wide.
+/// Measured 2026-09-04: `PlaceOrder` refused it on the first bundle any harness
+/// had ever built for that action, and one word said nothing about which of its
+/// escrow children was unbound. Re-deriving the comparison costs nothing on the
+/// host -- the rule and the observation are both in hand -- and turns one word
+/// into a list of coordinates with both widths beside each.
+///
+/// It reports the FIXED prefix only. An item-template coordinate's width is a
+/// function of `tail_count` and of the span partition, so a mismatch there is a
+/// geometry question rather than a binding one, and reporting it as a binding
+/// gap would be a second wrong answer rather than no answer.
+fn report_data_length_mismatches(
+    profile: AccountProfileV2<'_>,
+    tail_count: u32,
+    observations: &[AccountObservationV1<'_>],
+) {
+    let mut found = false;
+    let mut index = 0_u16;
+    while index < profile.fixed_account_count() {
+        let coordinate = usize::from(index);
+        index = match index.checked_add(1) {
+            Some(next) => next,
+            None => return,
+        };
+        let Ok(rule) = profile.rule(false, index.saturating_sub(1)) else {
+            continue;
+        };
+        let Some(account) = observations.get(coordinate) else {
+            continue;
+        };
+        // ONLY THE PRESTATES THAT ASSERT A WIDTH. `AuthenticatedRouteAlias` and
+        // the two adapter-authenticated variable forms declare `data_length`
+        // zero and mean "this rule holds no opinion", so comparing their
+        // observation against zero reports four healthy coordinates as broken
+        // -- which the first draft of this reporter did, on the run that found
+        // it useful. A reporter whose output has to be filtered by its reader
+        // is a second wrong answer rather than no answer.
+        if !matches!(
+            rule.prestate(),
+            AccountPrestateV2::Exact | AccountPrestateV2::LifecycleBound
+        ) {
+            continue;
+        }
+        // A `LifecycleBound` coordinate ADMITS a vacancy -- that is its create
+        // branch, and the account this bundle is about to allocate is empty by
+        // definition. Only a LIVE one of the wrong width is a finding.
+        if rule.prestate() == AccountPrestateV2::LifecycleBound && account.data().is_empty() {
+            continue;
+        }
+        let declared = u64::from(rule.data_length()).saturating_add(
+            u64::from(rule.data_item_stride()).saturating_mul(u64::from(tail_count)),
+        );
+        let observed = account.data().len() as u64;
+        if declared == observed {
+            continue;
+        }
+        found = true;
+        std::eprintln!(
+            "data-length mismatch: coordinate {coordinate} declares {declared} bytes \
+             ({} fixed + {} per outcome x {tail_count}) and holds {observed}, prestate {:?}, key {:?}",
+            rule.data_length(),
+            rule.data_item_stride(),
+            rule.prestate(),
+            account.key(),
+        );
+    }
+    if !found {
+        std::eprintln!(
+            "every fixed coordinate holds the width its rule declares; the refusal is in the \
+             item templates or the span partition"
+        );
+    }
+}
+
+const fn prestate_uses_variable_marker(prestate: AccountPrestateV2) -> bool {
+    matches!(
+        prestate,
+        AccountPrestateV2::AdapterAuthenticatedVariableData
+    )
+}
+
+fn projected_account_uses_variable_marker(
+    profile: AccountProfileV2<'_>,
+    coordinate: usize,
+) -> Result<bool, HotProjectionErrorV1> {
+    let coordinate = u16::try_from(coordinate).map_err(|_| HotProjectionErrorV1::Arithmetic)?;
+    let prestate = profile
+        .rule(false, coordinate)
+        .map_err(|_| HotProjectionErrorV1::Profile(line!()))?
+        .prestate();
+    Ok(prestate_uses_variable_marker(prestate))
+}
+
+#[derive(Clone, Copy)]
+enum RequestProfileKind<'a> {
+    Unsigned(RequestProfileV1<'a>),
+    Signed(RequestProfileV2<'a>),
+    Borrowed(RequestProfileV3<'a>),
+}
+
+impl<'a> RequestProfileKind<'a> {
+    /// The V1 projector every kind ultimately delegates projection to.
+    ///
+    /// For `Borrowed` this is the *prefix* projector only: it validates and
+    /// projects the exact declared prefix and never sees the witness suffix,
+    /// so it must not be driven over a complete request. Use
+    /// [`Self::project_atomic`], which is the kind-aware form.
+    fn base(self) -> RequestProfileV1<'a> {
+        match self {
+            Self::Unsigned(profile) => profile,
+            Self::Signed(profile) => profile.request_profile(),
+            Self::Borrowed(profile) => profile.request_profile(),
+        }
+    }
+
+    /// Whether any request projection writes `target`.
+    ///
+    /// `hot_v3::RequestProfileKindV3::writes_register` answers this from the
+    /// embedded V1 for every kind that wraps one, V3 included: the witness
+    /// suffix is opaque and projects nothing.
+    fn writes_register(self, target: ProjectionTargetV1) -> Result<bool, HotProjectionErrorV1> {
+        self.base()
+            .writes_register(target)
+            .map_err(|_| HotProjectionErrorV1::Spans("writes-register"))
+    }
+
+    /// Project the family request, phase for phase with
+    /// `hot_v3::RequestProfileKindV3::project_atomic`.
+    ///
+    /// The kinds differ in exactly one place and it is this one. V1 and V2
+    /// declare the complete request and project all of it. V3 declares only a
+    /// prefix; `project_prefix_atomic` splits the complete request at the
+    /// embedded V1's declared width, checks the opaque suffix against the
+    /// borrowed-witness policy (nonzero bounds, exact child-request magic),
+    /// and projects the prefix alone. Driving `base()` over the complete
+    /// request instead would refuse on width, which is the whole reason the
+    /// engine named V3 a boundary rather than falling through to V1.
+    fn project_atomic(
+        self,
+        tail_count: u32,
+        family_request: &'a [u8],
+        registers: ProjectionRegistersV1<'_>,
+        site: &'static str,
+    ) -> Result<(), HotProjectionErrorV1> {
+        match self {
+            Self::Unsigned(_) | Self::Signed(_) => {
+                project_request_atomic(self.base(), tail_count, family_request, registers)
+                    .map_err(|_| HotProjectionErrorV1::Projection(site))
+            }
+            Self::Borrowed(profile) => profile
+                .project_prefix_atomic(tail_count, family_request, registers)
+                .map_err(|_| HotProjectionErrorV1::Projection(site)),
+        }
+    }
+}
+
+fn decode_request_profile<'a>(
+    input: &EngineInputV1<'a>,
+) -> Result<RequestProfileKind<'a>, HotProjectionErrorV1> {
+    decode_request_profile_bytes(input.request_profile_bytes, input.request_profile_schema)
+}
+
+fn decode_request_profile_bytes(
+    bytes: &[u8],
+    schema: [u8; 32],
+) -> Result<RequestProfileKind<'_>, HotProjectionErrorV1> {
+    let authenticated = digest32(bytes);
+    if schema == REQUEST_PROFILE_SCHEMA_ID_V1 {
+        RequestProfileV1::decode_selected(authenticated, authenticated, bytes)
+            .map(RequestProfileKind::Unsigned)
+            .map_err(|_| HotProjectionErrorV1::Projection("request-profile-v1"))
+    } else if schema == REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID {
+        RequestProfileV2::decode_selected(authenticated, authenticated, bytes)
+            .map(RequestProfileKind::Signed)
+            .map_err(|_| HotProjectionErrorV1::Projection("request-profile-v2"))
+    } else if schema == REQUEST_PROFILE_V3_SCHEMA_RELEASE_ID {
+        RequestProfileV3::decode_selected(authenticated, authenticated, bytes)
+            .map(RequestProfileKind::Borrowed)
+            .map_err(|_| HotProjectionErrorV1::Projection("request-profile-v3"))
+    } else {
+        // V4 (repeated-rows) request profiles remain a named boundary of this
+        // engine; no reproduced family needs them yet.
+        Err(HotProjectionErrorV1::Projection("request-profile-schema"))
+    }
+}
+
+/// Everything the dynamic fixed-span width derivation consumes.
+///
+/// The same artifact bytes the bundle already holds, plus the strategy record —
+/// which the rest of the builder never decodes, and which the span rule needs
+/// because a *profile-only* span is admissible under exactly one disposition.
+pub struct SpanWidthInputV1<'a> {
+    /// Decoded account profile.
+    pub profile: AccountProfileV2<'a>,
+    /// Request profile record bytes plus the schema the descriptor names.
+    pub request_profile_bytes: &'a [u8],
+    /// Schema release identity of the request profile.
+    pub request_profile_schema: [u8; 32],
+    /// Effect program record bytes.
+    pub effect_bytes: &'a [u8],
+    /// Schema release identity of the effect program.
+    pub effect_schema: [u8; 32],
+    /// Execution strategy record bytes.
+    pub strategy_bytes: &'a [u8],
+    /// Release-waist facts (the trusted executing-program identity).
+    pub waist: HotProjectionWaistV1,
+    /// Product-authenticated runtime item count.
+    pub tail_count: u32,
+    /// Family request bytes (after the Hot envelope).
+    pub family_request: &'a [u8],
+    /// Trusted current slot.
+    pub clock_slot: u64,
+}
+
+/// Authenticated span widths plus the optional AccountProfile-only transport
+/// span which makes the accelerator input scratch-backed.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SpanWidthDerivationV1 {
+    /// One exact width per declared dynamic fixed span.
+    pub widths: Vec<u32>,
+    /// Sole trailing profile-only input-transport span, when present.
+    pub transport_span: Option<u16>,
+}
+
+/// Derive the authenticated dynamic fixed-span widths for one bundle.
+///
+/// This is `hot_v3::authenticate_dynamic_span_widths_v3` on the host, phase for
+/// phase, and it is the reason the builder can pack a spans profile at all: the
+/// widths are *not* the account-vector length, they are projected out of the
+/// artifacts and the family request before any account is expanded.
+///
+/// Two kinds of span exist and they get their width from different places:
+///
+/// - **Request-owned**: the span's `count_scalar` is a common scalar some
+///   request-projection operation writes. Its width comes from projecting the
+///   family request once into a throwaway bank.
+/// - **AccountProfile-only** (General's sole span): nothing in the request
+///   writes the selector, so the width comes from the canonical register-bank
+///   geometry — `classify_bank_transport_v2(scalars, identities)` — and the
+///   span is admissible **only** under `AdmittedAot`, only as the trailing
+///   span, and only when no EffectV4 span claims the same selector.
+pub fn derive_dynamic_span_widths(
+    input: &SpanWidthInputV1<'_>,
+) -> Result<Vec<u32>, HotProjectionErrorV1> {
+    Ok(derive_dynamic_span_geometry(input)?.widths)
+}
+
+/// Derive widths together with the semantic owner of input scratch transport.
+pub fn derive_dynamic_span_geometry(
+    input: &SpanWidthInputV1<'_>,
+) -> Result<SpanWidthDerivationV1, HotProjectionErrorV1> {
+    let profile = input.profile;
+    let effect = decode_execution_effect_program(input.effect_schema, input.effect_bytes)
+        .map_err(|_| HotProjectionErrorV1::Spans("effect-decode"))?;
+    let span_count = profile.dynamic_fixed_span_count();
+    if !profile.uses_dynamic_fixed_spans() || span_count == 0 {
+        if span_count != 0 || effect.span_count() != 0 {
+            return Err(HotProjectionErrorV1::Spans("undeclared-spans"));
+        }
+        return Ok(SpanWidthDerivationV1 {
+            widths: Vec::new(),
+            transport_span: None,
+        });
+    }
+    let strategy = ExecutionStrategyProgramV2::decode(input.strategy_bytes)
+        .map_err(|_| HotProjectionErrorV1::Spans("strategy-decode"))?;
+    let disposition = strategy.disposition();
+
+    let tail_count = input.tail_count;
+    let effect_base = effect.base();
+    let scalar_count = effect_base
+        .scalar_count(tail_count)
+        .map_err(|_| HotProjectionErrorV1::Spans("scalar-count"))?;
+    let identity_count = effect_base
+        .identity_count(tail_count)
+        .map_err(|_| HotProjectionErrorV1::Spans("identity-count"))?;
+
+    // The throwaway projection: the same seeded prefix phase 1 uses, then the
+    // family request. Only `projected_scalars` outlives it.
+    let mut input_scalars = vec![0_u64; scalar_count];
+    let mut input_identities = vec![[0_u8; 32]; identity_count];
+    *input_identities
+        .get_mut(HOT_PARENT_REQUEST_DIGEST_IDENTITY_V3)
+        .ok_or(HotProjectionErrorV1::Spans("parent-digest-register"))? =
+        digest32(input.family_request);
+    seed_trusted_environment(
+        profile,
+        input.waist.trading_program,
+        input.clock_slot,
+        &mut input_scalars,
+        &mut input_identities,
+    )
+    .map_err(|_| HotProjectionErrorV1::Spans("trusted-environment"))?;
+    let mut scratch_scalars = input_scalars.clone();
+    let mut scratch_identities = input_identities.clone();
+    let mut projected_scalars = input_scalars.clone();
+    let mut projected_identities = input_identities.clone();
+    let request_profile =
+        decode_request_profile_bytes(input.request_profile_bytes, input.request_profile_schema)?;
+    request_profile.project_atomic(
+        tail_count,
+        input.family_request,
+        ProjectionRegistersV1 {
+            input_scalars: &input_scalars,
+            input_identities: &input_identities,
+            scratch_scalars: &mut scratch_scalars,
+            scratch_identities: &mut scratch_identities,
+            output_scalars: &mut projected_scalars,
+            output_identities: &mut projected_identities,
+        },
+        "span-request-projection",
+    )?;
+
+    let transport_page_count = match classify_bank_transport_v2(
+        u32::try_from(scalar_count).map_err(|_| HotProjectionErrorV1::Arithmetic)?,
+        u32::try_from(identity_count).map_err(|_| HotProjectionErrorV1::Arithmetic)?,
+    )
+    .map_err(|_| HotProjectionErrorV1::Spans("bank-transport"))?
+    {
+        BankTransportV2::InlineReturnData { .. } => None,
+        BankTransportV2::AuthenticatedScratchPages { page_count, .. } => Some(page_count),
+    };
+    let mut transport_span = None;
+    let mut index = 0_u16;
+    while index < span_count {
+        let span = profile
+            .dynamic_fixed_span(index)
+            .map_err(|_| HotProjectionErrorV1::Spans("span-decode"))?;
+        let target = ProjectionTargetV1 {
+            kind: ProjectionRegisterKindV1::Scalar,
+            space: ProjectionRegisterSpaceV1::Common,
+            index: span.count_scalar(),
+        };
+        let request_owned = request_profile.writes_register(target)?;
+        let effect_owned = (0..effect.span_count()).any(|effect_index| {
+            effect
+                .span(effect_index)
+                .is_ok_and(|value| value.selector_common_scalar() == span.count_scalar())
+        });
+        if request_owned {
+            if !effect_owned {
+                require_trailing_profile_only_span(profile, span)?;
+            }
+        } else {
+            // Three separate accusations, and which one it is decides where a
+            // reader looks next: an EffectV4 span whose selector no request
+            // operation writes is an artifact defect, a non-AdmittedAot
+            // disposition is a strategy defect, and a second selector nothing
+            // writes is a profile defect. `hot_v3` publishes one `Content` for
+            // all three; the builder is a diagnostic and can afford to say.
+            //
+            // A selector nothing writes is NOT yet an error: it is how the
+            // sole AccountProfile-only scratch-transport span is spelled, and
+            // that span is admitted a few lines below. So the diagnostic is
+            // owed to the refusing cases only -- printing it for the transport
+            // span made every healthy AdmittedAot run report a defect it did
+            // not have.
+            let refusal = if effect_owned {
+                Some("effect-span-unwritten-selector")
+            } else if disposition != StrategyDispositionV2::AdmittedAot {
+                Some("unowned-span-disposition")
+            } else if transport_span.is_some() {
+                Some("second-transport-span")
+            } else {
+                None
+            };
+            if let Some(refusal) = refusal {
+                std::eprintln!(
+                    "dynamic fixed span {index} is written by no request operation and is not \
+                     the scratch-transport span: {refusal} (count_scalar={}, \
+                     insertion_coordinate={}, effect_owned={effect_owned}, \
+                     disposition={disposition:?}, transport_span_already_taken={})",
+                    span.count_scalar(),
+                    span.insertion_coordinate(),
+                    transport_span.is_some(),
+                );
+                return Err(HotProjectionErrorV1::Spans(refusal));
+            }
+            require_trailing_profile_only_span(profile, span)?;
+            let page_count =
+                transport_page_count.ok_or(HotProjectionErrorV1::Spans("inline-bank"))?;
+            *projected_scalars
+                .get_mut(usize::from(span.count_scalar()))
+                .ok_or(HotProjectionErrorV1::Spans("selector-register"))? = u64::from(page_count);
+            transport_span = Some(index);
+        }
+        index = index
+            .checked_add(1)
+            .ok_or(HotProjectionErrorV1::Arithmetic)?;
+    }
+    let mut effect_span = 0_u16;
+    while effect_span < effect.span_count() {
+        let selector = effect
+            .span(effect_span)
+            .map_err(|_| HotProjectionErrorV1::Spans("effect-span-decode"))?
+            .selector_common_scalar();
+        if !(0..span_count).any(|profile_index| {
+            profile
+                .dynamic_fixed_span(profile_index)
+                .is_ok_and(|value| value.count_scalar() == selector)
+        }) {
+            return Err(HotProjectionErrorV1::Spans("effect-span-unmatched"));
+        }
+        effect_span = effect_span
+            .checked_add(1)
+            .ok_or(HotProjectionErrorV1::Arithmetic)?;
+    }
+    let mut widths = vec![0_u32; usize::from(span_count)];
+    profile
+        .dynamic_span_widths_from_scalars(&projected_scalars, &mut widths)
+        .map_err(|_| HotProjectionErrorV1::Spans("widths-from-scalars"))?;
+    effect
+        .account_count(tail_count, &projected_scalars)
+        .map_err(|_| HotProjectionErrorV1::Spans("effect-account-count"))?;
+    if disposition == StrategyDispositionV2::AdmittedAot
+        && transport_page_count.is_some() != transport_span.is_some()
+    {
+        return Err(HotProjectionErrorV1::Spans("transport-span-mismatch"));
+    }
+    Ok(SpanWidthDerivationV1 {
+        widths,
+        transport_span,
+    })
+}
+
+/// An AccountProfile-only span must be the trailing one.
+fn require_trailing_profile_only_span(
+    profile: AccountProfileV2<'_>,
+    span: DynamicFixedSpanV2,
+) -> Result<(), HotProjectionErrorV1> {
+    if span.insertion_coordinate() == profile.fixed_account_count() {
+        Ok(())
+    } else {
+        Err(HotProjectionErrorV1::Spans("non-trailing-span"))
+    }
+}
+
+/// Seed the trusted-environment registers phase 1 seeds, for the throwaway
+/// bank the span projection runs in.
+fn seed_trusted_environment(
+    profile: AccountProfileV2<'_>,
+    trading_program: Pubkey,
+    clock_slot: u64,
+    scalars: &mut [u64],
+    identities: &mut [[u8; 32]],
+) -> Result<(), HotProjectionErrorV1> {
+    if let TrustedEnvironmentV2::CurrentSlot { destination } = profile.trusted_environment() {
+        *scalars
+            .get_mut(usize::from(destination))
+            .ok_or(HotProjectionErrorV1::Spans("slot-register"))? = clock_slot;
+    }
+    if let Some(destination) = profile.trusted_current_executing_program_identity() {
+        *identities
+            .get_mut(usize::from(destination))
+            .ok_or(HotProjectionErrorV1::Spans("program-register"))? = trading_program.to_bytes();
+    }
+    if let Some(destination) = profile.trusted_system_program_identity() {
+        *identities
+            .get_mut(usize::from(destination))
+            .ok_or(HotProjectionErrorV1::Spans("system-register"))? = system_program::ID.to_bytes();
+    }
+    Ok(())
+}
+
+/// Best-effort index of the first transition operation whose prefix refuses.
+///
+/// The VM reports a refusal CLASS and no position, which is enough to say
+/// `CheckFailed` and not enough to say which predicate. Rather than change a
+/// kernel crate for a diagnostic, this re-runs the same public
+/// `execute_fold_atomic` over successively longer prefixes of the same program
+/// and reports the first length that refuses -- so the answer is produced by
+/// the authority itself, not by a second interpreter written here.
+///
+/// The three region counts live at fixed header offsets and are read here
+/// because `ProgramV3` exports no accessor for them. That is a second speller
+/// of one layout and it is deliberately confined to this function: a probe may
+/// respell what it cannot ask for, a builder may not.
+///
+/// Returns `None` when no prefix refuses or none of them decodes -- truncation
+/// can legitimately produce a program the validator rejects, and reporting
+/// "could not localize" is the honest output when it does.
+fn first_refusing_transition_operation(
+    transition: TransitionProgramV3<'_>,
+    tail_count: u32,
+    scalars: &[u64],
+    identities: &[[u8; 32]],
+) -> Option<(usize, String, String)> {
+    let bytes = transition.bytes();
+    let body = bytes.len().checked_sub(TRANSITION_HEADER_BYTES)?;
+    let total = body.checked_div(TRANSITION_INSTRUCTION_BYTES)?;
+    let count_at = |offset: usize| -> Option<usize> {
+        let raw: [u8; 2] = bytes.get(offset..offset + 2)?.try_into().ok()?;
+        Some(usize::from(u16::from_le_bytes(raw)))
+    };
+    let (prelude, item) = (count_at(6)?, count_at(8)?);
+
+    for taken in 1..=total {
+        let in_prelude = taken.min(prelude);
+        let in_item = taken.saturating_sub(in_prelude).min(item);
+        let in_epilogue = taken - in_prelude - in_item;
+        let end = TRANSITION_HEADER_BYTES + taken * TRANSITION_INSTRUCTION_BYTES;
+        let mut prefix = bytes.get(..end)?.to_vec();
+        for (offset, value) in [(6, in_prelude), (8, in_item), (10, in_epilogue)] {
+            let encoded = u16::try_from(value).ok()?.to_le_bytes();
+            prefix
+                .get_mut(offset..offset + 2)?
+                .copy_from_slice(&encoded);
+        }
+        let Ok(program) = TransitionProgramV3::decode(&prefix) else {
+            continue;
+        };
+        let mut scratch_scalars = scalars.to_vec();
+        let mut scratch_identities = identities.to_vec();
+        let mut output_scalars = scalars.to_vec();
+        let mut output_identities = identities.to_vec();
+        if let Err(error) = execute_fold_atomic(
+            program,
+            tail_count,
+            RegisterInput {
+                scalars,
+                identities,
+            },
+            RegisterOutput {
+                scalars: &mut scratch_scalars,
+                identities: &mut scratch_identities,
+            },
+            RegisterOutput {
+                scalars: &mut output_scalars,
+                identities: &mut output_identities,
+            },
+        ) {
+            let start = TRANSITION_HEADER_BYTES + (taken - 1) * TRANSITION_INSTRUCTION_BYTES;
+            let row = bytes
+                .get(start..start + TRANSITION_INSTRUCTION_BYTES)
+                .map(|slice| {
+                    slice
+                        .iter()
+                        .map(|byte| std::format!("{byte:02x}"))
+                        .collect::<Vec<_>>()
+                        .join("")
+                })
+                .unwrap_or_default();
+            let region = if taken <= prelude {
+                "prelude"
+            } else if taken <= prelude + item {
+                "item"
+            } else {
+                "epilogue"
+            };
+            return Some((taken - 1, std::format!("{error:?} in {region}"), row));
+        }
+    }
+    None
+}
+
+fn current_rent_quotes(
+    lifecycle: StateLifecyclePolicyV5<'_>,
+    rent: &Rent,
+    action: u32,
+) -> Result<Vec<AuthenticatedRentQuoteV5>, HotProjectionErrorV1> {
+    // The same subsequence the runtime builds: one quote per declaration this
+    // action projects, in declaration order. The builder already selects plans
+    // by action; quotes now select the same way.
+    let mut quotes = Vec::with_capacity(usize::from(lifecycle.current_rent_quote_count()));
+    let mut ordinal = 0_u16;
+    while ordinal < lifecycle.current_rent_quote_count() {
+        let declaration = lifecycle
+            .current_rent_quote(ordinal)
+            .map_err(|_| HotProjectionErrorV1::Projection("rent-quote-declaration"))?;
+        if !declaration.applies_to(action) {
+            ordinal = ordinal
+                .checked_add(1)
+                .ok_or(HotProjectionErrorV1::Arithmetic)?;
+            continue;
+        }
+        let exact_data_len = declaration.exact_data_len();
+        quotes.push(AuthenticatedRentQuoteV5 {
+            exact_data_len,
+            scalar_destination: declaration.scalar_destination().index(),
+            current_minimum: rent.minimum_balance(
+                usize::try_from(exact_data_len).map_err(|_| HotProjectionErrorV1::Arithmetic)?,
+            ),
+        });
+        ordinal = ordinal
+            .checked_add(1)
+            .ok_or(HotProjectionErrorV1::Arithmetic)?;
+    }
+    Ok(quotes)
+}
+
+struct PreplannedV1 {
+    states: Vec<LifecycleStateDerivationV1>,
+    scalars: Vec<u64>,
+    identities: Vec<[u8; 32]>,
+    complete: bool,
+}
+
+/// Exact observation prefix lifecycle may inspect.
+///
+/// Dynamic fixed spans are projection transport, and lifecycle addresses
+/// AccountProfile coordinates. The two agree exactly on the coordinates whose
+/// runtime index IS their profile index, which is every coordinate ahead of the
+/// FIRST span's insertion point: a span inserted at `c` shifts every base
+/// coordinate at or after `c` by its selected width and leaves every earlier
+/// one where it was. This used to demand that every span be trailing, which is
+/// the same width for a profile whose spans all insert at `fixed_account_count`
+/// and no width at all for one with an interior span -- selector 9 inserts its
+/// six Custody routes and its Claims Position tail INSIDE the frame, so the
+/// demand refused it outright rather than handing lifecycle the five common Hot
+/// coordinates that are in fact byte-for-byte where the profile says.
+/// Lifecycle's own join rejects item coordinates for these profiles; no scratch
+/// page can become a state, payer, or RentCredit by changing this slice.
+fn lifecycle_semantic_prefix_width(
+    profile: AccountProfileV2<'_>,
+    tail_count: u32,
+    span_counts: &[u32],
+    expanded_width: usize,
+) -> Result<usize, HotProjectionErrorV1> {
+    let expected = if profile.uses_dynamic_fixed_spans() {
+        profile
+            .logical_account_count_with_dynamic_spans(tail_count, span_counts)
+            .map_err(|_| HotProjectionErrorV1::Lifecycle("dynamic-account-width"))?
+    } else {
+        if !span_counts.is_empty() {
+            return Err(HotProjectionErrorV1::Lifecycle("unexpected-span-widths"));
+        }
+        profile
+            .logical_account_count(tail_count)
+            .map_err(|_| HotProjectionErrorV1::Lifecycle("account-width"))?
+    };
+    if expanded_width != expected {
+        return Err(HotProjectionErrorV1::Lifecycle("expanded-account-width"));
+    }
+    if !profile.uses_dynamic_fixed_spans() {
+        return Ok(expanded_width);
+    }
+    let mut prefix = profile.fixed_account_count();
+    let mut span = 0_u16;
+    while span < profile.dynamic_fixed_span_count() {
+        let insertion = profile
+            .dynamic_fixed_span(span)
+            .map_err(|_| HotProjectionErrorV1::Lifecycle("span-decode"))?
+            .insertion_coordinate();
+        if insertion < prefix {
+            prefix = insertion;
+        }
+        span = span
+            .checked_add(1)
+            .ok_or(HotProjectionErrorV1::Arithmetic)?;
+    }
+    Ok(usize::from(prefix))
+}
+
+/// The lifecycle preplan of `prepare_lifecycle_v4`, with adoption in place of
+/// key refusal: the derived PDA is reported per state coordinate, and the
+/// enclosing fixed-point loop re-runs the engine until the observed keys are
+/// the derived ones.
+#[allow(clippy::too_many_arguments)]
+fn preplan_lifecycle(
+    input: &EngineInputV1<'_>,
+    lifecycle: StateLifecyclePolicyV5<'_>,
+    profile: AccountProfileV2<'_>,
+    profile_join: dclutch_vm::account_profile::lifecycle_v3::ValidatedProfileJoinV3<'_>,
+    observations: &[AccountObservationV1<'_>],
+    aliases: &[usize],
+    scalars: &[u64],
+    identities: &[[u8; 32]],
+) -> Result<PreplannedV1, HotProjectionErrorV1> {
+    let tail_count = input.tail_count;
+    let action = input.action;
+    let lifecycle_width = lifecycle_semantic_prefix_width(
+        profile,
+        tail_count,
+        input.span_counts,
+        observations.len(),
+    )?;
+    let observations = observations
+        .get(..lifecycle_width)
+        .ok_or(HotProjectionErrorV1::Lifecycle("observation-prefix"))?;
+    let aliases = aliases
+        .get(..lifecycle_width)
+        .ok_or(HotProjectionErrorV1::Lifecycle("alias-prefix"))?;
+    let mut output_scalars = scalars.to_vec();
+    let mut output_identities = identities.to_vec();
+    let mut scalar_scratch = vec![0_u64; scalars.len()];
+    let mut identity_scratch = vec![[0_u8; 32]; identities.len()];
+    let mut next_scalars = vec![0_u64; scalars.len()];
+    let mut next_identities = vec![[0_u8; 32]; identities.len()];
+    let mut planned_lamports = observations
+        .iter()
+        .map(|observation| observation.lamports())
+        .collect::<Vec<_>>();
+    let mut states = Vec::new();
+    let mut complete = true;
+    let plan_count = lifecycle
+        .action_plan_count(action)
+        .map_err(|_| HotProjectionErrorV1::Lifecycle("plan-count"))?;
+    let mut ordinal = 0_u16;
+    while ordinal < plan_count {
+        let selected = lifecycle
+            .action_plan(action, ordinal)
+            .map_err(|_| HotProjectionErrorV1::Lifecycle("plan-select"))?
+            .with_validated_join(profile_join);
+        let invocation_count = selected
+            .invocation_count(tail_count)
+            .map_err(|_| HotProjectionErrorV1::Lifecycle("invocation-count"))?;
+        let mut invocation = 0_u32;
+        while invocation < invocation_count {
+            let item = selected
+                .invocation_item(tail_count, invocation)
+                .map_err(|_| HotProjectionErrorV1::Lifecycle("invocation-item"))?;
+            let registers = LifecycleRegistersV3 {
+                scalars: &output_scalars,
+                identities: &output_identities,
+            };
+            if !selected
+                .is_enabled(profile, tail_count, item, registers)
+                .map_err(|_| HotProjectionErrorV1::Lifecycle("guard"))?
+            {
+                invocation = invocation
+                    .checked_add(1)
+                    .ok_or(HotProjectionErrorV1::Arithmetic)?;
+                continue;
+            }
+            let indices = selected
+                .project_account_indices(profile, tail_count, item)
+                .map_err(|_| HotProjectionErrorV1::Lifecycle("account-indices"))?;
+            let state = *aliases
+                .get(indices.state())
+                .ok_or(HotProjectionErrorV1::Lifecycle("state-alias"))?;
+            let payer = indices
+                .payer()
+                .map(|index| aliases.get(index).copied())
+                .map(|value| value.ok_or(HotProjectionErrorV1::Lifecycle("payer-alias")))
+                .transpose()?;
+            let rent_credit = indices
+                .rent_credit()
+                .map(|index| aliases.get(index).copied())
+                .map(|value| value.ok_or(HotProjectionErrorV1::Lifecycle("credit-alias")))
+                .transpose()?;
+
+            let seed_count = selected
+                .seed_count()
+                .map_err(|_| HotProjectionErrorV1::Lifecycle("seed-count"))?;
+            let mut seed_bytes: Vec<Vec<u8>> = Vec::with_capacity(usize::from(seed_count));
+            let mut derived: Option<(Pubkey, u8)> = None;
+            let mut seed = 0_u8;
+            while seed < seed_count {
+                match selected
+                    .materialize_seed_input(profile, tail_count, item, registers, seed)
+                    .map_err(|_| HotProjectionErrorV1::Lifecycle("seed"))?
+                {
+                    LifecycleSeedInputValueV3::Bytes(value) => {
+                        seed_bytes.push(value.as_slice().to_vec());
+                    }
+                    LifecycleSeedInputValueV3::CanonicalBump => {
+                        if seed.checked_add(1) != Some(seed_count) {
+                            return Err(HotProjectionErrorV1::Lifecycle("bump-position"));
+                        }
+                        let slices = seed_bytes.iter().map(Vec::as_slice).collect::<Vec<&[u8]>>();
+                        derived = Some(Pubkey::find_program_address(
+                            &slices,
+                            &input.waist.trading_program,
+                        ));
+                    }
+                }
+                seed = seed
+                    .checked_add(1)
+                    .ok_or(HotProjectionErrorV1::Arithmetic)?;
+            }
+            let (derived_key, bump) = derived.ok_or(HotProjectionErrorV1::Lifecycle("no-bump"))?;
+            let observed_state_key = observations
+                .get(state)
+                .ok_or(HotProjectionErrorV1::Lifecycle("state-observation"))?
+                .key();
+            if observed_state_key != derived_key.to_bytes() {
+                // Discovery: the coordinate does not yet hold its derived key.
+                // Record the adoption and skip the plan kernel — the caller
+                // rebinds and re-runs, and the next round plans for real.
+                states.push(LifecycleStateDerivationV1 {
+                    coordinate: state,
+                    derived: derived_key,
+                    plan: None,
+                });
+                complete = false;
+                invocation = invocation
+                    .checked_add(1)
+                    .ok_or(HotProjectionErrorV1::Arithmetic)?;
+                continue;
+            }
+
+            let authenticated_credit = rent_credit
+                .map(|index| {
+                    authenticate_credit(
+                        observations,
+                        index,
+                        *planned_lamports
+                            .get(index)
+                            .ok_or(HotProjectionErrorV1::Lifecycle("credit-lamports"))?,
+                        input,
+                    )
+                })
+                .transpose()?;
+            let current_rent_minimum = if matches!(
+                selected.operation(),
+                LifecycleOperationV3::Create | LifecycleOperationV3::AuthenticateOrCreate
+            ) {
+                let data_bytes = selected
+                    .target_data_bytes(tail_count)
+                    .map_err(|_| HotProjectionErrorV1::Lifecycle("target-width"))?;
+                Some(AuthenticatedRentMinimumV3 {
+                    data_bytes,
+                    lamports: input.rent.minimum_balance(
+                        usize::try_from(data_bytes)
+                            .map_err(|_| HotProjectionErrorV1::Arithmetic)?,
+                    ),
+                })
+            } else {
+                None
+            };
+            scalar_scratch.copy_from_slice(&output_scalars);
+            identity_scratch.copy_from_slice(&output_identities);
+            next_scalars.copy_from_slice(&output_scalars);
+            next_identities.copy_from_slice(&output_identities);
+            let plan = plan_lifecycle_with_protected_outputs_atomic(
+                selected,
+                LifecycleContextV3 {
+                    account_profile: profile,
+                    tail_count,
+                    item_index: item,
+                    accounts: PlannedObservationsV3::planned(observations, &planned_lamports)
+                        .map_err(|_| HotProjectionErrorV1::Lifecycle("planned-observations"))?,
+                    registers: LifecycleRegistersV3 {
+                        scalars: &output_scalars,
+                        identities: &output_identities,
+                    },
+                    trading_program: input.waist.trading_program.to_bytes(),
+                    system_program: system_program::ID.to_bytes(),
+                    adapter_derived_pda: derived_key.to_bytes(),
+                    rent_credit: authenticated_credit,
+                    current_rent_minimum,
+                },
+                bump,
+                LifecycleProtectedRegisterBuffersV3 {
+                    scalar_scratch: &mut scalar_scratch,
+                    identity_scratch: &mut identity_scratch,
+                    output_scalars: &mut next_scalars,
+                    output_identities: &mut next_identities,
+                },
+            )
+            .map_err(|error| {
+                std::eprintln!(
+                    "lifecycle plan refused: {error:?} (plan ordinal {ordinal}, state {state}, derived {derived_key})"
+                );
+                HotProjectionErrorV1::Lifecycle("plan")
+            })?;
+            match plan {
+                StateLifecyclePlanV3::Authenticate(_) => {}
+                StateLifecyclePlanV3::Create(value) => {
+                    *planned_lamports
+                        .get_mut(state)
+                        .ok_or(HotProjectionErrorV1::Lifecycle("state-balance"))? =
+                        value.state_after;
+                    *planned_lamports
+                        .get_mut(payer.ok_or(HotProjectionErrorV1::Lifecycle("payer-index"))?)
+                        .ok_or(HotProjectionErrorV1::Lifecycle("payer-balance"))? =
+                        value.payer_after;
+                }
+                StateLifecyclePlanV3::Close(value) => {
+                    *planned_lamports
+                        .get_mut(state)
+                        .ok_or(HotProjectionErrorV1::Lifecycle("state-balance"))? =
+                        value.source_after;
+                    *planned_lamports
+                        .get_mut(
+                            rent_credit.ok_or(HotProjectionErrorV1::Lifecycle("credit-index"))?,
+                        )
+                        .ok_or(HotProjectionErrorV1::Lifecycle("credit-balance"))? =
+                        value.rent_credit_after;
+                }
+            }
+            states.push(LifecycleStateDerivationV1 {
+                coordinate: state,
+                derived: derived_key,
+                plan: Some(plan),
+            });
+            output_scalars.copy_from_slice(&next_scalars);
+            output_identities.copy_from_slice(&next_identities);
+            invocation = invocation
+                .checked_add(1)
+                .ok_or(HotProjectionErrorV1::Arithmetic)?;
+        }
+        ordinal = ordinal
+            .checked_add(1)
+            .ok_or(HotProjectionErrorV1::Arithmetic)?;
+    }
+    Ok(PreplannedV1 {
+        states,
+        scalars: output_scalars,
+        identities: output_identities,
+        complete,
+    })
+}
+
+/// Authenticate a bound RentCredit observation exactly as the adapter does.
+fn authenticate_credit(
+    observations: &[AccountObservationV1<'_>],
+    index: usize,
+    observed_lamports: u64,
+    input: &EngineInputV1<'_>,
+) -> Result<AuthenticatedRentCreditV3, HotProjectionErrorV1> {
+    let observation = observations
+        .get(index)
+        .ok_or(HotProjectionErrorV1::Lifecycle("credit-coordinate"))?;
+    let credit = LifecycleRentCreditV2::decode(observation.data())
+        .map_err(|_| HotProjectionErrorV1::Lifecycle("credit-decode"))?;
+    if credit.market().to_bytes() != input.market
+        || credit.release_set().to_bytes() != input.waist.release_set
+        || credit.generation() != input.generation
+    {
+        return Err(HotProjectionErrorV1::Lifecycle("credit-binding"));
+    }
+    Ok(AuthenticatedRentCreditV3 {
+        key: observation.key(),
+        beneficiary: credit.refund_wallet().to_bytes(),
+        lamports: observed_lamports,
+    })
+}
+
+fn apply_candidates(
+    states: &[LifecycleStateDerivationV1],
+    aliases: &[usize],
+    accounts: &mut [AccountInput],
+) -> Result<(), HotProjectionErrorV1> {
+    for derivation in states {
+        let (lamports, data_len) = match derivation
+            .plan
+            .ok_or(HotProjectionErrorV1::Lifecycle("candidate-plan"))?
+        {
+            StateLifecyclePlanV3::Authenticate(_) => continue,
+            StateLifecyclePlanV3::Create(plan) => (
+                plan.state_after,
+                usize::try_from(plan.target_data_bytes)
+                    .map_err(|_| HotProjectionErrorV1::Arithmetic)?,
+            ),
+            StateLifecyclePlanV3::Close(plan) => (plan.source_after, 0),
+        };
+        for (coordinate, alias) in aliases.iter().enumerate() {
+            if *alias == derivation.coordinate {
+                let account = accounts
+                    .get_mut(coordinate)
+                    .ok_or(HotProjectionErrorV1::Lifecycle("candidate-coordinate"))?;
+                account.lamports = lamports;
+                account.data_len = data_len;
+            }
+        }
+        // Payer and credit balances also move, but the effect projection reads
+        // them only as lamport inputs, which `planned_lamports` in the preplan
+        // already tracked; the payer's post-plan balance is applied here too.
+    }
+    Ok(())
+}
+
+fn resolve_invocations(
+    effect: EffectProgramV4<'_>,
+    tail_count: u32,
+    scalars: &[u64],
+    identities: &[[u8; 32]],
+    request_bank: &[u8],
+    family_request: &[u8],
+    synthesize_disabled_shadows: bool,
+) -> Result<Vec<DerivedInvocationV1>, HotProjectionErrorV1> {
+    let base = effect.base();
+    let mut output = Vec::new();
+    let mut request_offset = 0_usize;
+    let mut route = 0_u16;
+    while route < base.route_count() {
+        let declared = base
+            .route(route)
+            .map_err(|_| HotProjectionErrorV1::Projection("route-decode"))?;
+        let route_request_bytes = usize::try_from(declared.fixed_request_bytes())
+            .ok()
+            .and_then(|fixed| {
+                usize::try_from(declared.item_request_bytes())
+                    .ok()?
+                    .checked_mul(usize::try_from(tail_count).ok()?)?
+                    .checked_add(fixed)
+            })
+            .ok_or(HotProjectionErrorV1::Arithmetic)?;
+        let count = base
+            .invocation_count(route, tail_count, scalars, identities)
+            .map_err(|_| HotProjectionErrorV1::Projection("invocation-count"))?;
+        if count == 0 && synthesize_disabled_shadows {
+            // Preserve the ordinary builder's historical shadow-authority
+            // construction byte-for-byte. The opt-in admitted candidate path
+            // omits this block and matches Hot's exact `0..invocation_count`
+            // walk: an accelerator-disabled route has no child authority.
+            let end = request_offset
+                .checked_add(
+                    usize::try_from(declared.fixed_request_bytes())
+                        .map_err(|_| HotProjectionErrorV1::Arithmetic)?,
+                )
+                .ok_or(HotProjectionErrorV1::Arithmetic)?;
+            let request = request_bank
+                .get(request_offset..end)
+                .ok_or(HotProjectionErrorV1::Projection("shadow-request-slice"))?;
+            output.push(DerivedInvocationV1 {
+                route,
+                invocation: 0,
+                resolved: ResolvedInvocationV3 {
+                    role: declared.role(),
+                    kind: declared.kind(),
+                    item: None,
+                    fixed_account_start: declared.fixed_account_start(),
+                    fixed_account_count: declared.fixed_account_count(),
+                    item_account_start: 0,
+                    item_account_count: 0,
+                    item_account_stride: 0,
+                    repeated_item_count: 0,
+                    request_offset,
+                    request_len: request.len(),
+                    borrowed_witness: None,
+                    receipt_dependencies:
+                        dclutch_vm::effect::v3::ResolvedReceiptDependenciesV3::empty(),
+                    receipt_dependency: None,
+                },
+                request: request.to_vec(),
+            });
+        }
+        let mut invocation = 0_u32;
+        while invocation < count {
+            // Through the V4 successor, not the V3 base: the successor is what
+            // shifts every route's `fixed_account_start` past the spans
+            // inserted before it and widens a spanned route's own frame. A
+            // family whose routes carry no V4 span reads the same either way,
+            // which is why the base was enough until selector 9 -- whose six
+            // Custody routes declare a ZERO base frame and take their whole
+            // width from a span.
+            let resolved = effect
+                .resolved_invocation(route, invocation, tail_count, scalars, identities)
+                .map_err(|_| HotProjectionErrorV1::Projection("invocation-resolve"))?
+                .invocation;
+            let end = resolved
+                .request_offset
+                .checked_add(resolved.request_len)
+                .ok_or(HotProjectionErrorV1::Arithmetic)?;
+            let fixed = request_bank
+                .get(resolved.request_offset..end)
+                .ok_or(HotProjectionErrorV1::Projection("request-slice"))?;
+            // A route's child request is its projected bank bytes followed by
+            // every V4 borrowed range it declares, which is
+            // `hot_v3::BorrowedRouteRangesV4::append_to`'s order and the order
+            // `child_request_digest_v5` commits to. The V3 single witness is
+            // the older grammar for the same thing and the two never coexist:
+            // Hot refuses a route that declares both, so this does too.
+            //
+            // Reading only the V3 half is what selector 9's Claims route fell
+            // through: it declares zero bank bytes and no V3 witness, borrows
+            // the Claims packet out of the family request through one V4 range,
+            // and the builder handed `derive_authority` an EMPTY request --
+            // which then refused `UnsupportedRoute` for a magic it could not
+            // read, two files from the route that had never been assembled.
+            let range_count = effect
+                .borrowed_range_count_for_route(route)
+                .map_err(|_| HotProjectionErrorV1::Projection("borrowed-range-count"))?;
+            let request = match resolved.borrowed_witness {
+                Some(_) if range_count != 0 => {
+                    return Err(HotProjectionErrorV1::Projection("witness-and-ranges"));
+                }
+                None => {
+                    let mut request = fixed.to_vec();
+                    let mut ordinal = 0_u16;
+                    while ordinal < range_count {
+                        request.extend_from_slice(
+                            effect
+                                .resolved_borrowed_range_for_tail(
+                                    route, ordinal, tail_count, scalars,
+                                )
+                                .map_err(|_| {
+                                    HotProjectionErrorV1::Projection("borrowed-range-resolve")
+                                })?
+                                .slice(family_request)
+                                .map_err(|_| {
+                                    HotProjectionErrorV1::Projection("borrowed-range-slice")
+                                })?,
+                        );
+                        ordinal = ordinal
+                            .checked_add(1)
+                            .ok_or(HotProjectionErrorV1::Arithmetic)?;
+                    }
+                    request
+                }
+                Some(witness) if fixed.is_empty() => witness
+                    .slice(family_request)
+                    .map_err(|_| HotProjectionErrorV1::Projection("borrowed-witness"))?
+                    .to_vec(),
+                Some(_) => return Err(HotProjectionErrorV1::Projection("witness-shape")),
+            };
+            output.push(DerivedInvocationV1 {
+                route,
+                invocation,
+                resolved,
+                request,
+            });
+            invocation = invocation
+                .checked_add(1)
+                .ok_or(HotProjectionErrorV1::Arithmetic)?;
+        }
+        request_offset = request_offset
+            .checked_add(route_request_bytes)
+            .ok_or(HotProjectionErrorV1::Arithmetic)?;
+        route = route
+            .checked_add(1)
+            .ok_or(HotProjectionErrorV1::Arithmetic)?;
+    }
+    Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dclutch_trading::general::{
+        account_rules_v3::{
+            GeneralExternalAccountWidthsV3, encode_general_account_profile_v3_atomic,
+            general_account_profile_bytes_v3,
+        },
+        hot_candidate_v3::{general_hot_scalar_count_v3, scalar},
+    };
+    use dclutch_trading::general_codec::Action;
+    use dclutch_vm::effect::{
+        v2::FixedRole,
+        v3::{
+            HEADER_BYTES as EFFECT_HEADER_BYTES_V3, ROUTE_BYTES, RouteKindV3,
+            encode::{EffectGeometryV3, RouteInputV3, encode_effect_program_v3_atomic},
+        },
+        v4::{BorrowedRangePolicyV4, HEADER_BYTES_V4, encode_program_v4_atomic},
+        v5::{HEADER_BYTES_V5, encode_program_v5_atomic},
+    };
+    use dclutch_vm::request_profile::{
+        encode::{
+            RequestCoordinateV1, RequestGeometryV1, RequestInstructionV1, ScalarRegisterV1,
+            encode_request_profile_v1_atomic,
+        },
+        v3::{
+            BorrowedWitnessPolicyV3, BorrowedWitnessRoleV3, REQUEST_PROFILE_V3_HEADER_BYTES,
+            encode_request_profile_v3_atomic,
+        },
+    };
+
+    fn exact_effect_v4() -> Vec<u8> {
+        let routes = [RouteInputV3 {
+            role: FixedRole::Core,
+            kind: RouteKindV3::Once,
+            enable_common_scalar: None,
+            witness_range_common_scalar: None,
+            receipt_dependency: None,
+            fixed_account_start: 0,
+            fixed_account_count: 5,
+            item_account_start: 0,
+            item_account_count: 0,
+            fixed_request: &[],
+            item_request: &[],
+        }];
+        let mut base_scratch = vec![0_u8; EFFECT_HEADER_BYTES_V3 + ROUTE_BYTES];
+        let mut base = vec![0_u8; base_scratch.len()];
+        encode_effect_program_v3_atomic(
+            EffectGeometryV3 {
+                fixed_accounts: 5,
+                item_account_stride: 0,
+                common_scalars: 2,
+                item_scalar_stride: 0,
+                common_identities: 2,
+                item_identity_stride: 0,
+            },
+            &routes,
+            &[],
+            &[],
+            &mut base_scratch,
+            &mut base,
+        )
+        .expect("V3 effect");
+        let mut scratch = vec![0_u8; HEADER_BYTES_V4 + base.len()];
+        let mut output = vec![0_u8; scratch.len()];
+        encode_program_v4_atomic(
+            &base,
+            BorrowedRangePolicyV4::DisjointExactCoverage,
+            1,
+            &[],
+            &[],
+            &mut scratch,
+            &mut output,
+        )
+        .expect("V4 effect");
+        output
+    }
+
+    fn exact_effect_v5(base: &[u8]) -> Vec<u8> {
+        let mut scratch = vec![0_u8; HEADER_BYTES_V5 + base.len()];
+        let mut output = vec![0_u8; scratch.len()];
+        encode_program_v5_atomic(base, &[], &[], &mut scratch, &mut output).expect("V5 effect");
+        output
+    }
+
+    #[test]
+    fn effect_schema_selects_v4_or_full_v5_base_execution_view() {
+        let base = exact_effect_v4();
+        let successor = exact_effect_v5(&base);
+        assert_eq!(
+            decode_execution_effect_program(EFFECT_SCHEMA_RELEASE_ID_V4, &base)
+                .expect("V4 execution view")
+                .bytes(),
+            base
+        );
+        assert_eq!(
+            decode_execution_effect_program(EFFECT_SCHEMA_RELEASE_ID_V5, &successor)
+                .expect("V5 base execution view")
+                .bytes(),
+            base
+        );
+        assert_ne!(successor, base);
+    }
+
+    #[test]
+    fn effect_schema_refuses_unknown_malformed_and_hybrid_programs() {
+        let base = exact_effect_v4();
+        let successor = exact_effect_v5(&base);
+        assert!(decode_execution_effect_program([0x72; 32], &base).is_err());
+        assert!(decode_execution_effect_program(EFFECT_SCHEMA_RELEASE_ID_V4, &successor).is_err());
+        assert!(decode_execution_effect_program(EFFECT_SCHEMA_RELEASE_ID_V5, &base).is_err());
+        let mut malformed = successor;
+        malformed[5] = 1;
+        assert!(decode_execution_effect_program(EFFECT_SCHEMA_RELEASE_ID_V5, &malformed).is_err());
+        let mut malformed_base = exact_effect_v5(&base);
+        malformed_base[HEADER_BYTES_V5] ^= 1;
+        assert!(
+            decode_execution_effect_program(EFFECT_SCHEMA_RELEASE_ID_V5, &malformed_base).is_err()
+        );
+    }
+
+    #[test]
+    fn projected_observation_marker_mirrors_exact_profile_prestate() {
+        assert!(prestate_uses_variable_marker(
+            AccountPrestateV2::AdapterAuthenticatedVariableData
+        ));
+        for substituted in [
+            AccountPrestateV2::Exact,
+            AccountPrestateV2::LifecycleBound,
+            AccountPrestateV2::AdapterAuthenticatedVariableDataAlias,
+            AccountPrestateV2::AuthenticatedRouteAlias,
+            AccountPrestateV2::AuthenticatedOpaqueReadonlyData,
+        ] {
+            assert!(!prestate_uses_variable_marker(substituted));
+        }
+    }
+
+    #[test]
+    #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
+    fn authenticated_span_selectors_seed_exactly_and_refuse_hostile_banks() {
+        let widths = GeneralExternalAccountWidthsV3 {
+            linked_basis_prefix: 256,
+            result_domain: 192,
+            rent_sysvar: 17,
+            core_market: 320,
+            activation_cache: 160,
+            upgradeable_program: 36,
+            trading_programdata_prefix: 45,
+            claims_programdata_prefix: 45,
+            core_programdata_prefix: 45,
+            realm_record: 112,
+            rent_credit: 48,
+        };
+        let profile_bytes =
+            general_account_profile_bytes_v3(Action::OpenBatch).expect("General Profile13 width");
+        let mut scratch = vec![0_u8; profile_bytes];
+        let mut bytes = vec![0_u8; profile_bytes];
+        encode_general_account_profile_v3_atomic(
+            Action::OpenBatch,
+            widths,
+            &mut scratch,
+            &mut bytes,
+        )
+        .expect("General Profile13");
+        let profile = AccountProfileV2::decode(&bytes).expect("Profile13 decode");
+        let scalar_count = usize::try_from(
+            general_hot_scalar_count_v3(Action::OpenBatch, 4).expect("General scalar count"),
+        )
+        .expect("host usize");
+        let selector =
+            usize::try_from(scalar::ORDER_MIN_QUOTE_CREDIT_PER_LOT).expect("selector coordinate");
+        let mut scalars = vec![0_u64; scalar_count];
+        scalars[0] = 0x55;
+        // GENERAL DECLARES NO SPAN, so the only admitted width vector is the
+        // empty one and it seeds nothing. Coordinate 86 was
+        // `INPUT_SCRATCH_PAGE_COUNT`, the selector that span used, and on
+        // 2026-09-04 it became the seller's floor -- which changes nothing this
+        // asserts: the seeder must not write a register no span selects, and
+        // the coordinate having acquired a meaning makes a stray write worse
+        // rather than better.
+        seed_authenticated_dynamic_span_counts(profile, &[], &mut scalars)
+            .expect("a span-free profile seeds no selector");
+        assert_eq!(scalars[selector], 0);
+        assert_eq!(scalars[0], 0x55, "unrelated semantic register is unchanged");
+
+        for stated in [&[3_u32][..], &[0][..], &[3, 3][..]] {
+            assert_eq!(
+                seed_authenticated_dynamic_span_counts(profile, stated, &mut scalars),
+                Err(HotProjectionErrorV1::Spans("span-selector-count")),
+                "a width for a span this profile does not declare must refuse"
+            );
+        }
+        let expanded = profile
+            .logical_account_count_with_dynamic_spans(4, &[])
+            .expect("expanded Profile13 width");
+        assert_eq!(expanded, usize::from(profile.fixed_account_count()));
+        assert_eq!(
+            lifecycle_semantic_prefix_width(profile, 4, &[], expanded),
+            Ok(usize::from(profile.fixed_account_count()))
+        );
+        assert_eq!(
+            lifecycle_semantic_prefix_width(profile, 4, &[], expanded + 1),
+            Err(HotProjectionErrorV1::Lifecycle("expanded-account-width"))
+        );
+    }
+    /// The exact prefix projector selector 9's borrowed-witness profile wraps.
+    ///
+    /// Sixteen prefix bytes: an eight-byte magic the profile requires, then one
+    /// projected `u64` into common scalar zero.
+    #[cfg(test)]
+    fn borrowed_embedded_v1() -> Vec<u8> {
+        let instructions = [
+            RequestInstructionV1::require_u64(
+                RequestCoordinateV1::fixed(0),
+                u64::from_le_bytes(*b"PREFIX03"),
+            ),
+            RequestInstructionV1::project_u64(
+                RequestCoordinateV1::fixed(8),
+                ScalarRegisterV1::common(0),
+            ),
+        ];
+        let width = dclutch_vm::request_profile::HEADER_BYTES
+            + 2 * dclutch_vm::request_profile::OPERATION_BYTES;
+        let mut scratch = vec![0_u8; width];
+        let mut output = vec![0_u8; width];
+        encode_request_profile_v1_atomic(
+            RequestGeometryV1::new(16, 0, 1, 0, 1, 0),
+            &instructions,
+            &[],
+            &mut scratch,
+            &mut output,
+        )
+        .expect("embedded V1 prefix projector");
+        output
+    }
+
+    #[cfg(test)]
+    fn borrowed_policy() -> BorrowedWitnessPolicyV3 {
+        BorrowedWitnessPolicyV3 {
+            minimum_bytes: 8,
+            maximum_bytes: 16,
+            consumer_role: BorrowedWitnessRoleV3::Claims,
+            child_request_magic: *b"CHILD003",
+            child_receipt_magic: *b"RECPT003",
+            child_receipt_bytes: 376,
+        }
+    }
+
+    #[cfg(test)]
+    fn borrowed_wrapper() -> Vec<u8> {
+        let embedded = borrowed_embedded_v1();
+        let width = REQUEST_PROFILE_V3_HEADER_BYTES + embedded.len();
+        let mut scratch = vec![0_u8; width];
+        let mut output = vec![0_u8; width];
+        encode_request_profile_v3_atomic(&embedded, borrowed_policy(), &mut scratch, &mut output)
+            .expect("V3 borrowed-witness wrapper");
+        output
+    }
+
+    /// Project one complete request through whichever kind the schema selects.
+    #[cfg(test)]
+    fn project_once(
+        bytes: &[u8],
+        schema: [u8; 32],
+        request: &[u8],
+    ) -> Result<Vec<u64>, HotProjectionErrorV1> {
+        let profile = decode_request_profile_bytes(bytes, schema)?;
+        let input_scalars = vec![0_u64; 1];
+        let input_identities = vec![[0_u8; 32]; 1];
+        let mut scratch_scalars = input_scalars.clone();
+        let mut scratch_identities = input_identities.clone();
+        let mut output_scalars = input_scalars.clone();
+        let mut output_identities = input_identities.clone();
+        profile.project_atomic(
+            0,
+            request,
+            ProjectionRegistersV1 {
+                input_scalars: &input_scalars,
+                input_identities: &input_identities,
+                scratch_scalars: &mut scratch_scalars,
+                scratch_identities: &mut scratch_identities,
+                output_scalars: &mut output_scalars,
+                output_identities: &mut output_identities,
+            },
+            "test-projection",
+        )?;
+        Ok(output_scalars)
+    }
+
+    /// The borrowed-witness kind projects the PREFIX and leaves the suffix opaque.
+    ///
+    /// The distinction is the whole reason V3 was a named boundary of this
+    /// engine rather than a fall-through to V1: the embedded V1 declares a
+    /// sixteen-byte request, the complete request is twenty-four bytes, and a
+    /// V1 projector driven over all of it refuses on width. This asserts the
+    /// engine takes the split, and that the same wrapper bytes under the V1
+    /// schema label are refused rather than quietly reinterpreted.
+    #[test]
+    fn a_borrowed_witness_profile_projects_its_prefix_and_borrows_the_rest() {
+        let wrapper = borrowed_wrapper();
+        let mut request = Vec::new();
+        request.extend_from_slice(b"PREFIX03");
+        request.extend_from_slice(&0x0102_0304_0506_0708_u64.to_le_bytes());
+        request.extend_from_slice(b"CHILD003");
+        assert_eq!(request.len(), 24);
+
+        assert_eq!(
+            project_once(
+                &wrapper,
+                dclutch_vm::request_profile::v3::REQUEST_PROFILE_V3_SCHEMA_RELEASE_ID,
+                &request,
+            ),
+            Ok(vec![0x0102_0304_0506_0708])
+        );
+
+        // The embedded V1 is what answers register ownership, exactly as
+        // `hot_v3::RequestProfileKindV3::writes_register` answers it.
+        let profile = decode_request_profile_bytes(
+            &wrapper,
+            dclutch_vm::request_profile::v3::REQUEST_PROFILE_V3_SCHEMA_RELEASE_ID,
+        )
+        .expect("borrowed-witness kind");
+        assert!(matches!(profile, RequestProfileKind::Borrowed(_)));
+        assert_eq!(
+            profile.writes_register(ProjectionTargetV1 {
+                kind: ProjectionRegisterKindV1::Scalar,
+                space: ProjectionRegisterSpaceV1::Common,
+                index: 0,
+            }),
+            Ok(true)
+        );
+
+        // Same bytes, wrong schema label: a V3 wrapper is not a V1 profile and
+        // must be refused, never reinterpreted from its first sixteen bytes.
+        assert_eq!(
+            project_once(&wrapper, REQUEST_PROFILE_SCHEMA_ID_V1, &request),
+            Err(HotProjectionErrorV1::Projection("request-profile-v1"))
+        );
+    }
+
+    /// Every conjunct of the witness policy refuses, and none of them is width.
+    #[test]
+    fn a_borrowed_witness_outside_its_declared_policy_refuses() {
+        let wrapper = borrowed_wrapper();
+        let schema = dclutch_vm::request_profile::v3::REQUEST_PROFILE_V3_SCHEMA_RELEASE_ID;
+        let prefix = {
+            let mut bytes = Vec::new();
+            bytes.extend_from_slice(b"PREFIX03");
+            bytes.extend_from_slice(&1_u64.to_le_bytes());
+            bytes
+        };
+        for (case, witness) in [
+            ("absent witness", Vec::new()),
+            ("below the declared minimum", b"CHILD0".to_vec()),
+            ("above the declared maximum", b"CHILD003XXXXXXXXX".to_vec()),
+            ("another child's magic", b"OTHER003".to_vec()),
+        ] {
+            let mut request = prefix.clone();
+            request.extend_from_slice(&witness);
+            assert_eq!(
+                project_once(&wrapper, schema, &request),
+                Err(HotProjectionErrorV1::Projection("test-projection")),
+                "a witness {case} must refuse"
+            );
+        }
+        // And the honest one still commits, so the refusals above are the
+        // policy talking and not a broken fixture.
+        let mut request = prefix;
+        request.extend_from_slice(b"CHILD003");
+        assert!(project_once(&wrapper, schema, &request).is_ok());
+    }
+}

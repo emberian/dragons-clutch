@@ -659,6 +659,58 @@ fn set_candidate_lamports_v3(
     Ok(())
 }
 
+/// Per-invocation guard decisions are mutable register facts, separate from the
+/// immutable artifact cache. Replan evaluates every guard again and must
+/// reproduce each decision, including declarations which produced no plan.
+struct LifecycleGuardDecisionsV4 {
+    enabled: Vec<bool>,
+    active: usize,
+}
+
+impl LifecycleGuardDecisionsV4 {
+    fn new(declared: usize) -> Result<Self, ProgramError> {
+        let mut enabled = Vec::new();
+        enabled
+            .try_reserve_exact(declared)
+            .map_err(|_| TradingSbfError::HeapExhausted)?;
+        enabled.resize(declared, false);
+        Ok(Self { enabled, active: 0 })
+    }
+
+    fn admit(
+        &mut self,
+        ordinal: usize,
+        enabled: bool,
+        verifying: bool,
+    ) -> Result<(), ProgramError> {
+        let prior = self
+            .enabled
+            .get_mut(ordinal)
+            .ok_or(TradingSbfError::Transition)?;
+        if verifying {
+            if *prior != enabled {
+                return Err(TradingSbfError::Transition.into());
+            }
+        } else {
+            *prior = enabled;
+            if enabled {
+                self.active = self
+                    .active
+                    .checked_add(1)
+                    .ok_or(TradingSbfError::Transition)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn finish(&self, reached: usize, active: usize) -> Result<(), ProgramError> {
+        if reached != self.enabled.len() || active != self.active {
+            return Err(TradingSbfError::Transition.into());
+        }
+        Ok(())
+    }
+}
+
 /// Immutable facts shared by the two lifecycle evaluations. No account
 /// observation belongs here: the accelerator may run between these passes.
 struct LifecycleStaticFactsV4<'policy> {
@@ -780,6 +832,7 @@ impl<'policy> LifecycleStaticFactsV4<'policy> {
 /// is to agree with the first.
 pub(super) struct LifecyclePreplanScratchV4<'region, 'policy> {
     static_facts: Option<LifecycleStaticFactsV4<'policy>>,
+    guard_decisions: Option<LifecycleGuardDecisionsV4>,
     planned_lamports: ScratchVecV1<'region, u64>,
     scalar_scratch: ScratchVecV1<'region, u64>,
     identity_scratch: ScratchVecV1<'region, [u8; 32]>,
@@ -836,6 +889,7 @@ impl<'region, 'policy> LifecyclePreplanScratchV4<'region, 'policy> {
         // live in this constructor's frame instead.
         Ok(Box::new(Self {
             static_facts: None,
+            guard_decisions: None,
             planned_lamports,
             scalar_scratch,
             identity_scratch,
@@ -913,9 +967,17 @@ pub(super) fn prepare_lifecycle_v4<'a, 'region, 'policy>(
             rent,
             profile_join,
         )?);
+        scratch.guard_decisions = Some(LifecycleGuardDecisionsV4::new(
+            scratch
+                .static_facts
+                .as_ref()
+                .ok_or(TradingSbfError::Transition)?
+                .planned,
+        )?);
     }
     let LifecyclePreplanScratchV4 {
         static_facts,
+        guard_decisions,
         planned_lamports,
         scalar_scratch,
         identity_scratch,
@@ -929,8 +991,18 @@ pub(super) fn prepare_lifecycle_v4<'a, 'region, 'policy>(
     }
     let facts = static_facts.as_ref().ok_or(TradingSbfError::Transition)?;
     facts.require_binding(policy, account_profile, action, tail_count, rent)?;
-    let planned = facts.planned;
+    let decisions = guard_decisions
+        .as_mut()
+        .ok_or(TradingSbfError::Transition)?;
+    let verifying = expected.is_some();
+    let planned = if verifying {
+        decisions.active
+    } else {
+        facts.planned
+    };
     let mut sink = LifecycleBatchSinkV4::new(expected, planned)?;
+    let mut reached = 0_usize;
+    let mut active = 0_usize;
     // Which hint slot the next created account takes. Both passes walk the same
     // plan in the same order, so the two walks agree on the assignment without
     // carrying it between them.
@@ -953,18 +1025,21 @@ pub(super) fn prepare_lifecycle_v4<'a, 'region, 'policy>(
                 scalars: &output_scalars,
                 identities: &output_identities,
             };
-            if !hot_cu_watch_lifecycle!(
+            let enabled = hot_cu_watch_lifecycle!(
                 selected.is_enabled(account_profile, tail_count, item, registers),
                 70,
                 u64::from(_ordinal),
                 u64::from(invocation),
                 0
             )
-            .map_err(|_| TradingSbfError::Content)?
-            {
-                hot_cu_lifecycle_prepare!(71, u64::from(_ordinal), u64::from(invocation), 0);
-                return Err(TradingSbfError::Content.into());
+            .map_err(|_| TradingSbfError::Content)?;
+            decisions.admit(reached, enabled, verifying)?;
+            reached = reached.checked_add(1).ok_or(TradingSbfError::Transition)?;
+            if !enabled {
+                invocation = invocation.checked_add(1).ok_or(TradingSbfError::Content)?;
+                continue;
             }
+            active = active.checked_add(1).ok_or(TradingSbfError::Transition)?;
             let prior = hot_cu_watch_lifecycle!(
                 sink.expected(),
                 12,
@@ -1212,8 +1287,9 @@ pub(super) fn prepare_lifecycle_v4<'a, 'region, 'policy>(
             invocation = invocation.checked_add(1).ok_or(TradingSbfError::Content)?;
         }
     }
+    decisions.finish(reached, active)?;
     Ok(PreparedLifecycleBatchV4 {
-        plans: sink.finish(planned)?,
+        plans: sink.finish(active)?,
         scalars: output_scalars,
         identities: output_identities,
     })

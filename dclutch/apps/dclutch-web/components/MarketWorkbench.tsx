@@ -60,10 +60,10 @@ type Stage = Readonly<{
 }>;
 
 const STAGES: ReadonlyArray<Stage> = Object.freeze([
-  { id: 'author', number: '01', title: 'Author & fund', summary: 'Compile exact Product bytes, authenticate releases, prepay physical creation, and found the Market.' },
-  { id: 'trade', number: '02', title: 'Trade & provide liquidity', summary: 'Construct intent, candidate, Series, and inventory routes only from current state and accepted account frames.' },
-  { id: 'resolve', number: '03', title: 'Resolve & settle', summary: 'Bind real provider evidence, execute failure/recovery policy, and stream conservative physical effects.' },
-  { id: 'claim', number: '04', title: 'Claim & close', summary: 'Move exact liabilities between representations, redeem resolved value, then retire every quiescent child and root.' },
+  { id: 'author', number: '01', title: 'Author & fund', summary: 'Choose outcomes, fund setup costs and open the market.' },
+  { id: 'trade', number: '02', title: 'Trade & provide liquidity', summary: 'Place orders, submit clearing candidates or manage liquidity.' },
+  { id: 'resolve', number: '03', title: 'Resolve & settle', summary: 'Submit a source report or use the market’s recovery rules to reach an outcome.' },
+  { id: 'claim', number: '04', title: 'Claim & close', summary: 'Transfer claims, redeem payouts and close accounts that are no longer needed.' },
 ]);
 
 type WorkbenchState =
@@ -190,12 +190,12 @@ export default function MarketWorkbench({ initialStage = 'author', surface = 'li
       path={resolutionSurface ? '/resolution' : '/workbench'}
       title={resolutionSurface ? 'Resolution readiness' : 'Lifecycle readiness'}
       purpose={resolutionSurface
-        ? 'Read what the selected market still needs before a resolution route can begin preflight.'
-        : 'Read which lifecycle routes can begin preflight against the chain you choose.'}
+        ? 'See what the market needs to reach an outcome.'
+        : 'See available actions for the selected market.'}
     />}>
     <section className="workbench-heading"><div><h1>{resolutionSurface ? <>Resolution<br />readiness.</> : <>The market<br />lifecycle.</>}</h1></div><p>{resolutionSurface
-      ? 'This read-only map opens at Resolve & settle. It reads the selected chain and names missing preconditions; it cannot resolve a market.'
-      : 'This is a read-only map of where a market has got to. It reads the chain and tells you what is still missing; it does not create, trade, resolve, or redeem. No sample market, price, pool, balance, or wallet authority appears here.'}</p></section>
+      ? 'Check the market’s resolution status and open the next available action.'
+      : 'Enter a market address to see its current stage, available actions and requirements.'}</p></section>
     {smokeStoryEnabledV1() && <section className="trade-v3-card">
       <header><span>··</span><div><h2>Three markets, run in public</h2><p>A price market Pyth settles on its own, a devnet market about a real mainnet event, and one we abandon on purpose so you can finish it and collect the bounty.</p></div></header>
       <div className="direct-actions">
@@ -205,19 +205,19 @@ export default function MarketWorkbench({ initialStage = 'author', surface = 'li
     </section>}
     <nav className="workbench-stages" aria-label="Market lifecycle stages">{STAGES.map((candidate) => <button type="button" className={candidate.id === stageId ? 'active' : ''} onClick={() => setStageId(candidate.id)} key={candidate.id}><span>{candidate.number}</span><strong>{candidate.title}</strong><small>{candidate.summary}</small></button>)}</nav>
 
-    <div className="workbench-grid"><form className="workbench-coordinates" onSubmit={acquire}><header><span>Chain observation</span><h2>Reacquire one execution surface</h2><p>{deployment.label} supplies the six program addresses. Realm and Market are the only optional coordinates this read needs.</p></header>
+    <div className="workbench-grid"><form className="workbench-coordinates" onSubmit={acquire}><header><span>Chain observation</span><h2>Load a market</h2><p>Program addresses come from {deployment.label}. Add a Realm or Market address to inspect it.</p></header>
       <fieldset className="operator-act">
         <legend>The chain this read observes</legend>
         <div className="operator-field-slot"><EndpointField label="Finalized RPC endpoint" value={endpoint} onChange={setEndpoint}
           provenance={<DerivedProvenance derived={deployment.endpoint} value={endpoint} source="the cluster picked in the header" absent="Pick a cluster in the header, or paste an endpoint." />} />{refusalFor('endpoint')}</div>
-        <details className="operator-override"><summary>Program overrides · {OPERATOR_ROLES.length} filled from {deployment.label}</summary><p>Use these only to inspect a deployment other than the one selected in the header. Every edit is still reacquired from the chain.</p><div className="operator-act-grid">{OPERATOR_ROLES.map((role) => <div className="operator-field-slot" key={role}><PubkeyField label={`${role} program`} required value={effectiveCoordinates[role]} onChange={(next) => update(role, next)}
+        <details className="operator-override"><summary>Program overrides · {OPERATOR_ROLES.length} filled from {deployment.label}</summary><p>Override these addresses to inspect a custom deployment.</p><div className="operator-act-grid">{OPERATOR_ROLES.map((role) => <div className="operator-field-slot" key={role}><PubkeyField label={`${role} program`} required value={effectiveCoordinates[role]} onChange={(next) => update(role, next)}
           provenance={<DerivedProvenance derived={deployment.programs[role]} value={effectiveCoordinates[role]} source={`the ${deployment.label} deployment`} absent="Select a deployment in the header, or paste this program address." />} />{refusalFor(role)}</div>)}</div></details>
       </fieldset>
       <fieldset className="operator-act"><legend>Optional state coordinates</legend><div className="operator-act-grid">
         <div className="operator-field-slot"><PubkeyField label="Realm · optional" value={coordinates.realm} onChange={(next) => update('realm', next)} provenance="Add one only when the lifecycle decision depends on a Realm read." />{refusalFor('realm')}</div>
         <div className="operator-field-slot"><PubkeyField label="Market · optional during authoring" value={coordinates.market} onChange={(next) => update('market', next)} provenance="Add one to evaluate market-bound lifecycle actions; leave it empty while authoring records." />{refusalFor('market')}</div>
       </div></fieldset>
-      <button type="submit" disabled={currentState.kind === 'loading'}>{currentState.kind === 'loading' ? 'Reading finalized state…' : 'Observe this chain surface'}</button><p className="direct-status" aria-live="polite">{currentState.kind === 'ready' ? `Observed at slot ${currentState.snapshot.observedSlot}${currentState.snapshot.market ? ` · ${compact(currentState.snapshot.market.address)} · ${currentState.snapshot.market.dataBytes} bytes` : ' · no Market selected'}${machineObservationTextV1(currentState.machines)}` : currentState.kind === 'error' && refusalField !== null ? `Observation refused at ${refusalField}. Its remedy is beside that field.` : currentState.message}</p>{currentState.kind === 'error' && refusalField === null ? <OperatorRefusal remedy="Recheck the coordinates as one deployment." detail={currentState.message} /> : null}{currentState.kind === 'ready' && <dl className="workbench-authority"><div><dt>Programs</dt><dd>{currentState.snapshot.roles.length} executable</dd></div><div><dt>Realm</dt><dd>{currentState.snapshot.realm?.header ?? (currentState.snapshot.realm ? 'Core-owned / unclassified' : 'not selected')}</dd></div><div><dt>Market</dt><dd>{currentState.snapshot.market?.header ?? (currentState.snapshot.market ? 'Core-owned / unclassified' : 'not selected')}</dd></div><div><dt>Release</dt><dd>unrecognized until route preflight</dd></div></dl>}</form>
+      <button type="submit" disabled={currentState.kind === 'loading'}>{currentState.kind === 'loading' ? 'Reading finalized state…' : 'Load status'}</button><p className="direct-status" aria-live="polite">{currentState.kind === 'ready' ? `Observed at slot ${currentState.snapshot.observedSlot}${currentState.snapshot.market ? ` · ${compact(currentState.snapshot.market.address)} · ${currentState.snapshot.market.dataBytes} bytes` : ' · no Market selected'}${machineObservationTextV1(currentState.machines)}` : currentState.kind === 'error' && refusalField !== null ? `Observation refused at ${refusalField}. Its remedy is beside that field.` : currentState.message}</p>{currentState.kind === 'error' && refusalField === null ? <OperatorRefusal remedy="Recheck the coordinates as one deployment." detail={currentState.message} /> : null}{currentState.kind === 'ready' && <dl className="workbench-authority"><div><dt>Programs</dt><dd>{currentState.snapshot.roles.length} executable</dd></div><div><dt>Realm</dt><dd>{currentState.snapshot.realm?.header ?? (currentState.snapshot.realm ? 'Core-owned / unclassified' : 'not selected')}</dd></div><div><dt>Market</dt><dd>{currentState.snapshot.market?.header ?? (currentState.snapshot.market ? 'Core-owned / unclassified' : 'not selected')}</dd></div><div><dt>Release</dt><dd>unrecognized until route preflight</dd></div></dl>}</form>
 
       <section className="workbench-actions"><header><span>{stage.number} · current stage</span><h2>{stage.title}</h2><p>{stage.summary}</p></header><div>{actions.map((standing) => {
         const verdict = evaluateCapabilityV1(standing, snapshot, machines);
@@ -237,7 +237,7 @@ export default function MarketWorkbench({ initialStage = 'author', surface = 'li
         // and cannot say why is the flat-console failure in miniature; where an
         // act cannot be opened, the card says what is missing and links to the
         // page that answers it, which is always reachable.
-        return <article className={accepted ? 'ready' : ''} key={standing.action.id}><div><span className={`operator-status ${verdict.status}`}>{verdict.status.replaceAll('-', ' ')}</span><h3>{standing.action.action}</h3></div><p>{verdict.reason}</p><dl className="operator-action-contract"><div><dt>Where it runs</dt><dd>{contract.venue}</dd></div><div><dt>What it promises</dt><dd>{contract.guarantee}</dd></div><div><dt>Phase gate</dt><dd>{capabilityPhaseGateTextV1(verdict.phaseGate)}</dd></div>{machineClauses.length > 0 ? <div><dt>Machine gate</dt><dd>{machineClauses.join('; ')}</dd></div> : null}{selectedClauses.length > 0 ? <div><dt>Family gate</dt><dd>{selectedClauses.join('; ')}</dd></div> : null}</dl>{standing.walls.map((held) => <p className="operator-action-wall" key={held.citation}><strong>Known wall</strong> {held.statement} <small>({held.citation})</small></p>)}{accepted && workspace !== null
+        return <article className={accepted ? 'ready' : ''} key={standing.action.id}><div><span className={`operator-status ${verdict.status}`}>{verdict.status.replaceAll('-', ' ')}</span><h3>{standing.action.action}</h3></div><p>{verdict.reason}</p><dl className="operator-action-contract"><div><dt>Where it runs</dt><dd>{contract.venue}</dd></div><div><dt>What it does</dt><dd>{contract.guarantee}</dd></div><div><dt>Phase gate</dt><dd>{capabilityPhaseGateTextV1(verdict.phaseGate)}</dd></div>{machineClauses.length > 0 ? <div><dt>Machine gate</dt><dd>{machineClauses.join('; ')}</dd></div> : null}{selectedClauses.length > 0 ? <div><dt>Family gate</dt><dd>{selectedClauses.join('; ')}</dd></div> : null}</dl>{standing.walls.map((held) => <p className="operator-action-wall" key={held.citation}><strong>Requires:</strong> {held.statement} <small>({held.citation})</small></p>)}{accepted && workspace !== null
           ? <Anchor href={workspace}>Open exact preflight →</Anchor>
           : verdict.status === 'not-this-market' && workspace !== null
             ? <Anchor href={workspace}>Open it for a new Market →</Anchor>

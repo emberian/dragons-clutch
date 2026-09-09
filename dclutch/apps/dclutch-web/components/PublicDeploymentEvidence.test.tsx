@@ -57,8 +57,8 @@ describe('public deployment evidence', () => {
     const devnet = renderToStaticMarkup(
       <PublicDeploymentEvidence deployment={DEVNET_DEPLOYMENT_V1} />,
     );
-    expect(devnet).toContain('Read the checked deployment record');
-    expect(devnet).toContain('Download the eight addresses and the slots they were read at');
+    expect(devnet).toContain('View deployment record');
+    expect(devnet).toContain('Download program addresses');
     // The slots are the cohort's own deploy slots, read off its ProgramData
     // headers. The programs are upgradeable in place, so an unqualified
     // "observed slot" would read as current chain state and this document
@@ -76,7 +76,7 @@ describe('public deployment evidence', () => {
   it('does not attach checked evidence to different programs carrying the devnet label', () => {
     const changed = { ...DEVNET_DEPLOYMENT_V1, programs: { ...DEVNET_DEPLOYMENT_V1.programs, core: LOCAL_DEPLOYMENT_V1.programs.core } };
     const html = renderToStaticMarkup(<PublicDeploymentEvidence deployment={changed} />);
-    expect(html).not.toContain('Checked deployment evidence');
+    expect(html).not.toContain('Deployment details');
     expect(html).not.toContain('download=');
   });
 });

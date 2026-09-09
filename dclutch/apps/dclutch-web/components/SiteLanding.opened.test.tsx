@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 
-// `/` is the front door, and its "Where this stands" aside is the one thing on
+// `/` is the front door, and its "Try dClutch" aside is the one thing on
 // it that dates. It read "the first markets are being set up" as a hard-coded
 // fact, so the day a market opened the front door would have gone on saying
 // they were still being set up until somebody noticed.
@@ -31,7 +31,7 @@ describe('the front door, once a market is open', () => {
 
   it('does not call an unverified feature current, and links the record it names', () => {
     expect(html).not.toContain('No featured market has been staged');
-    expect(html).toContain('This build names');
+    expect(html).toContain('Loading');
     expect(html).toContain(`/market?address=${MARKET}`);
   });
 
@@ -42,9 +42,9 @@ describe('the front door, once a market is open', () => {
     // the market's own Core account, so the SERVER-rendered face, which has
     // read nothing yet, must carry no phase word at all: it says where the
     // answer is read instead of guessing it.
-    expect(html).toContain('Its cohort link and state are read from the chain');
+    expect(html).toContain('Loading');
     for (const phase of ['open', 'resolved', 'winding down', 'finished', 'still being set up']) {
-      expect(html.slice(html.indexOf('Where this stands'), html.indexOf('</aside>'))).not.toContain(phase);
+      expect(html.slice(html.indexOf('Try dClutch'), html.indexOf('</aside>'))).not.toContain(phase);
     }
   });
 
@@ -55,15 +55,15 @@ describe('the front door, once a market is open', () => {
     // Renegotiated 2026-08-31 with the sibling test: both arms of the old
     // conditional blurb are deleted, so neither can go stale. What this file
     // still pins is the OTHER dated sentence -- the hero aside -- switching.
-    expect(html).toContain('8 program addresses in the Devnet configuration');
+    expect(html).toContain('Devnet markets.');
     expect(html).not.toContain('will tell you plainly that there is not one yet');
   });
 
   it('keeps the part that is still true on devnet', () => {
     // An open market does not make devnet tokens worth anything. This is the
     // sentence that must survive the market opening, not be swept out with it.
-    expect(html).toContain('On devnet — nothing for sale');
-    expect(html).toContain('devnet preview using test tokens');
+    expect(html).toContain('Devnet preview · test tokens');
+    expect(html).toContain('Use test tokens to try a market');
     expect(html).not.toContain('no value at risk anywhere');
   });
 });

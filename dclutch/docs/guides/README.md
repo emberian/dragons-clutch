@@ -1,31 +1,16 @@
 # Guides
 
-- [Reader guide](reader.md) — start here: one bounded-price example, how
-  claims are backed and resolved, why the mechanism can be useful, and which
-  devnet entrances are actually open.
-- [Trader guide](trader.md) — what a claim is, what protection costs, how the
-  Direct browser path works, and what can and cannot happen to your money.
-- [Operator guide](operator.md) — how to create a market: what you fix up
-  front, how to fund it, and how to pick a resolution window that works.
-- [Client developers guide](client-developers.md) — building a bot,
-  dashboard, or integration: the SDK, the CLI, and a working example of
-  each core flow.
-- [Two clients](two-clients.md) — this repository ships two command-line
-  programs. Which one you have, which one a runbook means, and how to
-  build either.
-- [Trencher guide](trencher.md) — the same protocol in trench terms: what
-  you'd actually hold, why the payout can't be walked back, and the
-  standing bounty.
+Start with the [reader guide](reader.md) for a price-market example, claim
+backing, settlement and the actions available in the app.
 
-Two generated reference pages back these guides up:
-[every error code with its meaning](../reference/refusals.md) and
-[the exact byte layouts](../reference/abi/README.md). The rest of the
-generated reference — routes, costs, decisions — lives in the
-[repository](../reference/README.md).
+- [Trader guide](trader.md) — choose claims, trade Direct offers and redeem payouts.
+- [Operator guide](operator.md) — choose outcomes and source rules, fund obligations and create a market.
+- [Client developers guide](client-developers.md) — build a bot, dashboard or integration with the SDK and command-line tools.
+- [Two clients](two-clients.md) — choose and build the command-line client for your task.
+- [Trencher guide](trencher.md) — claims, payouts and bounties in trading terms.
 
-The eight dClutch programs are deployed on Solana devnet as a cohort — a full
-redeploy with fresh ids each time, the previous cohort abandoned in place — and
-the live cohort's markets are read off the chain by the site. Every market's
-collateral is a devnet test token, so there is nothing to buy with money and
-no value at risk. These guides describe the devnet preview and the local
-test-chain workflows; neither is mainnet evidence.
+The public app uses Solana devnet and test tokens. Each market page shows its
+terms, state and available actions.
+
+For technical details, see the [reference](../reference/README.md), including
+[error codes](../reference/refusals.md) and [account layouts](../reference/abi/README.md).

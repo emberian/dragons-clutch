@@ -332,6 +332,12 @@ fn run() -> Result<()> {
         {
             series_terminal_campaign::run(arguments.collect())
         }
+        Some(series_terminal_campaign::operation::LOCAL_COMMAND) => {
+            series_terminal_campaign::operation::run(arguments.collect(), cluster::ExpectedClusterV1::OwnedLoopback)
+        }
+        Some(series_terminal_campaign::operation::DEVNET_COMMAND) => {
+            series_terminal_campaign::operation::run(arguments.collect(), cluster::ExpectedClusterV1::Devnet)
+        }
         Some(series_act_verbs_v1::SERIES_TERMINAL_PREPARE_COMMAND_V1) => {
             series_act_verbs_v1::run(arguments.collect(), series_act_verbs_v1::SeriesVerbV1::Prepare)
         }
@@ -2582,6 +2588,7 @@ fn usage() {
     println!("{}", general_successor_plan::usage());
     println!("{}", series_terminal_campaign::usage());
     println!("{}", series_act_verbs_v1::usage());
+    println!("  local-private-validator-series-act-v1 | devnet-series-act-v1 --source ABSOLUTE_JSON --expected-source-sha256 HEX --rpc-url URL --journal ABSOLUTE_JSON [--ledger ABSOLUTE_DIR | --i-mean-devnet GENESIS] [--fee-payer-keypair ABSOLUTE_JSON --execute]");
     println!("{}", campaign_usage_v1());
     println!(
         "\n{direct_market_usage}\n  dclutch-local-successor-bootstrap ledger-census \

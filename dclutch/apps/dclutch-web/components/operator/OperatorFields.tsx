@@ -116,7 +116,7 @@ export function DerivedProvenance({
 }>) {
   if (derived === null) return <>{absent}</>;
   if (value === derived) {
-    return <><strong>Filled from {source}.</strong>{editable ? ' You can paste a different value; this line will say so.' : ''}</>;
+    return <><strong>Filled from {source}.</strong>{editable ? ' Editable.' : ''}</>;
   }
   return <>Manually set. {source} reads {compactAddressV1(derived)}.</>;
 }

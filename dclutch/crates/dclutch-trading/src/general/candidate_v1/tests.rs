@@ -599,6 +599,120 @@ fn a_submission_round_trips_through_a_hostile_decode() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn terminal_forecast_uses_both_authenticated_page_and_row_coordinates() {
+    let fixture = fixture();
+    for (row, expected) in [(0, false), (1, true)] {
+        assert_eq!(
+            candidate_verify_terminal_step_v1(
+                fixture.batch,
+                fixture.submission,
+                &fixture.candidate,
+                &fixture.pages[0],
+                0,
+                row,
+            ),
+            Ok(expected),
+        );
+    }
+    let candidate = candidate_bytes(fixture.batch.batch_id(), 2, 2, &[0, 0, PRICE_SCALE]);
+    let decoded = CandidateV2::decode(&candidate).expect("two-page candidate");
+    let submission = submit_at(
+        fixture.batch,
+        decoded,
+        fixture
+            .submission
+            .opening()
+            .work_capacity()
+            .expect("capacity"),
+        SUBMISSION_SLOT,
+    )
+    .expect("two-page submission");
+    for page_index in 0..2 {
+        let row = row_bytes(
+            &fixture.orders[usize::try_from(page_index).expect("index")],
+            page_index + 1,
+            1,
+            4,
+        );
+        let page = page_bytes(decoded.header().candidate_id, page_index + 1, 2, &[&row]);
+        assert_eq!(
+            candidate_verify_terminal_step_v1(
+                fixture.batch,
+                submission,
+                &candidate,
+                &page,
+                page_index,
+                0,
+            ),
+            Ok(page_index == 1),
+        );
+    }
+}
+
+#[test]
+fn terminal_forecast_refuses_substituted_batch_candidate_page_and_coordinates() {
+    let fixture = fixture();
+    let forecast = |batch, candidate: &[u8], page: &[u8], page_index, row_index| {
+        candidate_verify_terminal_step_v1(
+            batch,
+            fixture.submission,
+            candidate,
+            page,
+            page_index,
+            row_index,
+        )
+    };
+    let mut foreign_root = GeneralRootV2::active(id(1), id(51), 7).expect("foreign root");
+    let revision = foreign_root.revision();
+    let mut foreign_batch = GeneralBatchV2::open(
+        &mut foreign_root,
+        GeneralBatchOpeningV1 {
+            config_id: id(51),
+            ..opening()
+        },
+        revision,
+        ADMISSION_SLOT,
+    )
+    .expect("foreign batch");
+    place(&mut foreign_batch, 9, 1, OrderSideV2::Buy, 0, 1);
+    place(&mut foreign_batch, 8, 2, OrderSideV2::Sell, 0, 1);
+    let revision = foreign_root.revision();
+    foreign_batch
+        .close(&mut foreign_root, revision)
+        .expect("close foreign batch");
+    assert_eq!(
+        forecast(foreign_batch, &fixture.candidate, &fixture.pages[0], 0, 1),
+        Err(GeneralCandidateErrorV1::Collection(
+            GeneralCollectionErrorV1::Substitution
+        )),
+    );
+    let mut wrong_candidate = fixture.candidate.clone();
+    wrong_candidate[CANDIDATE_IDENTITY_OFFSET] ^= 1;
+    assert_eq!(
+        forecast(fixture.batch, &wrong_candidate, &fixture.pages[0], 0, 1),
+        Err(GeneralCandidateErrorV1::NonCanonicalIdentity),
+    );
+    let mut wrong_revision = fixture.pages[0].clone();
+    wrong_revision[24..32].copy_from_slice(&(PAGE_REVISION + 1).to_le_bytes());
+    for (page, page_index, row_index) in [
+        (wrong_revision.as_slice(), 0, 1),
+        (fixture.pages[0].as_slice(), 1, 1),
+        (fixture.pages[0].as_slice(), 0, 2),
+    ] {
+        assert_eq!(
+            forecast(
+                fixture.batch,
+                &fixture.candidate,
+                page,
+                page_index,
+                row_index
+            ),
+            Err(GeneralCandidateErrorV1::Substitution),
+        );
+    }
+}
+
+#[test]
 fn hostile_a_page_from_another_candidate_or_revision_is_refused() {
     let fixture = fixture();
     let cursor_len = candidate_verifier_len_v1(fixture.submission).expect("cursor width");

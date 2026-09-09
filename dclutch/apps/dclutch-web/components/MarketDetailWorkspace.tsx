@@ -801,7 +801,7 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
         <strong>{shortAddressV1(address, 10)}</strong>
         <p><code>{address}</code></p>
         <p><Anchor href={`/explorer?view=market&q=${encodeURIComponent(address)}`}>
-          See everything it is connected to →
+          Explore related accounts →
         </Anchor></p>
       </aside>
     </section>
@@ -816,7 +816,7 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
         saying it -- the capture that caught that is why it is here, in the
         page's own flow, above the exact values rather than inside them. */}
     {terminalMeaning !== null && <section className="market-answer-meaning">
-      <h2>What this answer means</h2>
+      <h2>Outcome and payouts</h2>
       <p><strong>{terminalMeaning.headline}</strong></p>
       <p>{terminalMeaning.forTheWinners}</p>
       <p>{terminalMeaning.forEveryoneElse}</p>
@@ -829,14 +829,14 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
         observation and cohort-14b resolved on a price read inside its own
         window; both used to render as the same four words. */}
     {resolution !== null && resolution.status !== 'not-terminal' && <section className="market-answer-meaning">
-      <h2>How it got that answer</h2>
+      <h2>Resolution details</h2>
       {resolution.status === 'refused'
-        ? <p className="market-refusal">The Market names a resolution certificate{resolution.certificate === null ? '' : ` at ${shortAddressV1(resolution.certificate, 5)}`} and this page could not stand behind it: {resolution.reason}</p>
+        ? <p className="market-refusal">Could not verify the resolution certificate{resolution.certificate === null ? '' : ` at ${shortAddressV1(resolution.certificate, 5)}`}: {resolution.reason}</p>
         : <>
           <p><strong>{resolution.sourceReported
-            ? 'A data source reported, and the chain settled on what it said.'
-            : 'No data source ever reported. The chain settled on the fallback outcome this market named and paid for before it opened.'}</strong>{' '}
-            The certificate is <code>{resolution.kind}</code>, read off {shortAddressV1(resolution.certificate, 5)} and joined to this Market&rsquo;s own terminal authority — same market, same generation, same selector, same receipt.</p>
+            ? 'The market resolved using a source report.'
+            : 'The market resolved to its preset fallback outcome after no source report arrived.'}</strong>{' '}
+            Certificate: <code>{resolution.kind}</code> · {shortAddressV1(resolution.certificate, 5)}.</p>
           {resolution.observation !== null && <dl className="detail-facts">
             {/* THE CERTIFICATE'S OWN SCALE, said in the label. It carries a
                 ratio and no exponent, so this is not dollars and must not be
@@ -856,16 +856,16 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
           <p>
             The chain committed <strong>claim {resolution.selector}</strong>.{' '}
             {terminalWinner?.basis === 'certificate-kind'
-              ? 'That is the source-failure cell, which is the one index the certificate itself pins: a failure certificate may carry no other, and a success certificate may not carry this one.'
+              ? 'This is the source-failure outcome.'
               : terminalWinner?.basis === 'derived-selector'
-                ? <>That is <strong>{terminalWinner.name}</strong>, and this page CHECKED it rather than counting on the list above being in the right order: running this market&rsquo;s own cuts over the certificate&rsquo;s own observation, with the same comparison the Resolution program performs, lands on the cell the chain committed. What the check settles is which cell the protocol chose. What it does not settle is whether that cell is right about the world &mdash; the comparison uses the decimal shift this market&rsquo;s own <code>StatisticSpecV1</code> declares between its observation&rsquo;s unit and its cuts&rsquo;, read from that record and never assumed, and a founding that declared the wrong shift is reproduced faithfully and is still wrong.</>
-                : 'This site names it by NUMBER and not by one of the cells listed above. The cell names on this page are derived from the market\u2019s own cut list in ascending order, and running that list over the certificate\u2019s observation does NOT land on the cell the chain committed \u2014 so one of the two readings is wrong and this page cannot say which. Naming the cell would be a sentence nobody checked.'}
+                ? <>Selected outcome: <strong>{terminalWinner.name}</strong>.</>
+                : 'The outcome number does not match the displayed range calculation. Inspect the certificate and market parameters before redeeming.'}
           </p>
           {resolution.providerEvidenceId !== null && <details className="market-detail-drawer">
-            <summary>The digests this answer is pinned to</summary>
+            <summary>Source record IDs</summary>
             <div className="market-detail-drawer-body">
-              <ContentId label="Provider evidence the certificate pins" value={resolution.providerEvidenceId} />
-              <ContentId label="Source material the certificate pins" value={resolution.sourceMaterialId} />
+              <ContentId label="Provider report" value={resolution.providerEvidenceId} />
+              <ContentId label="Source data" value={resolution.sourceMaterialId} />
             </div>
           </details>}
         </>}
@@ -875,7 +875,6 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
           : redemption.progress === 'complete'
             ? `It has been paid out. The vault holds nothing, against ${formatQuantityV1(redemption.owedAtoms, denomination).display} ${denominationUnitV1(denomination)} the winning claim was owed \u2014 ${redemption.redeemedAtoms} atoms have left it.`
             : `Partly cashed in: ${redemption.redeemedAtoms} atoms have left the vault and it still holds ${formatQuantityV1(redemption.heldAtoms, denomination).display} ${denominationUnitV1(denomination)}.`}
-        {' '}This is read from the vault against what the Claims aggregate says the winners are owed. The Market records no recipient, so this page names none.
       </p>}
     </section>}
 

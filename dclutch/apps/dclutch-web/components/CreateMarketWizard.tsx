@@ -62,9 +62,9 @@ type StepId = 'product' | 'window' | 'funding' | 'review' | 'submit';
 
 const STEPS: ReadonlyArray<Readonly<{ id: StepId; number: string; title: string; blurb: string }>> = Object.freeze([
   { id: 'product', number: '01', title: 'Design the payout', blurb: 'Range protection on a Pyth source: what pays, what does not, and what happens if the source is silent.' },
-  { id: 'window', number: '02', title: 'Choose the window', blurb: 'You state how long the source may answer; this page does not choose for you.' },
-  { id: 'funding', number: '03', title: 'Backing & funding', blurb: 'Seven named funding purposes and a capacity ratio checked in exact base units.' },
-  { id: 'review', number: '04', title: 'Review the plan', blurb: 'Every opening step, with a plain statement of what can build it today.' },
+  { id: 'window', number: '02', title: 'Choose the window', blurb: 'Set the source observation window and submission deadline.' },
+  { id: 'funding', number: '03', title: 'Backing & funding', blurb: 'Set claim collateral and operating funds.' },
+  { id: 'review', number: '04', title: 'Review the plan', blurb: 'Review the steps and tools needed to open the market.' },
   { id: 'submit', number: '05', title: 'Inspect the chain', blurb: 'Recheck the partial browser preview without signing or spending.' },
 ]);
 
@@ -78,7 +78,7 @@ type AddressField = Exclude<keyof CoreFoundInputV2, 'generation' | 'lookupTable'
 type AddressValues = Record<AddressField, string>;
 
 const ADDRESS_FIELDS: ReadonlyArray<Readonly<{ field: AddressField; label: string }>> = Object.freeze([
-  { field: 'payer', label: 'Payer (the connected wallet)' },
+  { field: 'payer', label: 'Payer address' },
   { field: 'registryProgram', label: 'Registry program' },
   { field: 'activationCache', label: 'Release activation cache' },
   { field: 'refundWallet', label: 'Immutable rent-refund wallet' },
@@ -161,7 +161,7 @@ export default function CreateMarketWizard() {
    */
   const [priceUpdateAddress, setPriceUpdateAddress] = useState('');
   const [priceReceiverProgram, setPriceReceiverProgram] = useState('');
-  const [priceReading, setPriceReading] = useState('No feed has been read. The band below is a shape, not a price.');
+  const [priceReading, setPriceReading] = useState('Read a price feed to centre the band.');
   const [bandProvenance, setBandProvenance] = useState(() => PUBLIC_DEVNET_CUT_V1.market === null
     ? 'This deployment has no open market to read a band from. Enter a band centred on what your Source reports today.'
     : 'Reading the band of the market this deployment last opened…');
@@ -212,7 +212,7 @@ export default function CreateMarketWizard() {
     activationCache: addresses.activationCache !== '' ? addresses.activationCache : deployment.activationCache ?? '',
   };
   const [plan, setPlan] = useState<CoreFoundPlanV2 | null>(null);
-  const [planStatus, setPlanStatus] = useState('No transaction has been constructed. The ladder below is the plan, not a promise.');
+  const [planStatus, setPlanStatus] = useState('Enter the market record addresses to inspect the opening plan.');
 
   /**
    * Read the last opened market's band, once, and offer it as the starting
@@ -250,7 +250,7 @@ export default function CreateMarketWizard() {
         // read back. Offering the midpoint as a shape to replace is honest;
         // calling it an observation would not be.
         setFoundingObservation((current) => current === '' ? ((low + high) / 2n).toString() : current);
-        setBandProvenance(`Band read from ${featured.slice(0, 5)}…${featured.slice(-4)} — its own result-domain record at finalized slot ${read.observedSlot}. The founding observation is that band’s MIDPOINT, not a price: replace it with what your Source reports for the coordinate today, and re-centre the edges on it.`);
+        setBandProvenance(`Band read from ${featured.slice(0, 5)}…${featured.slice(-4)} — its own result-domain record at finalized slot ${read.observedSlot}. The observation field contains the band midpoint. Read the current source price before using this design.`);
       } catch (error) {
         if (!live) return;
         setBandProvenance(`The last opened market's band did not read (${reason(error)}). Enter a band centred on what your Source reports today.`);
@@ -286,7 +286,7 @@ export default function CreateMarketWizard() {
         setLowerEdge((ticks - half).toString());
         setUpperEdge((ticks + half).toString());
       }
-      setPriceReading(`${price.decimal} at exponent ${price.exponent}, confidence ${price.confidence.toString()} — published at unix ${price.publishTimeUnixSeconds.toString()}, posted at slot ${price.postedSlot}. That is ${ticks.toString()} ticks at this denominator, and the band above keeps its width and moves its centre onto it.`);
+      setPriceReading(`${price.decimal} at exponent ${price.exponent}, confidence ${price.confidence.toString()} — published at unix ${price.publishTimeUnixSeconds.toString()}, posted at slot ${price.postedSlot}. ${ticks.toString()} ticks. The band has been centred on this price.`);
     } catch (error) {
       setPriceReading(`Refused: ${reason(error)}. The observation is unchanged.`);
     }
@@ -452,7 +452,7 @@ export default function CreateMarketWizard() {
       if (generationValue === null || generationValue <= 0n) throw new Error('generation must be a positive integer');
       const next = await prepareCoreFoundV2(new SolanaRpcClient(endpoint), { ...effectiveAddresses, generation: generationValue });
       setPlan(next);
-      setPlanStatus(`Accepted as a read-only preview at finalized slot ${next.observedSlot}. Nothing can be signed or submitted from this page.`);
+      setPlanStatus(`Unsigned preview prepared from finalized slot ${next.observedSlot}.`);
     } catch (error) {
       setPlanStatus(`Refused: ${reason(error)}`);
     }
@@ -463,15 +463,10 @@ export default function CreateMarketWizard() {
     <section className="market-heading">
       <div>
         <div className="market-kicker"><span>Design · range protection</span><span>Read-only opening preview</span></div>
-        <h1>State a band.<br />Price the window.<br />See the whole ladder.</h1>
+        <h1>Design your<br />price market.</h1>
       </div>
       <p>
-        Opening a market takes several ordered steps. This page combines the payout design, answer window, and funding
-        with the same exact arithmetic the protocol uses, then shows which steps have a browser preview and which still
-        require the operator tooling. Nothing here fabricates a price, a market, or a deployed release.
-        And to say it plainly: anyone may design and preview here, with no wallet and no coin — founding the result on
-        devnet still runs through the operator tooling today. If you want to poke the live programs, devnet SOL is free
-        from the <a href="https://faucet.solana.com" rel="noreferrer">public faucet</a>.
+        Choose the price range, source window and funding, then review the opening plan. Design and preview require no wallet. Use the operator tools to open the market on devnet; get devnet SOL from the <a href="https://faucet.solana.com" rel="noreferrer">public faucet</a>.
       </p>
     </section>
 
@@ -496,13 +491,13 @@ export default function CreateMarketWizard() {
         <label><span>Display precision · Mint decimals</span><input inputMode="numeric" value={decimals} onChange={(event) => setDecimals(event.target.value)} /></label>
         <label><span>Lower band edge · ticks</span><input inputMode="numeric" value={lowerEdge} onChange={(event) => setLowerEdge(event.target.value)} /></label>
         <label><span>Upper band edge · ticks</span><input inputMode="numeric" value={upperEdge} onChange={(event) => setUpperEdge(event.target.value)} /></label>
-        <label><span>Founding observation · ticks</span><input inputMode="numeric" value={foundingObservation} onChange={(event) => setFoundingObservation(event.target.value)} /><small className="feed-forward">What this market&rsquo;s Source reports for the coordinate today, in the same ticks as the band. The Source returns raw provider atoms and rescales nothing, so this is where a band in the wrong units becomes visible.</small></label>
+        <label><span>Founding observation · ticks</span><input inputMode="numeric" value={foundingObservation} onChange={(event) => setFoundingObservation(event.target.value)} /><small className="feed-forward">Enter the current source price in the same ticks as the band.</small></label>
       </div>
       <p className="direct-status">{bandProvenance}</p>
       <fieldset className="direct-form-grid">
         <legend>Read the price this market will resolve against</legend>
         <label><span>Sponsored price update account</span><input value={priceUpdateAddress} onChange={(event) => setPriceUpdateAddress(event.target.value.trim())} spellCheck={false} /></label>
-        <label><span>Receiver program that maintains it</span><input value={priceReceiverProgram} onChange={(event) => setPriceReceiverProgram(event.target.value.trim())} spellCheck={false} /><small className="feed-forward">Checked inside the Source family&rsquo;s own decoder: a 134-byte account with the right discriminator is not a price unless the program that maintains it says so.</small></label>
+        <label><span>Receiver program that maintains it</span><input value={priceReceiverProgram} onChange={(event) => setPriceReceiverProgram(event.target.value.trim())} spellCheck={false} /><small className="feed-forward">The program that owns the selected price update account.</small></label>
       </fieldset>
       <div className="direct-actions">
         <button type="button" onClick={() => void readTheFeed()} disabled={priceUpdateAddress === '' || priceReceiverProgram === ''}>Read the feed and centre the band</button>
@@ -510,16 +505,16 @@ export default function CreateMarketWizard() {
       <p className="direct-status" aria-live="polite">{priceReading}</p>
       <fieldset className="direct-form-grid wizard-belief">
         <legend>What you believe the coordinate does</legend>
-        <label><span>Volatility · basis points of spot over the window</span><input inputMode="numeric" value={volatilityBps} onChange={(event) => setVolatilityBps(event.target.value)} /><small className="feed-forward">A partition is not degenerate or interesting on its own — it is one or the other <em>relative to a belief</em> about where the coordinate goes. This is that belief, and the gate below is measured against it.</small></label>
-        <label><span>Window · slots from founding to deadline</span><input inputMode="numeric" value={beliefWindowSlots} onChange={(event) => setBeliefWindowSlots(event.target.value)} /><small className="feed-forward">Slots, not seconds: the band the compiler measures is quoted over this market&rsquo;s own window in the unit the chain counts in, and converting here would put a second author on the slot clock.</small></label>
+        <label><span>Volatility · basis points of spot over the window</span><input inputMode="numeric" value={volatilityBps} onChange={(event) => setVolatilityBps(event.target.value)} /><small className="feed-forward">Your estimate of price movement over the market window. It is used to assess how likely each range is under your assumptions.</small></label>
+        <label><span>Window · slots from founding to deadline</span><input inputMode="numeric" value={beliefWindowSlots} onChange={(event) => setBeliefWindowSlots(event.target.value)} /><small className="feed-forward">Enter the duration in Solana slots.</small></label>
         <label><span>Plausible half-widths</span><input inputMode="numeric" value={plausibleHalfWidths} onChange={(event) => setPlausibleHalfWidths(event.target.value)} /><small className="feed-forward">How many characteristic displacements the band is taken to reach each way.</small></label>
-        <label><span>Largest share one outcome may take · basis points</span><input inputMode="numeric" value={cellShareCeilingBps} onChange={(event) => setCellShareCeilingBps(event.target.value)} /><small className="feed-forward">Your ceiling, stated at or below the compiler&rsquo;s own maximum{gate === null ? '' : ` of ${gate.partition_quality_maximum_ceiling_bps_v1()}`}. Above it the compiler refuses CellShareCeilingAboveMaximum.</small></label>
+        <label><span>Largest share one outcome may take · basis points</span><input inputMode="numeric" value={cellShareCeilingBps} onChange={(event) => setCellShareCeilingBps(event.target.value)} /><small className="feed-forward">Limit the share assigned to any one outcome, up to the supported maximum{gate === null ? '' : ` of ${gate.partition_quality_maximum_ceiling_bps_v1()}`}. A higher value is not accepted.</small></label>
       </fieldset>
-      {gateFailure !== null && <div className="market-refusal"><strong>The partition gate did not load.</strong> {gateFailure} Nothing below has been measured against it, and a gate that did not load is not a gate that passed.</div>}
-      {gate === null && gateFailure === null && <p className="direct-status">Loading the compiled partition gate…</p>}
+      {gateFailure !== null && <div className="market-refusal"><strong>The partition gate did not load.</strong> {gateFailure} Reload to retry the outcome-range check.</div>}
+      {gate === null && gateFailure === null && <p className="direct-status">Loading the outcome-range check…</p>}
       {product.ok && quality !== null && (quality.ok
         ? <div className="direct-status">
-          <strong>Admitted · {quality.report.model}.</strong> Measured by the compiler&rsquo;s own <code>require_interesting_partition_v1</code>: outcome {quality.report.dominantCell} holds the most ex-ante mass at {quality.report.dominantShareBps} of {quality.report.ceilingBps} permitted basis points.
+          <strong>Admitted · {quality.report.model}.</strong> Outcome {quality.report.dominantCell} has the largest estimated share at {quality.report.dominantShareBps} of {quality.report.ceilingBps} permitted basis points.
           <table className="wizard-table">
             <thead><tr><th>Ordinary cell</th><th>Ex-ante share · basis points</th></tr></thead>
             <tbody>
@@ -535,7 +530,7 @@ export default function CreateMarketWizard() {
           </p>
         </div>
         : <div className="market-refusal">
-          <strong>Refused · {quality.message}.</strong> This is the compiler&rsquo;s own refusal, raised by the same <code>dclutch-product-compiler</code> the founding path calls — not a client&rsquo;s guess at one. A partition where one outcome takes more than your stated ceiling is a market whose answer is already known, and it is refused before it is founded rather than after.
+          <strong>Refused · {quality.message}.</strong> Review your range boundaries and volatility assumptions. No outcome may exceed the share limit you selected.
         </div>)}
       {product.ok ? <>
         <p className="direct-status">
@@ -551,17 +546,15 @@ export default function CreateMarketWizard() {
           </tr>)}</tbody>
         </table>
         <p className="direct-refusal">
-          The labels above are display metadata and are never decoded from a Market account. What the chain re-derives at
-          Found time is the partition: cuts strictly increasing, regions exactly cuts + 1, outcomes exactly regions + 1,
-          and a payout design that is neither empty nor ambiguous.
+          Review the range boundaries and failure payout before opening. These terms become fixed when the market opens.
         </p>
       </> : <p className="direct-refusal">Refused: {product.message}</p>}
     </section>}
 
     {step === 'window' && <section className="direct-card">
       <header className="direct-card-heading"><span>02</span><div>
-        <h2>How wide the terminal window has to be</h2>
-        <p>A terminal window used to be one second, and on a real cluster every terminal market walked to its failure outcome instead of resolving. Width is now the operator’s to state. There is no default, and this wizard does not invent one — it prices whatever you choose.</p>
+        <h2>Choose the source window</h2>
+        <p>Allow enough time for the source to publish an observation. A short window increases the chance that the market must use its failure outcome.</p>
       </div></header>
       <div className="direct-form-grid">
         <label><span>Window width · seconds</span><input inputMode="numeric" value={windowWidth} onChange={(event) => setWindowWidth(event.target.value)} /></label>
@@ -586,19 +579,14 @@ export default function CreateMarketWizard() {
         </dl>
         <p className="direct-status">{window.assessment.detail}</p>
         <p className="direct-refusal">
-          The probability is <em>provisional</em>: publications are modelled as a Poisson process at the measured devnet
-          SOL/USD p50 of {PYTH_SOL_USD_MEASURED_P50_SECONDS_V1} s, while Pyth actually publishes on price movement and
-          confidence thresholds. The operative guidance is at least {TERMINAL_WINDOW_GUIDANCE_SECONDS_V1.toLocaleString()} s
-          (four cadences), and {TERMINAL_WINDOW_ROBUST_SECONDS_V1.toLocaleString()} s for a market that should not fail for
-          provider reasons. Max age is a <em>different</em> budget: it covers submission latency, not publication cadence,
-          and widening the window does nothing for it.
+          These estimates use a Poisson model and a measured devnet publication interval of {PYTH_SOL_USD_MEASURED_P50_SECONDS_V1} seconds. Pyth publication timing varies. Allow at least {TERMINAL_WINDOW_GUIDANCE_SECONDS_V1.toLocaleString()} seconds; {TERMINAL_WINDOW_ROBUST_SECONDS_V1.toLocaleString()} seconds provides more time. Max age separately allows time to submit the observation.
         </p>
       </> : <p className="direct-refusal">Refused: {window.message}</p>}
     </section>}
 
     {step === 'funding' && <section className="direct-card">
       <header className="direct-card-heading"><span>03</span><div>
-        <h2>Backing, the capacity ratio, and seven named funding purposes</h2>
+        <h2>Fund claims and operating costs</h2>
         <p>Opening mints one complete set per collateral atom, so the founder initially holds every outcome. Each operating purpose is funded separately, and network lamports are never added to collateral atoms.</p>
       </div></header>
       <div className="direct-form-grid">
@@ -627,7 +615,7 @@ export default function CreateMarketWizard() {
           : <p className="direct-refusal">
             {floorRecord.kind === 'refused'
               ? `Refused: ${floorRecord.message}`
-              : 'No floor record supplied, so the number above is a stated claim about a venue rather than that venue’s own derivation. A real founding binds the floor to the Source, adapter configuration and collateral unit it was derived for; a floor derived for something else is not a weaker bound, it is an answer to a different question.'}
+              : 'Enter a floor record to check this value against the selected source, venue and collateral unit.'}
             </p>}
       </details>
 
@@ -640,10 +628,7 @@ export default function CreateMarketWizard() {
           {kappa.verdict.scaled !== null && kappa.verdict.bound !== null && <> This founding states {kappa.verdict.scaled.toLocaleString()} against a bound of {kappa.verdict.bound.toLocaleString()}.</>}
         </p>
         <p className="wizard-enforcement">
-          Enforcement: <strong>{kappa.verdict.enforcement}</strong>. ProjectFound authenticates the selected Source graph,
-          converts the atom cap to complete-set units at one floor-division boundary, and generic Found refuses a quantity
-          above that cap before mutation. Core then persists the exact <code>principal_cap_sets</code> value. This typed
-          preview is not chain evidence: the opening route still has to authenticate the floor and its three bindings.
+          Capacity rule: <strong>{kappa.verdict.enforcement}</strong>. Opening requires a matching source floor and principal within this limit.
         </p>
       </div> : <p className="direct-refusal">Refused: {kappa.message}</p>}
 
@@ -678,14 +663,11 @@ export default function CreateMarketWizard() {
       </table>
       {manifest.ok
         ? <p className="direct-status">
-            The funding plan encodes to {manifest.bytes.length} bytes and passes the opening decoder.
-            {' '}Service identities here are preview placeholders; a real opening names checked releases.
+            Funding preview ready for {manifest.entries} services. Select their release records in the opening plan.
           </p>
         : <p className="direct-refusal">Refused: {manifest.message}</p>}
       <p className="direct-refusal">
-        <code>Rent</code> and <code>Creation</code> pay for account existence and admit native lamports only. The other five
-        are selected by the service. Both totals are recomputed from the named purposes and never taken from a caller, and the
-        Realm collateral binding is present exactly when the Realm total is nonzero.
+        <code>Rent</code> and <code>Creation</code> use SOL lamports for account deposits. Other costs use the asset specified by each service. These funds are separate from claim collateral.
       </p>
       {/* RULING D1 item 2, on the founding surface: the terms a founder agrees
           to include who is paid first when somebody cranks this market's
@@ -697,7 +679,7 @@ export default function CreateMarketWizard() {
       {product.ok && <OpenerFirstCrankTerms
         endpoint={deployment.endpoint}
         outcomeCount={product.value.outcomes.length}
-        heading="And one cost the seven purposes do not cover: the first crank"
+        heading="First-crank cost"
       />}
     </section>}
 
@@ -723,15 +705,14 @@ export default function CreateMarketWizard() {
         </li>)}
       </ol>
       <p className="direct-refusal">
-        A one-click “Create market” button would misstate this plan. Steps marked for operator tooling must use the
-        first-party implementation that owns their transaction meaning; this page does not reimplement them in the browser.
+        Use the operator tools for the steps marked “operator tooling” to complete market opening.
       </p>
     </section>}
 
     {step === 'submit' && <section className="direct-card">
       <header className="direct-card-heading"><span>05</span><div>
-        <h2>Inspect the partial browser preview</h2>
-        <p>This read-only check reacquires the immutable releases, Product semantics, and account frame at finalized commitment. It does not ask for a wallet, create a lookup table, sign a transaction, spend devnet SOL, or open a Market.</p>
+        <h2>Inspect the opening records</h2>
+        <p>Check the release and market records and prepare an unsigned preview.</p>
       </div></header>
 
       <form className="wizard-chain-form" onSubmit={buildChainPlan}>
@@ -760,10 +741,7 @@ export default function CreateMarketWizard() {
         </dl>
       </>}
       <p className="direct-refusal">
-        This page deliberately has no signing or submission button. The partial browser pair would spend devnet funds
-        and stop before the Market is open. The complete operator campaign owns the durable
-        journal, every opening step, the final transition, and recovery after a crash. Until that complete
-        caller is available here, use this page only to review the design and inspect the unsigned preview.
+        To open the market, use “Found a market” in the Console and follow the complete command-line workflow. This design page prepares an unsigned preview.
       </p>
     </section>}
   </PageShell>;

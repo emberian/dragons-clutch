@@ -1039,7 +1039,7 @@ pub(super) fn execute_authenticated_hot_v3(
     // scratch region, and a named binding of the whole struct would own that
     // borrow until the end of the function, past the release.
     let ProjectedRequestRegistersV3 {
-        scalars: request_output_scalars,
+        scalars: mut request_output_scalars,
         identities: request_output_identities,
         spare_scalars,
         spare_identities,
@@ -1077,6 +1077,24 @@ pub(super) fn execute_authenticated_hot_v3(
         scalar_count,
         identity_count,
     )?;
+    if selected_kind == GENERAL_CAPABILITY_KIND_ID_V1
+        && selected_action == u32::from(GeneralAction::VerifyCandidateRow as u8)
+    {
+        let request =
+            dclutch_trading::general::artifacts_v3::decode_general_request_v3(family_request)
+                .map_err(|_| TradingSbfError::Content)?;
+        dclutch_trading::general::hot_candidate_v3::seed_general_verify_preplan_terminal_v3(
+            request,
+            product_outcome_count,
+            program_id.to_bytes(),
+            &observations,
+            &mut request_output_scalars,
+        )
+        .map_err(|error| {
+            solana_program::msg!("general-verify-preplan: {:?}", error);
+            TradingSbfError::Content
+        })?;
+    }
     hot_heap_mark!("request-registers");
     hot_cu_checkpoint!("p5-request-registers");
     // THE VERDICT COVERS THE RECORD THE SEAL PINNED, NOT ITS INTERIOR.

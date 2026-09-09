@@ -282,7 +282,7 @@ function SourceTerminalPanel({
 
   const acquisition = 'acquisition' in state ? state.acquisition ?? null : null;
   return <section className="workbench-actions">
-    <header><span>Terminal admission</span><h2>Commit the terminal result to Core</h2><p>Authenticate the terminal Source decision and Product-wide selector, then have Core name the exact Resolution certificate.</p></header>
+    <header><span>Terminal admission</span><h2>Commit the terminal result to Core</h2><p>Record the resolved outcome in the market.</p></header>
     {acquisition !== null && <Card className="ready"><CardHeader><span className="operator-status ready-to-preflight">{acquisition.plan.route}</span><CardTitle>{acquisition.plan.route === 'complete' ? 'Terminal already admitted' : 'Admission ready'}</CardTitle><CardDescription>The Rust owner derives the Product graph, certificate, caller authority, funding entries, and all 22 protocol accounts.</CardDescription></CardHeader><CardContent><dl className="operator-action-contract"><div><dt>Finalized slot</dt><dd>{acquisition.plan.observedSlot}</dd></div><div><dt>Selector</dt><dd>{acquisition.plan.facts.selector}</dd></div><div><dt>Outcomes</dt><dd>{acquisition.plan.facts.outcomeCount}</dd></div><div><dt>Wallet</dt><dd>fee payer only</dd></div></dl></CardContent></Card>}
     <Alert variant={state.kind === 'refused' ? 'destructive' : 'default'} aria-live="polite"><AlertTitle>{state.kind === 'refused' ? 'Refused safely' : 'Terminal status'}</AlertTitle><AlertDescription>{state.message}</AlertDescription></Alert>
     {(state.kind === 'idle' || state.kind === 'refused') && acquisition === null && <Button type="button" disabled={market.trim() === ''} onClick={() => void read()}>Read terminal admission</Button>}
@@ -422,7 +422,7 @@ function SourceCloseFundPanel({
 
   const acquisition = 'acquisition' in state ? state.acquisition ?? null : null;
   return <section className="workbench-actions">
-    <header><span>Funding close</span><h2>Discharge terminal Source funds</h2><p>Prepay the durable receipt if needed, then close Source and its three-entry ledger through the direct Resolution route.</p></header>
+    <header><span>Funding close</span><h2>Discharge terminal Source funds</h2><p>Close the resolution fund and return its remaining funds to the beneficiary.</p></header>
     {acquisition !== null && <Card className="ready"><CardHeader><span className="operator-status ready-to-preflight">{acquisition.plan.route}</span><CardTitle>{acquisition.plan.route === 'prepay' ? 'Prepay the closure receipt' : 'Direct close ready'}</CardTitle><CardDescription>The Market and terminal Source select the certificate, closure sequence, beneficiary, refund, and exact 19/21-account frame.</CardDescription></CardHeader><CardContent><dl className="operator-action-contract"><div><dt>Finalized slot</dt><dd>{acquisition.plan.observedSlot}</dd></div><div><dt>Receipt prepay</dt><dd>{acquisition.plan.prepay?.lamports ?? 'complete'} lamports</dd></div><div><dt>Refund</dt><dd>{acquisition.plan.facts.refundLamports ?? 'after prepay'} lamports</dd></div><div><dt>Wallet</dt><dd>payer only</dd></div></dl></CardContent></Card>}
     <Alert variant={state.kind === 'refused' ? 'destructive' : 'default'} aria-live="polite"><AlertTitle>{state.kind === 'refused' ? 'Refused safely' : 'Close status'}</AlertTitle><AlertDescription>{state.message}</AlertDescription></Alert>
     {(state.kind === 'idle' || state.kind === 'refused') && acquisition === null && <Button type="button" disabled={market.trim() === ''} onClick={() => void read()}>Read Source close</Button>}
@@ -581,7 +581,7 @@ function ProviderSubmitPanel({
   const ready = wallet !== null && market.trim() !== '' && encodedVaa.trim() !== ''
     && postBody.trim() !== '' && lookupTable.trim() !== '' && reclaimAfter.trim() !== '';
   return <section className="workbench-actions">
-    <header><span>Provider submission</span><h2>Post one verified update</h2><p>Create the Receiver update and its Resolution lifecycle in one table-backed, two-signer transaction.</p></header>
+    <header><span>Provider submission</span><h2>Post one verified update</h2><p>Submit the update with signatures from the required wallets.</p></header>
     <Label>Verified EncodedVaa<Input required value={encodedVaa} onChange={(event) => setEncodedVaa(event.target.value.trim())} placeholder="Router-verified EncodedVaa address" /></Label>
     <Label>Receiver PostUpdateParams body · base64<Input required value={postBody} onChange={(event) => setPostBody(event.target.value.trim())} placeholder="Body bytes without the Anchor discriminator" /></Label>
     <Label>Frozen provider lookup table<Input required value={lookupTable} onChange={(event) => setLookupTable(event.target.value.trim())} placeholder="Table containing the submit frame" /></Label>
@@ -736,7 +736,7 @@ function ProviderReclaimPanel({
   }
 
   return <section className="workbench-actions">
-    <header><span>Provider cleanup</span><h2>Reclaim the consumed update</h2><p>Close the spent Receiver update and Resolution lifecycle, then return their exact rent to the immutable refund recipient.</p></header>
+    <header><span>Provider cleanup</span><h2>Reclaim the consumed update</h2><p>Close the used update and recover its account rent.</p></header>
     <Label>Consumed provider lifecycle<Input required value={lifecycle} onChange={(event) => { setLifecycle(event.target.value.trim()); setState({ kind: 'idle', message: 'Lifecycle changed. Prepare from current finalized state.' }); }} placeholder="Resolution provider lifecycle address" /></Label>
     <Card className="ready"><CardHeader><span className="operator-status ready-to-preflight">permissionless reclaim</span><CardTitle>Wallet pays; fresh resolver authorizes</CardTitle><CardDescription>Rust derives all 18 accounts from the lifecycle and checked release. The resolver exists only in memory for this act; it never replaces wallet consent.</CardDescription></CardHeader><CardContent><dl className="operator-action-contract"><div><dt>Protocol accounts</dt><dd>18 exact</dd></div><div><dt>Wallet authority</dt><dd>fee payer only</dd></div><div><dt>Completion</dt><dd>4 exact poststates</dd></div></dl></CardContent></Card>
     <Alert variant={state.kind === 'refused' ? 'destructive' : 'default'} aria-live="polite"><AlertTitle>{state.kind === 'refused' ? 'Refused safely' : 'Provider reclaim'}</AlertTitle><AlertDescription>{state.message}</AlertDescription></Alert>
@@ -906,12 +906,12 @@ export default function ResolutionWorkspace() {
     ? state.journal
     : state.kind === 'refused' && state.journal?.phase === 'unsigned' ? state.journal : null;
 
-  return <PageShell className="product-shell workbench-shell" header={<ConsoleHeader path="/resolution" title="Resolution funding" purpose="Finish the Market’s exact Source funding-readiness walk." />}>
-    <section className="workbench-heading"><div><h1>Make resolution<br />ready.</h1></div><p>Read the current Market, authenticate its releases and records in the Rust planner, then execute the one adjacent permissionless act. The browser owns RPC, durable recovery, wallet consent, submission, and finalized poststate verification.</p></section>
+  return <PageShell className="product-shell workbench-shell" header={<ConsoleHeader path="/resolution" title="Resolution funding" purpose="Fund resolution, submit reports and record the market outcome." />}>
+    <section className="workbench-heading"><div><h1>Make resolution<br />ready.</h1></div><p>Select a market to see its resolution status. The next available action appears below with its cost and wallet requirements.</p></section>
 
     <div className="workbench-grid">
       <section className="workbench-coordinates">
-        <header><span>Exact chain inputs</span><h2>Select one Market</h2><p>{deployment.label} supplies the checked Core, Registry, and Resolution programs. The Market supplies every child coordinate and funding entry.</p></header>
+        <header><span>Exact chain inputs</span><h2>Select one Market</h2><p>Enter a market address on {deployment.label}.</p></header>
         <Label>Finalized RPC endpoint<Input type="url" required value={endpoint} onChange={(event) => setEndpoint(event.target.value.trim())} /></Label>
         <Label>Core Market<Input required value={market} onChange={(event) => { setMarket(event.target.value.trim()); setState({ kind: 'idle', message: 'Market changed. Read its current finalized route.' }); }} placeholder="Canonical Market address" /></Label>
         <details className="operator-override"><summary>Programs · filled from {deployment.label}</summary><dl className="workbench-authority"><div><dt>Core</dt><dd>{short(programs.coreProgram)}</dd></div><div><dt>Registry</dt><dd>{short(programs.registryProgram)}</dd></div><div><dt>Resolution</dt><dd>{short(programs.resolutionProgram)}</dd></div></dl></details>
@@ -920,7 +920,7 @@ export default function ResolutionWorkspace() {
       </section>
 
       <section className="workbench-actions">
-        <header><span>Current adjacent act</span><h2>{copy?.title ?? 'No route read yet'}</h2><p>{copy?.outcome ?? 'No sample or projection is shown. Read one Market to select a real route.'}</p></header>
+        <header><span>Current adjacent act</span><h2>{copy?.title ?? 'No route read yet'}</h2><p>{copy?.outcome ?? 'Load a market to see its next action.'}</p></header>
         {acquisition !== null && <Card className="ready"><CardHeader><span className="operator-status ready-to-preflight">{acquisition.plan.route}</span><CardTitle>{copy?.title}</CardTitle><CardDescription>{copy?.authority}</CardDescription></CardHeader><CardContent><dl className="operator-action-contract"><div><dt>Finalized slot</dt><dd>{acquisition.plan.observedSlot}</dd></div><div><dt>Protocol accounts</dt><dd>{acquisition.plan.geometry?.protocolAccountCount ?? 0}</dd></div><div><dt>Protocol signers</dt><dd>{acquisition.plan.geometry?.protocolSignerCount ?? 0}</dd></div><div><dt>Exact prepay</dt><dd>{acquisition.plan.prepay?.lamports ?? '0'} lamports</dd></div></dl></CardContent></Card>}
         <WalletDirectory directory={directory} onConnected={() => setState((current) => current)} />
         {state.kind === 'observed' && copy?.button != null && <Button type="button" disabled={wallet === null} onClick={() => void prepare()}>{wallet === null ? 'Connect a payer wallet first' : copy.button}</Button>}
@@ -930,24 +930,24 @@ export default function ResolutionWorkspace() {
         <footer><strong>Safety contract</strong><span>The Rust/WASM owner derives every coordinate and instruction. The page verifies the blob, requires one finalized observation, saves before signing and before submission, sends once, and clears recovery only after the next exact route is finalized.</span></footer>
       </section>
     </div>
-    <section className="workbench-heading"><div><h2>Admit the<br />terminal result.</h2></div><p>Once provider evidence has produced a terminal Source and certificate, bind that exact selector into Core. This is permissionless; the connected wallet only pays the transaction fee.</p></section>
+    <section className="workbench-heading"><div><h2>Admit the<br />terminal result.</h2></div><p>Record the resolved outcome in the Market so holders can redeem. Anyone can submit this step; your wallet pays the transaction fee.</p></section>
     <div className="workbench-grid">
-      <section className="workbench-coordinates"><header><span>Admission authority</span><h2>Use the Market and wallet above</h2><p>The Market selects its Product, releases, funding set, and Source. The Source selects the certificate and terminal sequence; neither is entered here.</p></header><dl className="workbench-authority"><div><dt>Market</dt><dd>{market.trim() === '' ? 'select above' : short(market.trim())}</dd></div><div><dt>Wallet</dt><dd>{wallet === null ? 'connect above' : short(wallet)}</dd></div><div><dt>Core</dt><dd>{short(programs.coreProgram)}</dd></div></dl></section>
+      <section className="workbench-coordinates"><header><span>Admission authority</span><h2>Use the Market and wallet above</h2><p>Uses the selected market and its resolution certificate.</p></header><dl className="workbench-authority"><div><dt>Market</dt><dd>{market.trim() === '' ? 'select above' : short(market.trim())}</dd></div><div><dt>Wallet</dt><dd>{wallet === null ? 'connect above' : short(wallet)}</dd></div><div><dt>Core</dt><dd>{short(programs.coreProgram)}</dd></div></dl></section>
       <SourceTerminalPanel client={client} directory={directory} endpoint={endpoint} market={market} programs={programs} loadWasm={loadWasm} />
     </div>
-    <section className="workbench-heading"><div><h2>Discharge the<br />Source fund.</h2></div><p>After Core enters Retiring, fund the durable closure receipt exactly once and execute the permissionless V7 direct close. Source principal, ledger rent, and surplus return only to the immutable beneficiary.</p></section>
+    <section className="workbench-heading"><div><h2>Discharge the<br />Source fund.</h2></div><p>Once the Market is retiring, close its resolution fund and return the remaining funds and account rent to its designated beneficiary.</p></section>
     <div className="workbench-grid">
-      <section className="workbench-coordinates"><header><span>Close authority</span><h2>Use the Market and wallet above</h2><p>The Retiring Market and terminal Source derive every coordinate. The wallet only pays receipt rent and transaction fees.</p></header><dl className="workbench-authority"><div><dt>Market</dt><dd>{market.trim() === '' ? 'select above' : short(market.trim())}</dd></div><div><dt>Wallet</dt><dd>{wallet === null ? 'connect above' : short(wallet)}</dd></div><div><dt>Resolution</dt><dd>{short(programs.resolutionProgram)}</dd></div></dl></section>
+      <section className="workbench-coordinates"><header><span>Close authority</span><h2>Use the Market and wallet above</h2><p>Your wallet pays the closure receipt’s rent and transaction fees.</p></header><dl className="workbench-authority"><div><dt>Market</dt><dd>{market.trim() === '' ? 'select above' : short(market.trim())}</dd></div><div><dt>Wallet</dt><dd>{wallet === null ? 'connect above' : short(wallet)}</dd></div><div><dt>Resolution</dt><dd>{short(programs.resolutionProgram)}</dd></div></dl></section>
       <SourceCloseFundPanel client={client} directory={directory} endpoint={endpoint} market={market} programs={programs} loadWasm={loadWasm} />
     </div>
-    <section className="workbench-heading"><div><h2>Post provider<br />evidence.</h2></div><p>Join a Router-verified VAA and exact Receiver body to this Market’s current Source and Pyth release graph, then create the update and its reclaimable lifecycle atomically.</p></section>
+    <section className="workbench-heading"><div><h2>Submit a<br />source report.</h2></div><p>Submit a verified Pyth update for this market’s resolution window.</p></section>
     <div className="workbench-grid">
-      <section className="workbench-coordinates"><header><span>Submit authority</span><h2>Use the Market and wallet above</h2><p>The Market selects the records and immutable refund recipient. The connected wallet must already be the EncodedVaa write authority and pays the lifecycle top-up.</p></header><dl className="workbench-authority"><div><dt>Market</dt><dd>{market.trim() === '' ? 'select above' : short(market.trim())}</dd></div><div><dt>Wallet</dt><dd>{wallet === null ? 'connect above' : short(wallet)}</dd></div><div><dt>Resolution</dt><dd>{short(programs.resolutionProgram)}</dd></div></dl></section>
+      <section className="workbench-coordinates"><header><span>Submit authority</span><h2>Use the Market and wallet above</h2><p>Connect the wallet authorized to write the EncodedVaa. It pays the account setup cost.</p></header><dl className="workbench-authority"><div><dt>Market</dt><dd>{market.trim() === '' ? 'select above' : short(market.trim())}</dd></div><div><dt>Wallet</dt><dd>{wallet === null ? 'connect above' : short(wallet)}</dd></div><div><dt>Resolution</dt><dd>{short(programs.resolutionProgram)}</dd></div></dl></section>
       <ProviderSubmitPanel client={client} directory={directory} endpoint={endpoint} market={market} programs={programs} />
     </div>
-    <section className="workbench-heading"><div><h2>Close provider<br />work.</h2></div><p>A consumed real-provider update has one permissionless cleanup act. The lifecycle itself supplies the immutable Market, release, refund, and terminal-certificate coordinates.</p></section>
+    <section className="workbench-heading"><div><h2>Close provider<br />work.</h2></div><p>Close a consumed source update and return its account rent to the designated refund recipient.</p></section>
     <div className="workbench-grid">
-      <section className="workbench-coordinates"><header><span>Reclaim input</span><h2>Use the Market above</h2><p>The reclaim must join the lifecycle back to that exact Market and the current Registry and Resolution deployment.</p></header><dl className="workbench-authority"><div><dt>Market</dt><dd>{market.trim() === '' ? 'select above' : short(market.trim())}</dd></div><div><dt>Registry</dt><dd>{short(programs.registryProgram)}</dd></div><div><dt>Resolution</dt><dd>{short(programs.resolutionProgram)}</dd></div></dl></section>
+      <section className="workbench-coordinates"><header><span>Reclaim input</span><h2>Use the Market above</h2><p>Uses the selected market and source update.</p></header><dl className="workbench-authority"><div><dt>Market</dt><dd>{market.trim() === '' ? 'select above' : short(market.trim())}</dd></div><div><dt>Registry</dt><dd>{short(programs.registryProgram)}</dd></div><div><dt>Resolution</dt><dd>{short(programs.resolutionProgram)}</dd></div></dl></section>
       <ProviderReclaimPanel client={client} directory={directory} endpoint={endpoint} market={market} programs={{ registryProgram: programs.registryProgram, resolutionProgram: programs.resolutionProgram }} />
     </div>
   </PageShell>;

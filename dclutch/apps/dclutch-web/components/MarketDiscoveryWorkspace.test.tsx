@@ -46,7 +46,7 @@ describe('Market discovery route', () => {
    */
   it('leads with the markets that are open, and says where the rest went', () => {
     expect(html).toContain('Markets you can trade');
-    expect(html).toContain('Markets you can trade come first');
+    expect(html).toContain('Choose a market to review its outcomes');
     // Renegotiated 2026-08-31. The section used to carry a blurb explaining
     // that we list straight from the Core program with no index in between and
     // never partly invent a card. That is a promise about US, and it is gone.
@@ -258,8 +258,8 @@ describe('the rest of the record', () => {
     // count and the framing both have to live in it.
     expect(html).toContain('<summary><span>2 markets that were never finished</span>');
     expect(html).toContain('setup stopped part-way');
-    expect(html).toContain('stopped part-way through');
-    expect(html).toContain('There is nothing to trade against them');
+    expect(html).toContain('Setup is incomplete');
+    expect(html).toContain('Trading is unavailable until opening finishes');
   });
 
   it('collapses the group without dropping a single account from it', () => {
@@ -302,7 +302,7 @@ describe('the rest of the record', () => {
     const one = curateMarketListingV1([card('found111111111111111111111111111111111111111', 'Founding')]);
     const singular = renderToStaticMarkup(<RestOfTheRecord listing={one} incompatible={[]} />);
     expect(singular).toContain('1 market that was never finished');
-    expect(singular).toContain('this one stopped part-way');
+    expect(singular).toContain('Setup is incomplete');
     expect(singular).not.toContain('markets that were');
   });
 });
@@ -364,9 +364,9 @@ describe('markets that can never trade', () => {
   });
 
   it('says what happened in words a stranger can act on, without protocol vocabulary', () => {
-    expect(html).toContain('Trading has to be switched on within a set window');
-    expect(html).toContain('the window closed first');
-    expect(html).toContain('Nothing can turn it on now');
+    expect(html).toContain('The deadline to enable trading has passed');
+    expect(html).toContain('Trading cannot open');
+    expect(html).toContain('existing claims and collateral remain in the market');
     // Renegotiated 2026-08-31: "they stay readable for good", "It is here to
     // be read, not traded" and "every figure below is read live from it" were
     // reassurance about the page, not facts about the market. Deleted.
@@ -399,7 +399,7 @@ describe('markets that can never trade', () => {
     const one = curateMarketListingV1([shutCard('7Mcu1ZT9KZBnvLZ2vhSvLeQMRA1ejQWD93yyPF2k8WAC')]);
     const singular = renderToStaticMarkup(<RestOfTheRecord listing={one} incompatible={[]} />);
     expect(singular).toContain('1 market that can never trade');
-    expect(singular).toContain('on this one the window closed');
+    expect(singular).toContain('The deadline to enable trading has passed');
   });
 
   /**

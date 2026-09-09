@@ -75,6 +75,7 @@ struct SeriesFoundPrepareArgumentsV1 {
     output: Option<PathBuf>,
     execute: bool,
     timing: SeriesLocalTimingV1,
+    ledger: Option<PathBuf>,
 }
 
 /// Operator-selected liveness allowance, never a protocol capitalization bound.
@@ -188,6 +189,7 @@ fn parse_series_found_prepare_arguments_v1(
                         | "--schedule-lead-slots"
                         | "--schedule-retry-slots"
                         | "--schedule-period-slots"
+                        | "--ledger"
                 ) || values.insert(flag.to_owned(), value.to_owned()).is_some()
                 {
                     return Err(Error::new(format!(
@@ -234,6 +236,17 @@ fn parse_series_found_prepare_arguments_v1(
             "Series Found/Prepare requires either --series-shadow-source-manifest with --output, or --emit-series-shadow-diagnostic",
         ));
     }
+    let ledger = values.get("--ledger").map(PathBuf::from);
+    if execute_mode {
+        let path = ledger
+            .as_ref()
+            .ok_or_else(|| Error::new("Series Found/Prepare execution requires --ledger"))?;
+        if !path.is_absolute() || !path.is_dir() || fs::canonicalize(path)? != *path {
+            return Err(Error::new(
+                "Series Found/Prepare --ledger must name the canonical existing ledger",
+            ));
+        }
+    }
     Ok(SeriesFoundPrepareArgumentsV1 {
         plan: canonical_regular_v1(PathBuf::from(required("--plan")?), "--plan")?,
         rpc_url: required("--rpc-url")?,
@@ -250,6 +263,7 @@ fn parse_series_found_prepare_arguments_v1(
         output,
         execute,
         timing,
+        ledger,
     })
 }
 
@@ -576,70 +590,63 @@ pub(crate) fn run_series_found_prepare_v1(arguments: Vec<String>) -> Result<()> 
             release,
         },
     )?;
-    let (routing_observation, tables) = crate::market::publish_routing_table(
+    let (_routing_observation, tables) = crate::market::publish_routing_table(
         &mut rpc,
         &payer,
         "SERIES-FIRST-PREPARE",
         std::slice::from_ref(&selected.instruction),
         &mut transactions,
     )?;
+    let operation_source_path = arguments
+        .output
+        .as_ref()
+        .expect("execution output")
+        .with_extension("prepare-source.json");
+    let operation_genesis = rpc
+        .call("getGenesisHash", &serde_json::json!([]))?
+        .as_str()
+        .ok_or_else(|| Error::new("Series operation genesis was not a string"))?
+        .to_owned();
+    let operation_table = tables
+        .first()
+        .ok_or_else(|| Error::new("Series Prepare routing table was absent"))?;
+    let operation_source_sha256 = crate::series_terminal_campaign::operation::write_prepare_source(
+        &operation_source_path,
+        &crate::series_terminal_campaign::SeriesPrepareAddressFrameV1 {
+            fixed: &fixed,
+            logical: &logical,
+            occurrence_record: founder_records.occurrences[0].raw,
+            occurrence_staging: founder_records.occurrences[0].staging,
+            ticket_record: founder_records.tickets[0].raw,
+            ticket_staging: founder_records.tickets[0].staging,
+            siblings: &founder.admitted.siblings()[0],
+            payer: payer.pubkey(),
+            release,
+        },
+        &selected,
+        operation_genesis,
+        operation_table,
+    )?;
+    eprintln!(
+        "Series generated operation source: {} sha256={operation_source_sha256}",
+        operation_source_path.display()
+    );
     let before_prepare_slot = rpc.finalized_slot()?;
-    let bounded = crate::rpc::bounded_instructions(
-        std::slice::from_ref(&selected.instruction),
-        Some(dclutch_market::capability_program::hot_v3::DIRECT_HOT_HEAP_FRAME_BYTES_V1),
-    )?;
-    let (blockhash, last_valid_block_height) = rpc.recent_blockhash_with_height_v1()?;
-    let message_plan = dclutch_versioned_message_operator::compile_v0_message(
-        payer.pubkey(),
-        &bounded,
-        solana_hash::Hash::new_from_array(blockhash.to_bytes()),
-        routing_observation,
-        &tables,
-    )
-    .map_err(|error| {
-        Error::new(format!(
-            "Series Prepare actual packet compilation: {error:?}"
-        ))
-    })?;
-    let account_key_count = message_plan.message.static_account_keys().len()
-        + match &message_plan.message {
-            solana_sdk::message::VersionedMessage::V0(message) => message
-                .address_table_lookups
-                .iter()
-                .map(|lookup| lookup.writable_indexes.len() + lookup.readonly_indexes.len())
-                .sum::<usize>(),
-            solana_sdk::message::VersionedMessage::Legacy(_) => 0,
-        };
-    let transaction =
-        solana_sdk::transaction::VersionedTransaction::try_new(message_plan.message, &[&payer])
-            .map_err(|error| Error::new(format!("Series Prepare exact packet signing: {error}")))?;
-    let packet = bincode::serialize(&transaction).map_err(|error| {
-        Error::new(format!(
-            "Series Prepare exact packet serialization: {error}"
-        ))
-    })?;
-    let packet_geometry = serde_json::json!({
-        "accountKeyCount": account_key_count,
-        "packetBytes": packet.len(),
-        "packetSha256": Sha256::digest(&packet).iter().map(|byte| format!("{byte:02x}")).collect::<String>(),
-    });
-    eprintln!("Series Prepare actual packet: {packet_geometry}");
-    let simulation = rpc.simulate_versioned_v1("first selected Series Prepare", &packet)?;
-    eprintln!("Series Prepare exact packet simulation: {simulation}");
-    let simulation_value = simulation.get("value").unwrap_or(&simulation);
-    if simulation_value
-        .get("err")
-        .is_none_or(|error| !error.is_null())
-    {
-        return Err(Error::new(format!(
-            "Series Prepare exact packet simulation refused: {simulation}"
-        )));
-    }
-    let sent = rpc.submit_and_confirm_versioned_v1(
-        "execute first selected Series Prepare",
-        &transaction,
-        last_valid_block_height,
-    )?;
+    let operation_journal_path = arguments
+        .output
+        .as_ref()
+        .expect("execution output")
+        .with_extension("prepare-journal.json");
+    let (sent, packet_simulation) =
+        crate::series_terminal_campaign::operation::execute_local_prepare_source(
+            &mut rpc,
+            &operation_source_path,
+            &operation_source_sha256,
+            &arguments.rpc_url,
+            arguments.ledger.as_ref().expect("execution ledger"),
+            &arguments.payer_keypair,
+            &operation_journal_path,
+        )?;
     if let Some(error) = &sent.error {
         return Err(Error::new(format!(
             "first selected Series Prepare refused: {error}"
@@ -672,8 +679,9 @@ pub(crate) fn run_series_found_prepare_v1(arguments: Vec<String>) -> Result<()> 
         "root": parent_root.root.to_string(),
         "childMarket": Pubkey::new_from_array(final_compiled.predicted_core.identity.market_id.to_bytes()).to_string(),
         "shadowCapacity": source_manifest.capacity_profile().as_bytes().iter().map(|byte| format!("{byte:02x}")).collect::<String>(),
-        "preparePacket": packet_geometry,
-        "prepareSimulation": simulation,
+        "operationSource": { "path": operation_source_path, "sha256": operation_source_sha256 },
+        "operationJournal": operation_journal_path,
+        "preparePacketSimulation": packet_simulation,
         "poststates": poststates,
         "transactions": transactions,
     });
@@ -968,7 +976,7 @@ fn series_prepare_logical_addresses_v1(
         .collect())
 }
 
-fn series_current_release_v1<'a>(
+pub(crate) fn series_current_release_v1<'a>(
     compiled: &'a crate::series_found_prepare_campaign::CompiledSeriesFoundPrepareSelectionV1,
     template_bytes: &[u8],
     certificate_program: ContentId,

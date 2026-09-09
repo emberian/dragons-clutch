@@ -53,10 +53,10 @@ describe('wallet redemption flow', () => {
   />);
 
   it('states the complete receipt-and-resource verification boundary', () => {
-    expect(html).toContain('two checked steps');
-    expect(html).toContain('returned receipt');
-    expect(html).toContain('your changed claim balance');
-    expect(html).toContain('both changed token balances');
+    expect(html).toContain('Set up the market’s payment record');
+    expect(html).toContain('Redemption burns your paying claims');
+    expect(html).toContain('sends collateral to your token account');
+    expect(html).toContain('review and sign your payout');
   });
 
   it('does not claim a payout before a connected wallet and checked plan exist', () => {
@@ -67,10 +67,10 @@ describe('wallet redemption flow', () => {
   });
 
   it('explains crash recovery without treating browser storage as authority', () => {
-    expect(html).toContain('saves the signed transaction id');
-    expect(html).toContain('Reloading resumes only that exact signature');
-    expect(html).toContain('it never submits it again');
-    expect(html).toContain('Browser data is an untrusted projection');
+    expect(html).toContain('Your progress is saved in this browser');
+    expect(html).toContain('reload to check the same transaction');
+    expect(html).toContain('If interrupted');
+    expect(html).toContain('Your progress is saved');
   });
 
   it('exposes the Rust artifact handoff and now completes it here', () => {
@@ -79,11 +79,11 @@ describe('wallet redemption flow', () => {
     // was extracted verbatim, compiled, and given its snapshot, so the
     // assertion moves with the behaviour rather than the sentence being
     // quietly deleted from under it.
-    expect(html).toContain('Rust payout plan file');
+    expect(html).toContain('Payout plan file');
     expect(html).not.toContain('This browser never creates or completes a payout plan');
-    expect(html).toContain('This browser builds the whole payout itself');
-    expect(html).toContain('the checked Program and ProgramData generation');
-    expect(html).toContain('remain disabled until the payment record above is verified');
+    expect(html).toContain('You can also choose another token account or import a payout plan');
+    expect(html).toContain('Review the amount and destination before signing');
+    expect(html).toContain('Complete payment-record setup above before checking the payout plan');
   });
 });
 
@@ -109,8 +109,8 @@ describe('the browser derives the payout plan instead of only importing one', ()
   });
 
   it('names the compiled derivation as the authority, and what it reads', () => {
-    expect(html).toContain('compiled Rust');
-    expect(html).toContain('finalized');
+    expect(html).toContain('Review and execute a payout plan');
+    expect(html).toContain('Check redemption');
   });
 
   it('no longer sends the reader to the Rust producer for the payout input', () => {
@@ -127,8 +127,8 @@ describe('the browser derives the payout plan instead of only importing one', ()
 
   it('states that an empty box means the browser derives the input itself', () => {
     expect(html).toContain('empty means derive it here');
-    expect(html).toContain('recompiles the four composition records that nothing on chain points at');
-    expect(html).toContain('no operator document is needed at any step');
+    expect(html).toContain('You can also choose another token account or import a payout plan');
+    expect(html).toContain('Leave the recipient blank');
   });
 
   it('offers the destination as an override, not as a question', () => {
@@ -137,7 +137,7 @@ describe('the browser derives the payout plan instead of only importing one', ()
     // standard associated token account, derived under the program that
     // declares it, so the field is an override and the page says so.
     expect(html).toContain('empty means your associated token account');
-    expect(html).toContain('Leave both boxes below empty and it needs nothing from you at all');
+    expect(html).toContain('Leave the recipient blank');
     expect(html).toContain('associated token account');
   });
 });

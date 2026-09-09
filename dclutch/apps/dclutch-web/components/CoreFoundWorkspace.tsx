@@ -62,9 +62,9 @@ dclutch-terminal --rpc "$DEVNET_RPC" \\
  */
 const ADDRESS_FIELDS: ReadonlyArray<Readonly<{ field: AddressField; label: string; group: 'authority' | 'deployment' | 'records'; provenance: string; derived?: 'product' | 'source' | 'wallet' }>> = Object.freeze([
   { field: 'payer', label: 'Payer', group: 'authority', derived: 'wallet',
-    provenance: 'The wallet that funds both packets and signs them elsewhere. It must be a plain System-owned wallet holding no account data. Connect a wallet above and this fills itself; an edit overrides it.' },
+    provenance: 'The wallet that pays transaction fees and account deposits. Connect a wallet to fill its address, or enter another payer.' },
   { field: 'refundWallet', label: 'Immutable rent refund wallet', group: 'authority',
-    provenance: 'Embedded once in the Market-bound RentCredit and immutable afterwards, so rent returns here rather than to the payer. Often the payer, and it does not have to be.' },
+    provenance: 'Account deposits return to this wallet. It may differ from the payer and cannot be changed after the RentCredit is created.' },
   { field: 'registryProgram', label: 'Registry program', group: 'deployment', provenance: '' },
   { field: 'activationCache', label: 'Release activation cache', group: 'deployment', provenance: '' },
   { field: 'realmRecord', label: 'Realm raw record', group: 'records',
@@ -72,21 +72,21 @@ const ADDRESS_FIELDS: ReadonlyArray<Readonly<{ field: AddressField; label: strin
   { field: 'productRecord', label: 'Product Runtime V2 raw', group: 'records',
     provenance: 'The finalized record holding the Product Runtime V2 root this market pays by. It names the result domain and the portfolio below.' },
   { field: 'resultDomainRecord', label: 'Result domain raw', group: 'records', derived: 'product',
-    provenance: 'The result domain the Product root selects. Read it out of the Product record above rather than finding it: the digest is at a named coordinate and the address is that digest under the result-domain schema.' },
+    provenance: 'The result domain selected by the Product. Use “Read the four dependent records” to fill this address.' },
   { field: 'portfolioRecord', label: 'Portfolio raw', group: 'records', derived: 'product',
-    provenance: 'The portfolio the Product root selects. Read it out of the Product record above rather than finding it: the digest is at a named coordinate and the address is that digest under the portfolio schema.' },
+    provenance: 'The portfolio selected by the Product. Use “Read the four dependent records” to fill this address.' },
   { field: 'linkedBasisRecord', label: 'Linked basis raw', group: 'records',
-    provenance: 'A graded basis record. It is authenticated for PDA, owner and rent and placed in the Found37 frame \u2014 and unlike the other nine, none of its bytes are joined to the semantic graph.' },
+    provenance: 'The Registry address of the graded basis record required by Found37.' },
   { field: 'sourceMaterialRecord', label: 'SourceMaterialV3 raw', group: 'records',
-    provenance: 'The SourceMaterialV3 record. It names the Product digest, the source spec, and the manipulation floor, so three of the fields below are answers it already contains.' },
+    provenance: 'The source material record naming the Product, source specification and manipulation floor.' },
   { field: 'sourceSpecRecord', label: 'Source spec raw', group: 'records', derived: 'source',
-    provenance: 'The source spec SourceMaterialV3 selects. Read it out of the SourceMaterialV3 record above rather than finding it: the digest is at a named coordinate and the address is that digest under the source-spec schema.' },
+    provenance: 'The specification selected by SourceMaterialV3. Use “Read the four dependent records” to fill this address.' },
   { field: 'capacityProfileRecord', label: 'Source capacity profile raw', group: 'records',
-    provenance: 'The capacity profile the source spec selects. It is the one address on this list that stays typed: SourceSpecV1 writes that coordinate as a bare number with no named constant, so there is nothing this browser could import instead of restating it. Derivable from that record once this console reads it; today it is typed and then checked.' },
+    provenance: 'Enter the capacity profile address selected by the source specification.' },
   { field: 'manipulationFloorRecord', label: 'Manipulation floor raw', group: 'records', derived: 'source',
-    provenance: 'The manipulation floor SourceMaterialV3 selects. Read it out of the SourceMaterialV3 record above rather than finding it: the digest is at a named coordinate and the address is that digest under the manipulation-floor schema.' },
+    provenance: 'The manipulation floor selected by SourceMaterialV3. Use “Read the four dependent records” to fill this address.' },
   { field: 'capabilityManifestRecord', label: 'Capability manifest raw', group: 'records',
-    provenance: 'The capability manifest this market founds with. Its dependency graph must terminate; a cycle is refused.' },
+    provenance: 'The Registry record listing the market’s trading and lifecycle services.' },
 ]);
 
 function emptyAddresses(): AddressValues {
@@ -141,7 +141,7 @@ export default function CoreFoundWorkspace() {
   const [generation, setGeneration] = useState('1');
   const [state, setState] = useState<BuildState>({
     kind: 'idle',
-    message: 'No transaction has been constructed. Enter chain-derived record addresses to begin.',
+    message: 'Enter the market record addresses to prepare the unsigned transactions.',
   });
   /**
    * What the last dependent read produced, per field, or nothing yet.
@@ -153,7 +153,7 @@ export default function CoreFoundWorkspace() {
    * advance, which is why this starts empty and only the act fills it.
    */
   const [derivedFrom, setDerivedFrom] = useState<Partial<Record<AddressField, string>>>({});
-  const [derivation, setDerivation] = useState('No dependent record has been read.');
+  const [derivation, setDerivation] = useState('Enter Product and SourceMaterialV3 addresses, then read their dependent records.');
   const [deriving, setDeriving] = useState(false);
 
   function update(field: AddressField, value: string): void {
@@ -188,7 +188,7 @@ export default function CoreFoundWorkspace() {
         sourceSpecRecord: read.provenance.sourceSpecRecord,
         manipulationFloorRecord: read.provenance.manipulationFloorRecord,
       });
-      setDerivation(`${read.manipulationFloorRecord === null ? 'Three' : 'Four'} addresses read from their parent records at finalized slot ${read.observedSlot}. The capacity profile is still yours to supply.`);
+      setDerivation(`${read.manipulationFloorRecord === null ? 'Three' : 'Four'} addresses read from their parent records at finalized slot ${read.observedSlot}. Enter the capacity profile separately.`);
     } catch (error) {
       // A failed derivation must not leave four boxes holding a previous
       // read's answers: the fields it owns are cleared with it.
@@ -254,22 +254,22 @@ export default function CoreFoundWorkspace() {
   }
 
   const group = (name: 'authority' | 'deployment' | 'records') => ADDRESS_FIELDS.filter((entry) => entry.group === name);
-  return <PageShell className="product-shell direct-workspace found-workspace" header={<ConsoleHeader path="/found" title="Found a market" purpose="Run the current journaled devnet founding campaign. The legacy packet inspector remains below for diagnosis only." />}>
+  return <PageShell className="product-shell direct-workspace found-workspace" header={<ConsoleHeader path="/found" title="Found a market" purpose="Prepare a devnet market, open it and admit its first participant with the operator tools." />}>
 
-    <section className="market-heading found-heading"><div><h1>Found, then<br />admit.</h1></div><p>One operation document drives current Market founding and first-participant admission. Preparation is read-only. Execution is explicit, journaled before any key-owning child runs, and resumes only that same operation.</p></section>
+    <section className="market-heading found-heading"><div><h1>Create a market.<br />Add a participant.</h1></div><p>Prepare an operation document, preview its funding and market terms, then run the founding command. Keep the document and journal to resume an interrupted operation.</p></section>
 
-    <section className="found-current-campaign" id="current-founding"><header className="direct-card-heading"><span>Current</span><div><h2>Found one current devnet Market</h2><p>The CLI delegates every authored request, signature, transaction, and poststate report to the current Rust successor. The browser neither reconstructs its frame nor asks for a wallet.</p></div></header><div className="found-current-contract"><article><span>Input</span><strong>One operation document</strong><p>A <code>dclutch-devnet-market-participant-operation-v1</code> names the checked plan, Market producer arguments, evidence outputs, and explicit key files used only by their owning Rust children.</p></article><article><span>Authority</span><strong>Preview first; execute explicitly</strong><p>The first command is read-only. <code>--execute</code> records devnet authorization in the durable journal before the campaign can read a signing key or submit.</p></article><article><span>Result</span><strong>Market + first participant + session</strong><p>Founding, compact opening, and admission emit machine reports. The optional CLI session then feeds discovery, route export, joining, portfolio, offer, and redemption commands.</p></article><article><span>Recovery</span><strong>Rerun the same operation and journal</strong><p>Each stage rereads its exact chain checkpoint. A submitted child report is reconciled; the driver does not start over against a different plan or Market.</p></article></div><details><summary>Show preview and execute commands</summary><p>Set every shell variable to an absolute path. Review the operation document and preview outputs before adding <code>--execute</code>.</p><CommandRunbook label="Preview, then authorized execution" command={CURRENT_FOUND_RUNBOOK_V1} /></details></section>
+    <section className="found-current-campaign" id="current-founding"><header className="direct-card-heading"><span>Current</span><div><h2>Found a devnet market</h2><p>Use the command-line workflow below to create and open the market, then admit its first participant.</p></div></header><div className="found-current-contract"><article><span>Input</span><strong>One operation document</strong><p>A <code>dclutch-devnet-market-participant-operation-v1</code> document contains the market plan, funding inputs, output paths and signing-key paths.</p></article><article><span>Action</span><strong>Preview, then execute</strong><p>The preview reads the inputs. Add <code>--execute</code> to sign and submit the transactions, paying the required devnet fees and deposits.</p></article><article><span>Result</span><strong>Market + first participant + session</strong><p>The command returns market and participant details. Save the optional session file for later trading and redemption commands.</p></article><article><span>Recovery</span><strong>Rerun the same operation and journal</strong><p>After an interruption, rerun the same command with the same operation document and journal to continue.</p></article></div><details><summary>Show preview and execute commands</summary><p>Set every shell variable to an absolute path. Review the operation document and preview outputs before adding <code>--execute</code>.</p><CommandRunbook label="Preview, then authorized execution" command={CURRENT_FOUND_RUNBOOK_V1} /></details></section>
 
-    <details className="found-legacy-inspector"><summary>Open the legacy Found37 packet inspector</summary><p>This older two-packet reader is useful for diagnosing record and release joins. It cannot perform the current atomic opening and is not the founding path above.</p>
+    <details className="found-legacy-inspector"><summary>Open the legacy Found37 packet inspector</summary><p>This inspector prepares older unsigned Found37 transactions. Use the command-line workflow above to open a market.</p>
 
     <section className="found-boundaries" aria-label="Construction boundaries">
       <article><span>01</span><strong>Select execution</strong><p>The activation cache must select immutable Core, Registry, and Rent artifacts whose Loader observations still match.</p></article>
-      <article><span>02</span><strong>Join one semantic graph</strong><p>Product, domain, portfolio, Source, Realm, capabilities, and releases are decoded from finalized Registry bytes.</p></article>
-      <article><span>03</span><strong>Reacquire &amp; compile</strong><p>The refund wallet is embedded once in a Market-bound RentCredit. Create must confirm before the exact Found37 packet is submitted.</p></article>
+      <article><span>02</span><strong>Check market records</strong><p>Product, domain, portfolio, Source, Realm, capabilities, and releases are decoded from finalized Registry bytes.</p></article>
+      <article><span>03</span><strong>Prepare account deposits</strong><p>Create the RentCredit with your chosen refund wallet before submitting Found37.</p></article>
     </section>
 
     <form className="direct-card found-form" onSubmit={construct}>
-      <header className="direct-card-heading"><span>01</span><div><h2>Chain authority and record coordinates</h2><p>No program, balance, Product, or release identity is supplied here. Every address is reauthenticated against the chain.</p></div></header>
+      <header className="direct-card-heading"><span>01</span><div><h2>Chain authority and record coordinates</h2><p>Enter the Registry record addresses used by the market.</p></div></header>
       <fieldset className="operator-act">
         <legend>The chain this founds against</legend>
         <div className="operator-act-grid">
@@ -290,20 +290,20 @@ export default function CoreFoundWorkspace() {
 
       <fieldset className="operator-act">
         <legend>Who pays, and who is refunded</legend>
-        <p>Connect a wallet to fill the payer from the browser instead of transcribing it. Connecting reads your address and nothing else. <strong>Nothing is signed on this page</strong>: it exports unsigned bytes and asks for no key, and the refund wallet stays yours to choose because it is immutable once the Market-bound RentCredit embeds it.</p>
+        <p>Connect a wallet to fill the payer address. Choose the rent refund wallet carefully: it cannot change after the RentCredit is created. This inspector exports unsigned transactions.</p>
         <WalletDirectory directory={wallets} onConnected={(address) => update('payer', address)} />
         <div className="operator-act-grid">{group('authority').map(addressField)}</div>
       </fieldset>
 
       <fieldset className="operator-act">
         <legend>The deployment this founds against</legend>
-        <p>Both arrive filled from the cluster picked in the header. An edit overrides them and says so.</p>
+        <p>These addresses come from the selected deployment. You can edit them.</p>
         <div className="operator-act-grid">{group('deployment').map(addressField)}</div>
       </fieldset>
 
       <fieldset className="operator-act">
         <legend>The ten finalized records this market is built from</legend>
-        <p>Every one is a Registry raw record, reauthenticated against the chain for owner, PDA, rent and exact ABI. Four of them are values the Product and SourceMaterialV3 records above already carry — supply those two and this console reads the other four rather than asking you to find them.</p>
+        <p>Enter the Product and SourceMaterialV3 addresses, then read the four dependent records. Supply the remaining record addresses separately.</p>
         <div className="direct-actions">
           <button type="button" disabled={deriving} onClick={() => void deriveDependents()}>
             {deriving ? 'Reading the parent records…' : 'Read the four dependent records'}
@@ -315,33 +315,31 @@ export default function CoreFoundWorkspace() {
 
       <button type="submit" disabled={state.kind === 'loading'}>{state.kind === 'loading' ? 'Reacquiring Found37 authority…' : 'Construct unsigned lifecycle + Found transactions'}</button>
       {refusal !== null && refusal.routed
-        ? <p className="direct-status" aria-live="polite">This construction refused at one field. Its remedy is with that field, above.</p>
-        : <p className="direct-status" aria-live="polite">{state.kind === 'ready' ? `Accepted at finalized slot ${state.plan.observedSlot}. Both transactions remain unsigned and unsubmitted.` : state.message}</p>}
+        ? <p className="direct-status" aria-live="polite">Check the highlighted field above.</p>
+        : <p className="direct-status" aria-live="polite">{state.kind === 'ready' ? `Unsigned transactions prepared from finalized slot ${state.plan.observedSlot}.` : state.message}</p>}
       {refusal !== null && !refusal.routed
         ? <OperatorRefusal remedy={refusal.remedy} detail={refusal.detail} />
         : null}
     </form>
 
-    {ready === null ? <section className="direct-card found-empty"><div className="radar"><span /></div><div><p className="eyebrow">No inferred authority</p><h2>Construction stops at the first broken join.</h2><p>Missing records, stale ELF bytes, mutable infrastructure, same-width Product substitution, account aliases, insufficient rent, and packet overflow are refusals, not warnings. No signing or submission here.</p></div></section> : <>
+    {ready === null ? <section className="direct-card found-empty"><div className="radar"><span /></div><div><p className="eyebrow">Prepare the records</p><h2>Enter the records to inspect the transactions.</h2><p>The inspector checks the records, required account deposits and transaction size.</p></div></section> : <>
       <section className="direct-card found-result">
-        <header className="direct-card-heading"><span>02</span><div><h2>Two legacy unsigned packets inspected</h2><p>Neither has been signed, funded, simulated, or submitted. The pair is incomplete for current devnet opening.</p></div></header>
-        <div className="found-verdict"><span>{ready.plan.infrastructureRecognition.kind}</span><strong>{ready.plan.outcomeCount.toLocaleString()} outcomes · Rent {ready.plan.rentCreateWireBytes === null ? 'already created' : `${ready.plan.rentCreateWireBytes.length} bytes`} / Found {ready.plan.wireBytes === null ? 'unroutable' : `${ready.plan.wireBytes.length} bytes`}</strong><p>An internally consistent release is an official dClutch release only when it matches a separately supplied checked manifest.</p></div>
+        <header className="direct-card-heading"><span>02</span><div><h2>Two legacy unsigned packets inspected</h2><p>Use the command-line workflow above to complete market opening.</p></div></header>
+        <div className="found-verdict"><span>{ready.plan.infrastructureRecognition.kind}</span><strong>{ready.plan.outcomeCount.toLocaleString()} outcomes · Rent {ready.plan.rentCreateWireBytes === null ? 'already created' : `${ready.plan.rentCreateWireBytes.length} bytes`} / Found {ready.plan.wireBytes === null ? 'unroutable' : `${ready.plan.wireBytes.length} bytes`}</strong><p>Compare the selected release with your deployment manifest.</p></div>
         <dl className="found-facts"><div><dt>Derived Market</dt><dd>{ready.plan.market}</dd></div><div><dt>Lifecycle RentCredit</dt><dd>{ready.plan.rentCredit}</dd></div><div><dt>Product identity</dt><dd>{ready.plan.productId}</dd></div><div><dt>Product record digest</dt><dd>{ready.plan.productRecordDigest}</dd></div><div><dt>Execution release set</dt><dd>{ready.plan.executionReleaseSetId}</dd></div><div><dt>Infrastructure profile</dt><dd>{ready.plan.infrastructureProfile}</dd></div><div><dt>Core / Registry / Rent</dt><dd>{compact(ready.plan.coreProgram)} · {compact(ready.plan.registryProgram)} · {compact(ready.plan.rentProgram)}</dd></div><div><dt>Rent debit</dt><dd>{ready.plan.rentCreditRentDebit} credit + {ready.plan.marketRentTopUp} Market lamports</dd></div><div><dt>Blockhash validity</dt><dd>through block height {ready.plan.lastValidBlockHeight}</dd></div></dl>
         {ready.rentBase64 === null
-          ? <p className="direct-refusal">The Market-scoped lifecycle RentCredit already exists at {ready.plan.rentCredit} for this generation, so there is nothing to create. Found37 names it as a precondition.</p>
+          ? <p className="direct-refusal">RentCredit already exists at {ready.plan.rentCredit} for this generation; its setup can be skipped.</p>
           : <>
               <label><span>1 · unsigned lifecycle RentCredit Create · base64</span><textarea className="found-packet" readOnly value={ready.rentBase64} /></label>
               <div className="found-export"><a download={`dclutch-rent-create-${ready.plan.market}.tx`} href={`data:application/octet-stream;base64,${ready.rentBase64}`}>Download Rent Create packet</a><span>Confirm this packet before Found.</span></div>
             </>}
         {ready.foundBase64 === null
           ? <div className="direct-refusal">
-              <strong>Found37 is not downloadable from this route.</strong> {ready.plan.foundRefusal} Its {ready.plan.routableAddresses.length} routable
-              addresses are derived and available. Building the lookup table and submitting through a wallet is what the
-              <Anchor href="/create"> read-only design preview</Anchor> does.
+              <strong>Found37 is not downloadable from this route.</strong> {ready.plan.foundRefusal} Its {ready.plan.routableAddresses.length} account addresses are available for inspection. Use the founding commands above to open the market, or return to <Anchor href="/create">market design</Anchor>.
             </div>
           : <>
               <label><span>2 · unsigned Core Found · base64</span><textarea className="found-packet" readOnly value={ready.foundBase64} /></label>
-              <div className="found-export"><a download={`dclutch-found-${ready.plan.market}.tx`} href={`data:application/octet-stream;base64,${ready.foundBase64}`}>Download Found packet</a><span>No signing or submission here.</span></div>
+              <div className="found-export"><a download={`dclutch-found-${ready.plan.market}.tx`} href={`data:application/octet-stream;base64,${ready.foundBase64}`}>Download Found packet</a><span>Unsigned transaction</span></div>
             </>}
       </section>
 

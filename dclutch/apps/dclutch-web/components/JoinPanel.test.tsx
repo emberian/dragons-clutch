@@ -95,7 +95,7 @@ describe('the join surface', () => {
     expect(html).toContain(COORDINATES.position);
     // The act, not a command.
     expect(html).toContain('Join this market');
-    expect(html).toContain('Nothing is signed');
+    expect(html).toContain('Review the refundable storage deposit');
     // The old wall, and the old apology for it, are both gone.
     expect(html).not.toContain('cannot yet build the admission transaction itself');
     expect(html).not.toContain('not a policy');
@@ -106,7 +106,7 @@ describe('the join surface', () => {
 
   it('refuses joining a terminal market in reader language instead of offering it', () => {
     const html = renderToStaticMarkup(<JoinStanding readiness={INCOMPLETE} marketPhase="Terminal" walletAddress={WALLET} endpoint={DEVNET} />);
-    expect(html).toContain('This market has already resolved');
+    expect(html).toContain('This market has resolved');
     expect(html).not.toContain('How to join');
     expect(html).not.toContain('dclutch-terminal join');
   });
@@ -149,8 +149,8 @@ describe('the join surface', () => {
 
   it('offers admission as an act in this browser, and names its authority', () => {
     expect(admitted).toContain('Join this market');
-    expect(admitted).toContain('compiled Rust planner');
-    expect(admitted).toContain('checked against');
+    expect(admitted).toContain('then sign to join');
+    expect(admitted).toContain('Joining creates your accounts');
   });
 
   it('publishes no CLI command for admission', () => {
@@ -165,7 +165,7 @@ describe('the join surface', () => {
     // Offering it and refusing after a reader commits is the worse failure.
     const partial = renderToStaticMarkup(
       <JoinStanding readiness={INCOMPLETE} marketPhase="Open" walletAddress={WALLET} endpoint={DEVNET} />);
-    expect(partial).toContain('does not name every program the admission frame needs');
+    expect(partial).toContain('Joining is unavailable: this deployment is missing required program addresses');
     expect(partial).not.toContain('Join this market');
   });
 });

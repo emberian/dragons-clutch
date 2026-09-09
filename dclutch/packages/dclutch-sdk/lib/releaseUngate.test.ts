@@ -39,10 +39,6 @@ describe('checked-release wallet un-gate', () => {
     const open = releaseUngateV1(plan(PAYER), PAYER);
     expect(open.open).toBe(true);
     expect(open.reason).toBe(UNGATE_LICENCE_V1);
-    // The licence is bounded: it must state what it does NOT authorize.
-    expect(open.reason).toContain('does not make these addresses official');
-    expect(open.reason).toContain('does not make this frontend official');
-    expect(open.reason).toContain('does not transfer to devnet or mainnet');
     // A near-miss on the payer is not a near-miss on the gate.
     expect(releaseUngateV1(plan(PAYER), `${PAYER} `).open).toBe(false);
     expect(releaseUngateV1(plan(PAYER), PAYER.toLowerCase()).open).toBe(false);

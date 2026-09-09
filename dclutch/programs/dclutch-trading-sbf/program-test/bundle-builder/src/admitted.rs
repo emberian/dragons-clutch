@@ -24,7 +24,10 @@ use dclutch_market::execution_strategy::{
         validate_admitted_aot_v4,
     },
 };
-use dclutch_registry::release_set::{ArtifactReleaseIdV1, CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_operator::dealer_hot_projection_v1::{
+    DealerAdmittedAuthorityInputV1, derive_dealer_admitted_authority_v1,
+};
+use dclutch_registry::release_set::ArtifactReleaseIdV1;
 use dclutch_registry::svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_registry::{
     ARTIFACT_RELEASE_SCHEMA_ID_V2, ArtifactReleaseV2, DeploymentObservationV2,
@@ -349,20 +352,21 @@ pub fn derive_admitted_authorities_v1(
             chunk_index,
         )
         .map_err(|_| BuilderError::Artifact)?;
-        let seeds = CallerAuthoritySeedsV1::new(
-            input.release_set,
-            input.market.to_bytes(),
-            ExecutionRoleV1::Trading,
-            input.root.to_bytes(),
-            role_request_digest.to_bytes(),
-        )
+        let authority = derive_dealer_admitted_authority_v1(DealerAdmittedAuthorityInputV1 {
+            trading_program: input.trading_program,
+            release_set: input.release_set.to_bytes(),
+            market: input.market,
+            root: input.root,
+            family_request_digest: input.family_request_digest.to_bytes(),
+            chunk_index,
+        })
         .map_err(|_| BuilderError::Artifact)?;
         entries.push(DerivedAdmittedAuthorityV1 {
             chunk_index,
             request: request_bytes,
             request_digest,
             role_request_digest: role_request_digest.to_bytes(),
-            authority: Pubkey::find_program_address(&seeds.as_slices(), &input.trading_program).0,
+            authority,
         });
         chunk_index = chunk_index.checked_add(1).ok_or(BuilderError::Arithmetic)?;
     }
