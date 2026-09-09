@@ -6,6 +6,7 @@ import {
   VersionedTransaction,
 } from '@solana/web3.js';
 
+import { boundedInstructionsV1 } from '@dclutch/sdk/founding/computeBudget';
 import {
   SOURCE_CLOSE_DETAIL_FORMAT_V1,
   SOURCE_CLOSE_PLAN_FORMAT_V1,
@@ -277,8 +278,12 @@ export function buildSourceCloseFundTransactionV1(
     : [new TransactionInstruction({ programId: new PublicKey(acquisition.plan.instruction!.program),
       keys: acquisition.plan.instruction!.accounts.map((meta) => ({ pubkey: new PublicKey(meta.address), isSigner: false, isWritable: meta.isWritable })),
       data: Buffer.from(Uint8Array.from(atob(acquisition.plan.instruction!.dataBase64), (character) => character.charCodeAt(0))) })];
+  if (acquisition.plan.geometry !== null
+      && instructions.length !== acquisition.plan.geometry.transactionInstructionCountWithoutComputeBudget) {
+    throw new Error('compiled Source close instruction count differs from Rust geometry');
+  }
   const transaction = new VersionedTransaction(new TransactionMessage({ payerKey: new PublicKey(payer),
-    recentBlockhash: key(blockhash.blockhash, 'blockhash'), instructions }).compileToLegacyMessage());
+    recentBlockhash: key(blockhash.blockhash, 'blockhash'), instructions: [...boundedInstructionsV1(instructions)] }).compileToLegacyMessage());
   const wireBytes = transaction.serialize();
   if (transaction.signatures.length !== 1 || transaction.message.header.numRequiredSignatures !== 1
       || transaction.message.staticAccountKeys[0]?.toBase58() !== payer || wireBytes.length > SOLANA_PACKET_BYTES_V1) throw new Error('Source close packet changed sole-wallet authority or packet bound');

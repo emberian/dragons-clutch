@@ -1,5 +1,6 @@
 import { PublicKey, TransactionInstruction, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
 
+import { boundedInstructionsV1 } from '@dclutch/sdk/founding/computeBudget';
 import { SOLANA_PACKET_BYTES_V1 } from '@dclutch/sdk/solanaLimits';
 import {
   acquireUserPositionAdmissionSnapshotV1,
@@ -66,7 +67,7 @@ export function compileUserPositionAdmissionTransactionV1(
   const transaction = new VersionedTransaction(new TransactionMessage({
     payerKey: payer,
     recentBlockhash: key(input.recentBlockhash, 'recent blockhash').toBase58(),
-    instructions,
+    instructions: [...boundedInstructionsV1(instructions)],
   }).compileToV0Message());
   // Past the packet bound web3.js throws its own `encoding overruns
   // Uint8Array` from inside the serializer, and it will not produce the byte

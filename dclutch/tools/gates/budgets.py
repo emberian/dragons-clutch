@@ -1,11 +1,15 @@
-"""tools/gate budgets -- tools/gauntlet/CU_BUDGETS.json, well-formed and under the ceiling.
+"""tools/gate budgets -- validate tools/gauntlet/CU_BUDGETS.json.
 
-Refuses: a budget that is not `measured + tolerance`; a budget above Solana's
-1,400,000 CU ceiling (the transaction has stopped fitting and no tolerance can
-be written for it); an enforced entry whose scope is neither `transaction` nor
-`stage`, or a stage entry with no index/name; an unenforced entry with no
+Refuses: a budget that is not `measured + tolerance`; a measured draw above
+Solana's 1,400,000 CU transaction allowance; an enforced entry whose scope is
+neither `transaction` nor `stage`, or a stage entry with no index/name; an unenforced entry with no
 `unenforced_reason`; a duplicated id; a campaign no bindings file or
 substrates.json row names, so the budget could never be evaluated.
+
+`budget` is a regression threshold, not a transaction compute-unit allowance.
+It may exceed the chain ceiling when a fitting measurement plus the preserved
+tolerance crosses that ceiling. Runtime exhaustion is evaluated from campaign
+evidence by tools/gauntlet/tier1/check-witnesses.sh.
 
 Evaluation against a campaign's evidence stays where the campaigns run it:
 tools/gauntlet/tier1/check-witnesses.sh, the one evaluator every runner calls.
@@ -61,8 +65,11 @@ def problems(document: dict, campaigns: set[str]) -> list[str]:
             continue
         if budget != measured + tolerance:
             found.append(f"{ident}: budget {budget} is not measured+tolerance ({measured}+{tolerance}={measured + tolerance})")
-        if budget > CEILING:
-            found.append(f"{ident}: budget {budget} is ABOVE the {CEILING} ceiling; the transaction has stopped fitting")
+        if measured > CEILING:
+            found.append(
+                f"{ident}: measured draw {measured} is ABOVE the {CEILING} chain allowance; "
+                "it cannot describe a successful transaction"
+            )
         scope = entry.get("scope")
         if scope == "stage":
             stage = entry.get("stage") or {}
@@ -84,8 +91,14 @@ def check(*, dry_run: bool = False):
     for line in found:
         note(line)
     if found:
-        return EXIT_FAIL, f"{len(found)} budget row(s) malformed, over the ceiling, or naming an unknown campaign"
-    note(f"{len(document.get('budgets', []))} budget rows: every enforced one is measured+tolerance and under {CEILING}")
+        return EXIT_FAIL, (
+            f"{len(found)} budget row(s) malformed, measured above the chain allowance, "
+            "or naming an unknown campaign"
+        )
+    note(
+        f"{len(document.get('budgets', []))} budget rows: every enforced one is "
+        f"measured+tolerance and every measured draw is at or below {CEILING}"
+    )
     return EXIT_PASS, ""
 
 

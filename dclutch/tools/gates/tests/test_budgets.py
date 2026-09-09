@@ -25,9 +25,29 @@ class BudgetTests(unittest.TestCase):
     def test_budget_must_be_measured_plus_tolerance(self):
         self.assertTrue(any("measured+tolerance" in p for p in budgets.problems(document(budget=121), {"tier1"})))
 
-    def test_a_budget_above_the_ceiling_is_refused(self):
-        found = budgets.problems(document(measured=budgets.CEILING, tolerance=1, budget=budgets.CEILING + 1), {"tier1"})
-        self.assertTrue(any("ABOVE" in p for p in found))
+    def test_a_fitting_measurement_keeps_its_tolerance_across_the_ceiling(self):
+        self.assertEqual(
+            budgets.problems(
+                document(
+                    measured=budgets.CEILING - 5,
+                    tolerance=20,
+                    budget=budgets.CEILING + 15,
+                ),
+                {"tier1"},
+            ),
+            [],
+        )
+
+    def test_a_measured_draw_above_the_chain_allowance_is_refused(self):
+        found = budgets.problems(
+            document(
+                measured=budgets.CEILING + 1,
+                tolerance=20,
+                budget=budgets.CEILING + 21,
+            ),
+            {"tier1"},
+        )
+        self.assertTrue(any("measured draw" in p and "chain allowance" in p for p in found))
 
     def test_scope_and_stage_shape(self):
         self.assertTrue(any("scope" in p for p in budgets.problems(document(scope="phase"), {"tier1"})))

@@ -45,7 +45,7 @@ fi
 # the n-th depth-2 invocation. That keeps stage budgets free of any program
 # address, so they survive a run whose gauntlet-local addresses move.
 evaluate_cu_budgets() {
-    local campaign="$1" witness_id="$2" rows row verdict entry_id observed budget margin what
+    local campaign="$1" witness_id="$2" rows row verdict entry_id observed regression allowance regression_margin chain_margin what
     local budget_failures=0
 
     if [ ! -f "$CU_BUDGETS" ]; then
@@ -55,7 +55,9 @@ evaluate_cu_budgets() {
 
     rows="$(jq -r --arg campaign "$campaign" --slurpfile budgets "$CU_BUDGETS" '
         def cu_stages(lbl):
-          [ .transactions[] | select(.label == lbl) | .logs[]? ]
+          [ .transactions[] | select(.label == lbl)
+            | . as $transaction
+            | ([ .logs[]? ]
           | reduce .[] as $line ({stack: [], out: []};
               if ($line | test("^Program [1-9A-HJ-NP-Za-km-z]+ invoke \\[[0-9]+\\]$")) then
                 .stack += [ ($line
@@ -70,14 +72,24 @@ evaluate_cu_budgets() {
               elif ($line | test("^Program [1-9A-HJ-NP-Za-km-z]+ (success|failed)")) then
                 .stack |= .[0:-1]
               else . end)
-          | .out | map(select(.depth == 2));
+              | .out[] | select(.depth == 2)
+              | . + {error: ($transaction.error // null), logs: ($transaction.logs // [])}) ];
+
+        def exhausted($ceiling):
+          (((.error // null) | tostring
+             | test("ComputationalBudgetExceeded|compute budget exceeded|exceeded CUs meter"; "i")))
+          or (((.error // null) | tostring | test("ProgramFailedToComplete"))
+              and (.consumed != null) and (.consumed >= $ceiling))
+          or ([ .logs[]?
+                | select(test("ComputationalBudgetExceeded|compute budget exceeded|exceeded CUs meter"; "i")) ]
+              | length > 0);
 
         . as $evidence
         | $budgets[0] as $doc
         | ($doc.ceiling.compute_units) as $ceiling
         | [ $doc.budgets[] | select(.campaign == $campaign) ] as $entries
         | if ($entries | length) == 0 then
-            ["NOCAMPAIGN", $campaign, "-", "-", "-", "no budget entry names this campaign"] | @tsv
+            ["NOCAMPAIGN", $campaign, "-", "-", "-", "-", "-", "no budget entry names this campaign"] | @tsv
           else
             $entries[] as $b
             | ($b.transaction
@@ -85,40 +97,51 @@ evaluate_cu_budgets() {
                   then "  ::  stage \($b.stage.index) \($b.stage.name)"
                   else "" end)) as $what
             | if ($b.enforced | not) then
-                ["RECORDED", $b.id, "-", "-", "-", $what] | @tsv
+                ["RECORDED", $b.id, "-", "-", "-", "-", "-", $what] | @tsv
               else
                 ( if $b.scope == "stage"
                   then ($evidence | cu_stages($b.transaction))
                        | (if (length >= $b.stage.index)
-                          then [ .[$b.stage.index - 1].consumed ] else [] end)
+                          then [ .[$b.stage.index - 1] ] else [] end)
                   elif $b.scope == "transaction"
                   then [ $evidence.transactions[]
                          | select(.label == $b.transaction)
-                         | .compute_units_consumed ]
+                         | {consumed: .compute_units_consumed,
+                            error: (.error // null), logs: (.logs // [])} ]
                   else null
                   end ) as $hits
                 | if $b.budget != ($b.measured + $b.tolerance) then
-                    ["SCHEMA", $b.id, "\($b.measured)", "\($b.budget)", "-",
+                    ["SCHEMA", $b.id, "\($b.measured)", "\($b.budget)", "\($ceiling)", "-", "-",
                      "budget is not measured+tolerance (\($b.measured)+\($b.tolerance)=\($b.measured + $b.tolerance))"] | @tsv
                   elif $hits == null then
-                    ["SCHEMA", $b.id, "-", "-", "-", "an enforced budget needs scope transaction or stage, not \($b.scope)"] | @tsv
-                  elif $b.budget > $ceiling then
-                    ["CEILING", $b.id, "\($b.measured)", "\($b.budget)", "\($ceiling - $b.budget)",
-                     "the budget is ABOVE the \($ceiling) ceiling: this transaction has stopped fitting and no tolerance can be written for it"] | @tsv
+                    ["SCHEMA", $b.id, "-", "-", "\($ceiling)", "-", "-", "an enforced budget needs scope transaction or stage, not \($b.scope)"] | @tsv
+                  elif $b.measured > $ceiling then
+                    ["SCHEMA", $b.id, "\($b.measured)", "\($b.budget)", "\($ceiling)", "-", "\($ceiling - $b.measured)",
+                     "measured draw exceeds the configured chain allowance; it cannot describe a successful transaction"] | @tsv
                   elif ($hits | length) == 0 then
-                    ["MISSING", $b.id, "-", "\($b.budget)", "-",
+                    ["MISSING", $b.id, "-", "\($b.budget)", "\($ceiling)", "-", "-",
                      "the campaign submitted nothing matching \($what) — a budget that matches nothing overstates coverage"] | @tsv
                   elif ($hits | length) > 1 then
-                    ["AMBIGUOUS", $b.id, "-", "\($b.budget)", "-",
+                    ["AMBIGUOUS", $b.id, "-", "\($b.budget)", "\($ceiling)", "-", "-",
                      "\($hits | length) transactions carry this label; a budget must name exactly one"] | @tsv
-                  elif $hits[0] == null then
-                    ["NOCU", $b.id, "-", "\($b.budget)", "-",
+                  elif $hits[0].consumed == null then
+                    ["NOCU", $b.id, "-", "\($b.budget)", "\($ceiling)", "-", "-",
                      "the campaign recorded no compute_units_consumed for \($what)"] | @tsv
-                  elif $hits[0] > $b.budget then
-                    ["OVER", $b.id, "\($hits[0])", "\($b.budget)", "+\($hits[0] - $b.budget)",
-                     "OVER BUDGET by \($hits[0] - $b.budget) CU: \($what)"] | @tsv
+                  elif ($hits[0] | exhausted($ceiling)) then
+                    ["EXHAUSTED", $b.id, "\($hits[0].consumed)", "\($b.budget)", "\($ceiling)",
+                     "\($b.budget - $hits[0].consumed)", "\($ceiling - $hits[0].consumed)",
+                     "the finalized transaction records compute exhaustion at its configured chain allowance: \($what)"] | @tsv
+                  elif $hits[0].consumed > $ceiling then
+                    ["CHAIN", $b.id, "\($hits[0].consumed)", "\($b.budget)", "\($ceiling)",
+                     "\($b.budget - $hits[0].consumed)", "\($ceiling - $hits[0].consumed)",
+                     "observed compute exceeds the configured chain allowance; the evidence is inconsistent with a successful transaction"] | @tsv
+                  elif $hits[0].consumed > $b.budget then
+                    ["OVER", $b.id, "\($hits[0].consumed)", "\($b.budget)", "\($ceiling)",
+                     "\($b.budget - $hits[0].consumed)", "\($ceiling - $hits[0].consumed)",
+                     "regression threshold exceeded by \($hits[0].consumed - $b.budget) CU; \($ceiling - $hits[0].consumed) CU remained under the chain allowance: \($what)"] | @tsv
                   else
-                    ["OK", $b.id, "\($hits[0])", "\($b.budget)", "\($ceiling - $hits[0])", $what] | @tsv
+                    ["OK", $b.id, "\($hits[0].consumed)", "\($b.budget)", "\($ceiling)",
+                     "\($b.budget - $hits[0].consumed)", "\($ceiling - $hits[0].consumed)", $what] | @tsv
                   end
               end
           end' "$EVIDENCE")" || {
@@ -126,19 +149,18 @@ evaluate_cu_budgets() {
         return 1
     }
 
-    printf '  %-9s %-48s %10s %10s %11s\n' VERDICT BUDGET-ID OBSERVED BUDGET MARGIN
-    printf '  (MARGIN: for OK, compute units left to the ceiling; for OVER, how far over budget.)\n'
-    while IFS=$'\t' read -r verdict entry_id observed budget margin what; do
+    printf '  %-9s %-48s %10s %10s %10s %11s %11s\n' VERDICT BUDGET-ID OBSERVED REGRESSION ALLOWANCE REG-LEFT CHAIN-LEFT
+    while IFS=$'\t' read -r verdict entry_id observed regression allowance regression_margin chain_margin what; do
         [ -n "$verdict" ] || continue
         case "$verdict" in
             OK|RECORDED)
-                printf '  %-9s %-48s %10s %10s %11s\n' \
-                    "$verdict" "$entry_id" "$observed" "$budget" "$margin"
+                printf '  %-9s %-48s %10s %10s %10s %11s %11s\n' \
+                    "$verdict" "$entry_id" "$observed" "$regression" "$allowance" "$regression_margin" "$chain_margin"
                 ;;
             *)
                 budget_failures=$((budget_failures + 1))
-                printf '  %-9s %-48s %10s %10s %11s\n' \
-                    "$verdict" "$entry_id" "$observed" "$budget" "$margin" >&2
+                printf '  %-9s %-48s %10s %10s %10s %11s %11s\n' \
+                    "$verdict" "$entry_id" "$observed" "$regression" "$allowance" "$regression_margin" "$chain_margin" >&2
                 printf '            %s\n' "$what" >&2
                 ;;
         esac
@@ -187,7 +209,7 @@ while [ "$index" -lt "$count" ]; do
         fi
         printf 'witness %-42s CU BUDGETS for campaign %s\n' "$id" "$campaign"
         if evaluate_cu_budgets "$campaign" "$id"; then
-            printf 'witness %-42s OK    every budgeted transaction is under budget\n' "$id"
+            printf 'witness %-42s OK    every measured draw satisfies its regression threshold and chain allowance\n' "$id"
         else
             printf 'witness %-42s FAIL  see the red rows above\n' "$id" >&2
             echo "         provenance: $provenance" >&2

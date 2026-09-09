@@ -1,6 +1,7 @@
-import { PublicKey } from '@solana/web3.js';
+import { ComputeBudgetProgram, PublicKey, VersionedTransaction } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
+import { LOCAL_PROTOCOL_COMPUTE_UNIT_LIMIT_V1 } from '@dclutch/sdk/generated/genericFoundingV1';
 import { SOLANA_PACKET_BYTES_V1 } from '@dclutch/sdk/solanaLimits';
 import { type DirectParticipantReadinessV1 } from '@dclutch/sdk/directParticipant';
 import { type SignatureStatusObservation } from '@dclutch/sdk/rpc';
@@ -55,6 +56,14 @@ describe('compiling the admission transaction', () => {
     expect(compiled.requiredSigners).toEqual([OWNER]);
     expect(compiled.wireBytes.length).toBeGreaterThan(0);
     expect(compiled.wireBytes.length).toBeLessThanOrEqual(SOLANA_PACKET_BYTES_V1);
+    const decoded = VersionedTransaction.deserialize(compiled.wireBytes);
+    expect(decoded.message.compiledInstructions).toHaveLength(compiled.plan.instructions.length + 1);
+    const allowance = decoded.message.compiledInstructions[0]!;
+    expect(decoded.message.staticAccountKeys[allowance.programIdIndex]?.toBase58())
+      .toBe(ComputeBudgetProgram.programId.toBase58());
+    expect(Array.from(allowance.data)).toEqual(Array.from(ComputeBudgetProgram.setComputeUnitLimit({
+      units: LOCAL_PROTOCOL_COMPUTE_UNIT_LIMIT_V1,
+    }).data));
   });
 
   it('refuses a payer who is not the planner’s required signer', () => {

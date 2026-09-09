@@ -9,6 +9,7 @@ use std::{
 };
 
 use dclutch_market::{CoreState, Phase};
+use dclutch_source::{SourceResolutionStateV2, resolution::SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use solana_sdk::signature::Signer;
@@ -544,13 +545,14 @@ pub(crate) fn execute(request: JourneyRequestV1) -> Result<JourneyTranscriptV1> 
 pub(crate) fn continue_held_after_terminal(
     request: HeldContinuationRequestV1,
 ) -> Result<serde_json::Value> {
-    validate_existing_file(&request.handoff, "--handoff")?;
-    validate_existing_file(&request.direct_finalized, "--direct-finalized")?;
-    validate_existing_file(&request.direct_public, "--direct-public")?;
+    let handoff_path = canonical_existing_file(&request.handoff, "--handoff")?;
+    let direct_finalized =
+        canonical_existing_file(&request.direct_finalized, "--direct-finalized")?;
+    let direct_public = canonical_existing_file(&request.direct_public, "--direct-public")?;
     validate_new_path(&request.evidence, "--evidence")?;
     validate_work_directory(&request.work)?;
 
-    let handoff_bytes = std::fs::read(&request.handoff)?;
+    let handoff_bytes = std::fs::read(&handoff_path)?;
     let handoff: ParticipantHandoffV1 = serde_json::from_slice(&handoff_bytes)?;
     if handoff.schema != "dclutch-private-validator-participant-handoff-v1"
         || handoff.resume_action
@@ -560,18 +562,17 @@ pub(crate) fn continue_held_after_terminal(
             "--handoff is not the canonical held-Journey participant boundary",
         ));
     }
-    let plan = PathBuf::from(&handoff.plan);
-    let market_input = PathBuf::from(&handoff.market_input);
-    let campaign_report = PathBuf::from(&handoff.founding_evidence);
-    let buyer_report = PathBuf::from(&handoff.participant_evidence);
-    for (path, label) in [
-        (&plan, "handoff plan"),
-        (&market_input, "handoff Market input"),
-        (&campaign_report, "handoff founding evidence"),
-        (&buyer_report, "handoff participant evidence"),
-    ] {
-        validate_existing_file(path, label)?;
-    }
+    let plan = canonical_existing_file(Path::new(&handoff.plan), "handoff plan")?;
+    let market_input =
+        canonical_existing_file(Path::new(&handoff.market_input), "handoff Market input")?;
+    let campaign_report = canonical_existing_file(
+        Path::new(&handoff.founding_evidence),
+        "handoff founding evidence",
+    )?;
+    let buyer_report = canonical_existing_file(
+        Path::new(&handoff.participant_evidence),
+        "handoff participant evidence",
+    )?;
     let admission_dir = buyer_report
         .parent()
         .ok_or_else(|| Error::new("handoff participant evidence omitted its parent"))?;
@@ -580,10 +581,14 @@ pub(crate) fn continue_held_after_terminal(
             "the v1 handoff participant evidence is not the canonical admission-buyer.json",
         ));
     }
-    let stranger_report = admission_dir.join("admission-stranger.json");
-    let stranger_keypair = admission_dir.join("second-stranger.json");
-    validate_existing_file(&stranger_report, "held stranger admission evidence")?;
-    validate_existing_file(&stranger_keypair, "held stranger keypair")?;
+    let stranger_report = canonical_existing_file(
+        &admission_dir.join("admission-stranger.json"),
+        "held stranger admission evidence",
+    )?;
+    let stranger_keypair = canonical_existing_file(
+        &admission_dir.join("second-stranger.json"),
+        "held stranger keypair",
+    )?;
 
     let plan_bytes = std::fs::read(&plan)?;
     let market_bytes = std::fs::read(&market_input)?;
@@ -611,25 +616,20 @@ pub(crate) fn continue_held_after_terminal(
     };
     let market = campaign_key("founding_market")?;
     let claims_market = campaign_key("claims_aggregate")?;
-    let source_receipt = campaign_key("resolution_closure_receipt")?;
+    let source_state = campaign_key("resolution_source_state")?;
 
     let mut rpc = crate::rpc::Rpc::connect(&handoff.rpc_url)?;
     let direct = crate::direct_trade::authenticate_owned_loopback_terminal_evidence_v1(
         &mut rpc,
-        &request.direct_finalized,
+        &direct_finalized,
         market,
         &plan_sha256,
         &market_sha256,
     )?;
-    let direct_finalized_bytes = std::fs::read(&request.direct_finalized)?;
+    let direct_finalized_bytes = std::fs::read(&direct_finalized)?;
     let direct_document: serde_json::Value = serde_json::from_slice(&direct_finalized_bytes)?;
-    let direct_public_bytes = std::fs::read(&request.direct_public)?;
+    let direct_public_bytes = std::fs::read(&direct_public)?;
     let direct_public_sha256 = sha256_hex(&direct_public_bytes);
-    let handoff_payer: solana_sdk::pubkey::Pubkey = handoff
-        .census
-        .payer
-        .parse()
-        .map_err(|error| Error::new(format!("held census payer: {error}")))?;
     if direct_document
         .get("publicManifestSha256")
         .and_then(serde_json::Value::as_str)
@@ -674,20 +674,48 @@ pub(crate) fn continue_held_after_terminal(
             "held continuation requires the existing Resolution owner step to leave one authenticated Terminal Market",
         ));
     }
-
-    let payer_keypair = PathBuf::from(&handoff.campaign_payer_keypair);
-    validate_existing_file(&payer_keypair, "held campaign payer keypair")?;
-    let payer = request_payer(&handoff.campaign_payer_keypair)?;
-    if payer != handoff_payer {
+    let source_account = rpc.required_account(source_state, "held Resolution Source state")?;
+    let source = SourceResolutionStateV2::decode(&source_account.data)
+        .map_err(|error| Error::new(format!("held Resolution Source state: {error:?}")))?;
+    let terminal_source = source
+        .terminal_projection()
+        .map_err(|error| Error::new(format!("held terminal Source projection: {error:?}")))?;
+    if source.market() != market.to_bytes() {
         return Err(Error::new(
-            "held campaign payer key does not match the authenticated handoff census",
+            "held terminal Source state belongs to another Market",
         ));
     }
-    let key_directory = PathBuf::from(&handoff.key_directory);
-    let seller_keypair = key_directory.join("founding-founder.json");
-    let buyer_keypair = key_directory.join("participant.json");
-    validate_existing_file(&seller_keypair, "held seller keypair")?;
-    validate_existing_file(&buyer_keypair, "held buyer keypair")?;
+    let closure_sequence = terminal_source
+        .terminal_sequence()
+        .checked_add(1)
+        .ok_or_else(|| Error::new("held Source closure sequence overflowed"))?;
+    let source_receipt = solana_sdk::pubkey::Pubkey::find_program_address(
+        &[
+            SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3,
+            source_state.as_ref(),
+            &closure_sequence.to_le_bytes(),
+        ],
+        &source_account.owner,
+    )
+    .0;
+
+    let payer_keypair = canonical_existing_file(
+        Path::new(&handoff.campaign_payer_keypair),
+        "held campaign payer keypair",
+    )?;
+    let payer = crate::substrate::load_keypair(&payer_keypair)?.pubkey();
+    let key_directory = canonical_existing_directory(
+        Path::new(&handoff.key_directory),
+        "held Direct key directory",
+    )?;
+    let seller_keypair = canonical_existing_file(
+        &key_directory.join("founding-founder.json"),
+        "held seller keypair",
+    )?;
+    let buyer_keypair = canonical_existing_file(
+        &key_directory.join("participant.json"),
+        "held buyer keypair",
+    )?;
     let keypairs = std::collections::BTreeMap::from([(
         "participant".to_owned(),
         buyer_keypair.display().to_string(),
@@ -711,7 +739,7 @@ pub(crate) fn continue_held_after_terminal(
         &mut rpc,
         &context,
         &mut continuation,
-        &request.direct_public,
+        &direct_public,
         direct.direct.buyer_owner,
         &payer_keypair,
     )?;
@@ -753,7 +781,7 @@ pub(crate) fn continue_held_after_terminal(
             holder,
             role,
             *owner,
-            &request.direct_finalized,
+            &direct_finalized,
             payer,
             &payer_keypair,
         )?;
@@ -773,8 +801,8 @@ pub(crate) fn continue_held_after_terminal(
         &mut rpc,
         &context,
         &mut continuation,
-        &request.direct_public,
-        &request.direct_finalized,
+        &direct_public,
+        &direct_finalized,
         source_receipt,
         payer,
         &payer_keypair,
@@ -794,11 +822,11 @@ pub(crate) fn continue_held_after_terminal(
         }),
         "finalPhase": format!("{:?}", post.phase),
         "inputs": {
-            "handoff": request.handoff.display().to_string(),
+            "handoff": handoff_path.display().to_string(),
             "handoffSha256": handoff_sha256,
-            "directFinalized": request.direct_finalized.display().to_string(),
+            "directFinalized": direct_finalized.display().to_string(),
             "directFinalizedSha256": sha256_hex(&direct_finalized_bytes),
-            "directPublic": request.direct_public.display().to_string(),
+            "directPublic": direct_public.display().to_string(),
             "directPublicSha256": direct_public_sha256,
             "planSha256": plan_sha256,
             "marketInputSha256": market_sha256,
@@ -821,16 +849,12 @@ pub(crate) fn continue_held_after_terminal(
     Ok(result)
 }
 
-fn request_payer(path: &str) -> Result<solana_sdk::pubkey::Pubkey> {
-    Ok(crate::substrate::load_keypair(Path::new(path))?.pubkey())
-}
-
 fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::Digest as _;
     crate::plan::hex(&sha2::Sha256::digest(bytes))
 }
 
-fn validate_existing_file(path: &Path, label: &str) -> Result<()> {
+fn canonical_existing_file(path: &Path, label: &str) -> Result<PathBuf> {
     let metadata = std::fs::symlink_metadata(path)
         .map_err(|error| Error::new(format!("{label} {}: {error}", path.display())))?;
     if !path.is_absolute()
@@ -838,13 +862,40 @@ fn validate_existing_file(path: &Path, label: &str) -> Result<()> {
         || !metadata.is_file()
         || metadata.len() == 0
         || metadata.len() > 16 * 1024 * 1024
-        || std::fs::canonicalize(path)? != path
     {
         return Err(Error::new(format!(
-            "{label} must be one canonical absolute regular file within 1..16777216 bytes"
+            "{label} must be one absolute regular file within 1..16777216 bytes; the file itself \
+             may not be a symlink"
         )));
     }
-    Ok(())
+    let canonical = std::fs::canonicalize(path)?;
+    let canonical_metadata = std::fs::symlink_metadata(&canonical)?;
+    if !canonical_metadata.is_file()
+        || canonical_metadata.len() == 0
+        || canonical_metadata.len() > 16 * 1024 * 1024
+    {
+        return Err(Error::new(format!(
+            "{label} did not resolve to one regular file within 1..16777216 bytes"
+        )));
+    }
+    Ok(canonical)
+}
+
+fn canonical_existing_directory(path: &Path, label: &str) -> Result<PathBuf> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|error| Error::new(format!("{label} {}: {error}", path.display())))?;
+    if !path.is_absolute() || metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(Error::new(format!(
+            "{label} must be one absolute directory; the directory itself may not be a symlink"
+        )));
+    }
+    let canonical = std::fs::canonicalize(path)?;
+    if !std::fs::symlink_metadata(&canonical)?.is_dir() {
+        return Err(Error::new(format!(
+            "{label} did not resolve to one directory"
+        )));
+    }
+    Ok(canonical)
 }
 
 fn validate_work_directory(path: &Path) -> Result<()> {
@@ -2301,6 +2352,33 @@ fn validate_new_path(path: &Path, label: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn migrated_job_root_is_canonicalized_but_a_file_symlink_is_refused() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!(
+            "dclutch-held-path-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let real = root.join("real");
+        let alias = root.join("alias");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&real).expect("real migrated job root");
+        std::fs::write(real.join("handoff.json"), b"{}\n").expect("regular handoff");
+        symlink(&real, &alias).expect("old job-root alias");
+
+        let resolved = canonical_existing_file(&alias.join("handoff.json"), "handoff")
+            .expect("an ancestor alias resolves to the checksummed migrated tree");
+        assert_eq!(resolved, real.join("handoff.json"));
+
+        symlink(real.join("handoff.json"), real.join("file-link.json")).expect("hostile leaf link");
+        let error = canonical_existing_file(&real.join("file-link.json"), "handoff")
+            .expect_err("the evidence file itself must not be a symlink");
+        assert!(error.0.contains("file itself may not be a symlink"));
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     /// A HELPER THAT HARD-ERRORS STILL LEAVES A TRANSCRIPT NAMING IT.
     ///

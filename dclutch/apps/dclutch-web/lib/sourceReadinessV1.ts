@@ -6,6 +6,7 @@ import {
   VersionedTransaction,
 } from '@solana/web3.js';
 
+import { boundedInstructionsV1 } from '@dclutch/sdk/founding/computeBudget';
 import { hex, sha256 } from '@dclutch/sdk/bytes';
 import {
   SOURCE_READINESS_MARKET_FORMAT_V1,
@@ -595,7 +596,7 @@ export function buildSourceReadinessTransactionV1(
   const transaction = new VersionedTransaction(new TransactionMessage({
     payerKey: new PublicKey(payer),
     recentBlockhash: key(blockhash.blockhash, 'recent blockhash'),
-    instructions,
+    instructions: [...boundedInstructionsV1(instructions)],
   }).compileToLegacyMessage());
   if (transaction.signatures.length !== 1 || transaction.message.header.numRequiredSignatures !== 1
       || transaction.message.staticAccountKeys[0]?.toBase58() !== payer) {

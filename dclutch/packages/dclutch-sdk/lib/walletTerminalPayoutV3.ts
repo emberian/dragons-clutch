@@ -9,6 +9,7 @@ import {
 } from '@solana/web3.js';
 
 import { fromHex, hex, isZero, sha256, slice, u16, u64 } from './bytes';
+import { boundedInstructionsV1 } from './founding/computeBudget';
 import {
   CALLER_AUTHORITY_PDA_DOMAIN_V1,
   CUSTODY_ABI_VERSION_V1,
@@ -712,7 +713,7 @@ export function compileWalletTerminalPayoutV0(report: WalletTerminalPayoutReport
   const observed = input.lookupTable.state.addresses.map((address) => address.toBase58());
   if (observed.length !== expected.length || observed.some((address, index) => address !== expected[index])) throw new Error('lookup table is not the sole canonical payout sequence');
   const payer = key(input.payer, 'fee payer');
-  const transaction = new VersionedTransaction(new TransactionMessage({ payerKey: payer, recentBlockhash: key(input.recentBlockhash, 'recent blockhash').toBase58(), instructions: [report.instruction] }).compileToV0Message([input.lookupTable]));
+  const transaction = new VersionedTransaction(new TransactionMessage({ payerKey: payer, recentBlockhash: key(input.recentBlockhash, 'recent blockhash').toBase58(), instructions: [...boundedInstructionsV1([report.instruction])] }).compileToV0Message([input.lookupTable]));
   const wireBytes = transaction.serialize();
   if (wireBytes.length > PACKET_BYTES) throw new Error(`terminal payout transaction is ${wireBytes.length} bytes, above Solana's ${PACKET_BYTES}-byte packet bound`);
   const requiredSigners = Object.freeze(transaction.message.staticAccountKeys.slice(0, transaction.message.header.numRequiredSignatures).map((address) => address.toBase58()));

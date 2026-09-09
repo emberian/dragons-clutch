@@ -288,6 +288,30 @@ fn run_ladder(arguments: Vec<String>) -> Result<()> {
     let rpc_port: u16 = required(&values, "--rpc-port")?
         .parse()
         .map_err(|_| Error::new("--rpc-port must be a port number"))?;
+    let ensemble = match (
+        values.get("--ensemble-members"),
+        values.get("--ensemble-quorum"),
+    ) {
+        (None, None) => None,
+        (Some(members), Some(quorum)) => Some((
+            members
+                .parse::<u8>()
+                .map_err(|_| Error::new("--ensemble-members must be a decimal u8"))?,
+            quorum
+                .parse::<u8>()
+                .map_err(|_| Error::new("--ensemble-quorum must be a decimal u8"))?,
+        )),
+        _ => {
+            return Err(Error::new(
+                "--ensemble-members and --ensemble-quorum must be supplied together",
+            ));
+        }
+    };
+    if ensemble.is_some() && walk != ladder::WalkV1::Exhaust {
+        return Err(Error::new(
+            "the combined Ensemble ladder control currently supports only --walk exhaust",
+        ));
+    }
     // The rung the market buys, in the SHIPPED command's own spelling. This
     // tier does not invent a second syntax for a ladder: it hands the string a
     // host would type to `local_mutable::parse_recovery_rungs_v1`, so a change
@@ -309,6 +333,7 @@ fn run_ladder(arguments: Vec<String>) -> Result<()> {
             .get("--recovery-rungs")
             .cloned()
             .unwrap_or_else(|| ladder::DEFAULT_RECOVERY_RUNGS_V1.to_owned()),
+        ensemble,
         max_wait_seconds: match values.get("--max-wait-seconds") {
             None => ladder::DEFAULT_MAX_WAIT_SECONDS_V1,
             Some(raw) => raw
@@ -403,7 +428,8 @@ fn usage() {
          --checked-release-gate ABSOLUTE_CHECKED_UPGRADE_GATE_JSON \\\n      \
          --expected-gate-sha256 HEX64 --expected-source-revision HEX40 \\\n      \
          --expected-source-tree-sha256 HEX64 --seed HEX64 \\\n      \
-         [--recovery-rungs BPS:SECONDS_AFTER_PREVIOUS] [--max-wait-seconds I64] \\\n      \
+         [--recovery-rungs BPS:SECONDS_AFTER_PREVIOUS] \\\n      \
+         [--ensemble-members U8 --ensemble-quorum U8] [--max-wait-seconds I64] \\\n      \
          [--publication-shelf-life-seconds I64]\n\nThe campaign \
          brings up its own checked-mutable loopback substrate from the named\nchecked release \
          gate (local-mutable-prepare-v1), boots a fresh solana-test-validator\nover the prepared \
@@ -446,5 +472,40 @@ mod tests {
             super::local_mutable::parse_recovery_rungs_v1(super::ladder::DEFAULT_RECOVERY_RUNGS_V1)
                 .expect("the tier's default rung must parse as the shipped --recovery-rungs value");
         assert_eq!(rungs.len(), 1, "the tier founds a TWO-source market");
+    }
+
+    #[test]
+    fn the_ensemble_prefix_is_bounded_to_the_failure_walk() {
+        let capture = super::run_ladder(vec![
+            "--walk".into(),
+            "capture".into(),
+            "--rpc-port".into(),
+            "21000".into(),
+            "--ensemble-members".into(),
+            "4".into(),
+            "--ensemble-quorum".into(),
+            "3".into(),
+        ])
+        .expect_err("the separate capture campaign owns Ensemble capture");
+        assert!(
+            capture.0.contains("supports only --walk exhaust"),
+            "{}",
+            capture.0
+        );
+
+        let incomplete = super::run_ladder(vec![
+            "--walk".into(),
+            "exhaust".into(),
+            "--rpc-port".into(),
+            "21000".into(),
+            "--ensemble-members".into(),
+            "4".into(),
+        ])
+        .expect_err("one dimension cannot author an Ensemble");
+        assert!(
+            incomplete.0.contains("must be supplied together"),
+            "{}",
+            incomplete.0
+        );
     }
 }

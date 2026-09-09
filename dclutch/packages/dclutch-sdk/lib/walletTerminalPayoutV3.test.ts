@@ -1,7 +1,8 @@
-import { AddressLookupTableAccount, PublicKey, VersionedTransaction } from '@solana/web3.js';
+import { AddressLookupTableAccount, ComputeBudgetProgram, PublicKey, VersionedTransaction } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
 import { hex, sha256 } from './bytes';
+import { LOCAL_PROTOCOL_COMPUTE_UNIT_LIMIT_V1 } from './generated/genericFoundingV1';
 import {
   CUSTODY_ABI_VERSION_V1,
   CUSTODY_REPLAY_BYTES_V1,
@@ -337,6 +338,14 @@ describe('wallet terminal payout v3', () => {
     const plan = compileWalletTerminalPayoutV0(built, { payer, recentBlockhash: key(31), lookupTable: table, lookupObservedSlot: '99' });
     expect(plan.requiredSigners).toEqual([payer, built.request.owner]);
     expect(plan.wireBytes.length).toBeLessThanOrEqual(1_232);
+    const decoded = VersionedTransaction.deserialize(plan.wireBytes);
+    expect(decoded.message.compiledInstructions).toHaveLength(2);
+    const allowance = decoded.message.compiledInstructions[0]!;
+    expect(decoded.message.staticAccountKeys[allowance.programIdIndex]?.toBase58())
+      .toBe(ComputeBudgetProgram.programId.toBase58());
+    expect(Array.from(allowance.data)).toEqual(Array.from(ComputeBudgetProgram.setComputeUnitLimit({
+      units: LOCAL_PROTOCOL_COMPUTE_UNIT_LIMIT_V1,
+    }).data));
     const reordered = new AddressLookupTableAccount({ key: table.key, state: { ...table.state, addresses: [table.state.addresses[1]!, table.state.addresses[0]!, ...table.state.addresses.slice(2)] } });
     expect(() => compileWalletTerminalPayoutV0(built, { payer, recentBlockhash: key(31), lookupTable: reordered, lookupObservedSlot: '99' })).toThrow('sole canonical');
     expect(() => compileWalletTerminalPayoutV0(built, { payer, recentBlockhash: key(31), lookupTable: table, lookupObservedSlot: '100' })).toThrow('payout prestate observation');

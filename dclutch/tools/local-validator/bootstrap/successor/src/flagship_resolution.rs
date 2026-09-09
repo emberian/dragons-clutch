@@ -1338,6 +1338,82 @@ fn lifecycle_address(selected: &SelectedInputV1) -> Result<Pubkey> {
     .0)
 }
 
+fn certificate_address(resolution: Pubkey, source: Pubkey, sequence: u64) -> Pubkey {
+    Pubkey::find_program_address(
+        &[
+            RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
+            source.as_ref(),
+            &[1],
+            &sequence.to_le_bytes(),
+        ],
+        &resolution,
+    )
+    .0
+}
+
+/// Ephemeral projection of the existing native local input, before signing.
+/// These are parsed routing coordinates. The executor independently checks
+/// their live account and deployment bindings on every resumed action.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct OwnedLoopbackContinuationInputV1 {
+    pub(crate) market: Pubkey,
+    pub(crate) source_state: Pubkey,
+    pub(crate) submitter: Pubkey,
+    pub(crate) resolver: Pubkey,
+    pub(crate) payer: Pubkey,
+    pub(crate) update: Pubkey,
+    pub(crate) lifecycle: Pubkey,
+    pub(crate) certificate: Pubkey,
+    pub(crate) reclaim_after_unix_seconds: i64,
+}
+
+/// Parse the executor's own input and join it to the held Market before a
+/// continuation loads any signer. No checkpoint flag grants chain authority.
+pub(crate) fn parse_owned_loopback_continuation_input_v1(
+    input_bytes: &[u8],
+    expected_market: Pubkey,
+) -> Result<OwnedLoopbackContinuationInputV1> {
+    let input: PlanInputV1 = serde_json::from_slice(input_bytes)?;
+    let selected = SelectedInputV1::parse(&input, ExpectedClusterV1::OwnedLoopback)?;
+    let market = selected.account("market")?;
+    if market != expected_market {
+        return Err(Error::new(
+            "provider continuation input names another held Market",
+        ));
+    }
+    let source_state = selected.account("source_state")?;
+    let resolution = selected.account("resolution_program")?;
+    let expected_source = Pubkey::find_program_address(
+        &[
+            SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
+            market.as_ref(),
+            &selected.generation.to_le_bytes(),
+        ],
+        &resolution,
+    )
+    .0;
+    if source_state != expected_source {
+        return Err(Error::new(
+            "provider continuation Source PDA substitution refused",
+        ));
+    }
+    let certificate = certificate_address(resolution, source_state, selected.terminal_sequence);
+    if selected.account("certificate")? != certificate {
+        return Err(Error::new("certificate address substitution refused"));
+    }
+    Ok(OwnedLoopbackContinuationInputV1 {
+        market,
+        source_state,
+        submitter: selected.submitter,
+        resolver: selected.resolver,
+        payer: selected.payer,
+        update: selected.account("update_account")?,
+        lifecycle: lifecycle_address(&selected)?,
+        certificate,
+        reclaim_after_unix_seconds: selected.reclaim_after_unix_seconds,
+    })
+}
+
 /// The Core caller-authority PDA the Execute instruction carries at index 0.
 ///
 /// The five seed coordinates are all named by the input and all pinned against
@@ -3671,16 +3747,7 @@ fn producer_selected_input(
     let terminal_sequence = source
         .next_terminal_sequence()
         .map_err(|error| Error::new(format!("next Source terminal sequence: {error:?}")))?;
-    let certificate = Pubkey::find_program_address(
-        &[
-            RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
-            source_state.as_ref(),
-            &[1],
-            &terminal_sequence.to_le_bytes(),
-        ],
-        &resolution_program,
-    )
-    .0;
+    let certificate = certificate_address(resolution_program, source_state, terminal_sequence);
     let lookup_tables = table_keys(resolver, slots)?;
     // The founding plan retains the predecessor Registry pin as lineage
     // evidence. After the named infrastructure succession, its V2 profile
@@ -8363,16 +8430,8 @@ fn verify_terminal(selected: &SelectedInputV1, snapshot: &FinalizedSnapshotV1) -
         &resolution,
     )
     .0;
-    let expected_certificate = Pubkey::find_program_address(
-        &[
-            RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
-            source_key.as_ref(),
-            &[1],
-            &selected.terminal_sequence.to_le_bytes(),
-        ],
-        &resolution,
-    )
-    .0;
+    let expected_certificate =
+        certificate_address(resolution, source_key, selected.terminal_sequence);
     let source_material =
         snapshot.account(selected.account("source_material")?, "SourceMaterial")?;
     // The certificate names the Source ProviderRelease. The provider request
@@ -9100,6 +9159,93 @@ mod tests {
             accounts,
             lookup_tables: tables,
         }
+    }
+
+    #[test]
+    fn owned_loopback_continuation_uses_native_input_and_refuses_substitution() {
+        let mut input = sample_input();
+        input.format = input_format(ExpectedClusterV1::OwnedLoopback).into();
+        let market = pubkey(&input.accounts.market).expect("market");
+        let resolution = pubkey(&input.accounts.resolution_program).expect("Resolution");
+        let source = Pubkey::find_program_address(
+            &[
+                SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
+                market.as_ref(),
+                &input.generation.to_le_bytes(),
+            ],
+            &resolution,
+        )
+        .0;
+        input.accounts.source_state = source.to_string();
+        input.accounts.certificate =
+            certificate_address(resolution, source, input.terminal_sequence).to_string();
+        let parse = |input: &PlanInputV1, market| {
+            parse_owned_loopback_continuation_input_v1(
+                &serde_json::to_vec(input).expect("input JSON"),
+                market,
+            )
+        };
+        let projected = parse(&input, market).expect("local continuation");
+        let selected = SelectedInputV1::parse(&input, ExpectedClusterV1::OwnedLoopback)
+            .expect("native parser");
+        assert_eq!(
+            (
+                projected.submitter,
+                projected.resolver,
+                projected.payer,
+                projected.update
+            ),
+            (
+                selected.submitter,
+                selected.resolver,
+                selected.payer,
+                selected.account("update_account").expect("update")
+            )
+        );
+        assert_eq!(
+            projected.lifecycle,
+            lifecycle_address(&selected).expect("native lifecycle")
+        );
+        assert_eq!(projected.source_state, source);
+        assert_eq!(
+            projected.reclaim_after_unix_seconds,
+            input.reclaim_after_unix_seconds
+        );
+        assert_eq!(
+            parse(&input, Pubkey::new_unique())
+                .expect_err("another Market")
+                .0,
+            "provider continuation input names another held Market"
+        );
+        let mut wrong = input.clone();
+        wrong.format = input_format(ExpectedClusterV1::Devnet).into();
+        assert_eq!(
+            parse(&wrong, market).expect_err("nonlocal input").0,
+            format!(
+                "input format must be {}",
+                input_format(ExpectedClusterV1::OwnedLoopback)
+            )
+        );
+        let mut wrong = input.clone();
+        wrong.accounts.source_state = Pubkey::new_unique().to_string();
+        assert_eq!(
+            parse(&wrong, market).expect_err("Source substitution").0,
+            "provider continuation Source PDA substitution refused"
+        );
+        let mut wrong = input.clone();
+        wrong.accounts.certificate = Pubkey::new_unique().to_string();
+        assert_eq!(
+            parse(&wrong, market)
+                .expect_err("certificate substitution")
+                .0,
+            "certificate address substitution refused"
+        );
+        let mut wrong = input.clone();
+        wrong.payer = wrong.resolver.clone();
+        assert_eq!(
+            parse(&wrong, market).expect_err("fee payer alias").0,
+            "payer must differ from resolver: Execute and Reclaim pin the resolver readonly, and the fee payer is always a writable signer"
+        );
     }
 
     fn sample_selected() -> SelectedInputV1 {

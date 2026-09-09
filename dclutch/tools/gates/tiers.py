@@ -1001,7 +1001,7 @@ TIERS: tuple[Tier, ...] = (
     Tier("census", "~25s warm, ~50s cold (2026-09-04)", "cargo", "routes, refusal codes, magics and schema identities enumerated from the AST; a code outside its band, a duplicated magic, an identity that is not its label's digest", tier_census),
     Tier("emission", "~2s (2026-09-04)", "python3, rustfmt", "a generated file with no byte-identity guard, or one rustfmt would move out from under a raw-comparing guard; a two-sided wire vector whose reviewed digest moved", tier_emission),
     Tier("citations", "<1s (2026-09-05)", "python3, git", "a commit cited by a decision record or an evidence document that does not exist and is not adjudicated by name; a register row that went false, dead or wrong", tier_citations),
-    Tier("budgets", "<1s (2026-09-04)", "python3", "a CU budget that is not measured+tolerance, above the 1,400,000 ceiling, or naming a campaign no register knows", tier_budgets),
+    Tier("budgets", "<1s (2026-09-04)", "python3", "a CU budget that is not measured+tolerance, has a measured draw above the 1,400,000 chain allowance, or names a campaign no register knows", tier_budgets),
     Tier("fmt", "~10s (2026-09-03)", "cargo, rustfmt", "rustfmt disagreeing with a file outside fmt-baseline.txt, or a baseline line no longer true (every package: one workspace since 2026-09-05)", tier_fmt),
     Tier("locks", "~30s (2026-09-02)", "cargo", "a tracked Cargo.lock that no longer resolves under --locked --offline", tier_locks),
     Tier("seam", "~20s (2026-09-01)", "ast-grep", "a new structural seam finding against tools/seam-audit's triaged baseline", tier_seam),

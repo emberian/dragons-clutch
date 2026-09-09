@@ -1,6 +1,7 @@
-import { PublicKey, VersionedTransaction } from '@solana/web3.js';
+import { ComputeBudgetProgram, PublicKey, VersionedTransaction } from '@solana/web3.js';
 import { describe, expect, it, vi } from 'vitest';
 
+import { LOCAL_PROTOCOL_COMPUTE_UNIT_LIMIT_V1 } from '@dclutch/sdk/generated/genericFoundingV1';
 import {
   SOURCE_READINESS_MARKET_FORMAT_V1,
   SOURCE_READINESS_PLAN_FORMAT_V1,
@@ -191,6 +192,15 @@ describe('Source readiness browser crossing', () => {
     const decoded = VersionedTransaction.deserialize(built.wireBytes);
     expect(decoded.message.header.numRequiredSignatures).toBe(1);
     expect(decoded.message.staticAccountKeys[0]?.toBase58()).toBe(payer);
+    expect(decoded.message.compiledInstructions).toHaveLength(
+      acquisition.plan.geometry!.transactionInstructionCountWithoutComputeBudget + 1,
+    );
+    const allowance = decoded.message.compiledInstructions[0]!;
+    expect(decoded.message.staticAccountKeys[allowance.programIdIndex]?.toBase58())
+      .toBe(ComputeBudgetProgram.programId.toBase58());
+    expect(Array.from(allowance.data)).toEqual(Array.from(ComputeBudgetProgram.setComputeUnitLimit({
+      units: LOCAL_PROTOCOL_COMPUTE_UNIT_LIMIT_V1,
+    }).data));
     const terminal = { ...acquisition, plan: parseSourceReadinessPlanV1(JSON.stringify(plan('complete'))) };
     expect(() => buildSourceReadinessTransactionV1(terminal, payer, {
       slot: '11', blockhash: address(21), lastValidBlockHeight: '99',

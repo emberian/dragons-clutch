@@ -47,7 +47,7 @@ use solana_sdk::{
 use crate::cluster::ExpectedClusterV1;
 use crate::ledger::{ClassClaimV1, ConservationLedgerV1, LamportClaimV1};
 use crate::market::LocalMarketShapeV1;
-use crate::model::{MarketRunInput, TransactionEvidence};
+use crate::model::{EnsembleMarketInputV1, MarketRunInput, TransactionEvidence};
 use crate::plan::pubkey;
 use crate::provider::{ProviderPlanV1, PublicationV1, RungCaptureV1};
 use crate::pyth_lab_publication::{
@@ -174,6 +174,10 @@ pub(crate) struct LadderRequestV1 {
     pub(crate) expected_source_tree_sha256: String,
     pub(crate) seed: String,
     pub(crate) recovery_rungs: String,
+    /// Optional multi-member prefix for the failure walk. The same ordered
+    /// policy then continues with `recovery_rungs`; capture has its dedicated
+    /// three-member campaign and is refused by the parser for this shape.
+    pub(crate) ensemble: Option<(u8, u8)>,
     pub(crate) max_wait_seconds: i64,
     pub(crate) publication_shelf_life_seconds: i64,
 }
@@ -298,6 +302,26 @@ pub(crate) fn execute(request: LadderRequestV1) -> Result<serde_json::Value> {
     // meaning cannot drift apart.
     let rungs = crate::local_mutable::parse_recovery_rungs_v1(&request.recovery_rungs)?;
     let rung_count = rungs.len();
+    let recovery_rung_count = u8::try_from(rung_count)
+        .map_err(|_| Error::new("the recovery rung count exceeds the Ensemble u8 wire"))?;
+    let (ensemble, member_attempt_count) = match request.ensemble {
+        None => (None, 0_usize),
+        Some((members, quorum)) => {
+            let spec = dclutch_source::EnsembleSpecV1::new(members, quorum)
+                .map_err(|error| Error::new(format!("Ensemble input: {error:?}")))?;
+            spec.validate_foundable()
+                .map_err(|error| Error::new(format!("Ensemble founding quorum: {error:?}")))?;
+            let attempts = usize::from(spec.first_rung_index());
+            (
+                Some(EnsembleMarketInputV1 {
+                    members,
+                    quorum,
+                    rungs: recovery_rung_count,
+                }),
+                attempts,
+            )
+        }
+    };
     let registry = pubkey(&checked.plan.registry.program_id)?;
     let fee_recipient = Keypair::new();
     let direct = crate::direct_market::DirectMarketCompilerOwnedV1::load_local(
@@ -308,7 +332,12 @@ pub(crate) fn execute(request: LadderRequestV1) -> Result<serde_json::Value> {
         Some(fee_recipient.pubkey()),
     )?;
     let shape = LocalMarketShapeV1 {
-        recovery: Some(rungs),
+        recovery: if ensemble.is_none() {
+            Some(rungs)
+        } else {
+            None
+        },
+        ensemble,
         // The window's end, the feed and the exponent all come off the minted
         // projection, and the shelf life is stated beside it: a market whose
         // rungs were anchored on one number while its published window carried
@@ -329,12 +358,15 @@ pub(crate) fn execute(request: LadderRequestV1) -> Result<serde_json::Value> {
              about",
         ));
     }
-    if market_input.recovery_source_records.len() != rung_count {
+    let expected_recovery_records = member_attempt_count
+        .checked_add(rung_count)
+        .ok_or_else(|| Error::new("member plus recovery record count overflow"))?;
+    if market_input.recovery_source_records.len() != expected_recovery_records {
         return Err(Error::new(format!(
-            "the compiled market publishes {} recovery source record pairs for {rung_count} \
-             rungs; a rung's alternative source and its adapter config are the records that make \
-             it a NAMED alternative rather than a retry",
-            market_input.recovery_source_records.len()
+            "the compiled market publishes {} recovery source record pairs, not the \
+             {member_attempt_count} member alternatives plus {rung_count} recovery rungs; each \
+             alternative source and adapter config must remain named in the immutable policy",
+            market_input.recovery_source_records.len(),
         )));
     }
     let market_path = request.work.join("market.json");
@@ -707,7 +739,7 @@ pub(crate) fn execute(request: LadderRequestV1) -> Result<serde_json::Value> {
         "market": market.to_string(),
         "recovery_policy_record": recovery_policy_record,
         "recovery_rungs": request.recovery_rungs,
-        "expected_capture_attempt_index": rung_count,
+        "expected_capture_attempt_index": expected_recovery_records,
         "gate_sha256": request.expected_gate_sha256,
         "gate_source_revision": request.expected_source_revision,
         "started_unix_seconds": start_unix,

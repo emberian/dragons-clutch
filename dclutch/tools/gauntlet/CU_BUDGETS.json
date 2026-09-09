@@ -1,10 +1,10 @@
 {
   "schema": "dclutch-cu-budgets-v1",
   "owner": "the CU-BUDGET lane. ONE file, ONE owner. A tier does not carry its own copy of a number that lives here; it carries a `cu-budget` witness naming its campaign, and the shared evaluator tools/gauntlet/tier1/check-witnesses.sh reads this file.",
-  "note": "Checked-in per-transaction compute budgets for the golden transactions. A budget is a CEILING a campaign must stay under, evaluated against that campaign's own finalized evidence. Over budget is a red row naming the transaction and the delta. Read CU_BUDGETS.md before changing a number in here; in particular, read what it says about noise, because the numbers in this file are NOT deterministic and the tolerances are the whole reason the file is usable.",
+  "note": "Checked-in compute regression thresholds for the golden transactions. A budget is measured+tolerance and a campaign must stay under it; the separate ceiling is the chain transaction allowance. Over budget is a red row naming the transaction and both margins. Read CU_BUDGETS.md before changing a number in here; in particular, read what it says about noise, because the numbers in this file are NOT deterministic and the tolerances are the whole reason the file is usable.",
   "ceiling": {
     "compute_units": 1400000,
-    "provenance": "Solana's per-transaction MAX_COMPUTE_UNIT_LIMIT. It is the chain's limit, not ours: a transaction that asks for more is refused at request time, and one that consumes it is refused at the ceiling with no partial result. Found31 died exactly this way before c61376d. Every `transaction`-scope budget in this file must be at or below it; a budget above the ceiling is refused by the evaluator, which is how this file says out loud that a transaction has stopped fitting."
+    "provenance": "Solana's per-transaction MAX_COMPUTE_UNIT_LIMIT. It is the chain's limit, not ours: a transaction that asks for more is refused at request time, and one that consumes it is refused at the ceiling with no partial result. Found31 died exactly this way before c61376d. The measured draw states whether an executed transaction fit. The measured-plus-tolerance budget is a regression threshold and may cross this allowance; finalized compute exhaustion is evaluated separately from that threshold."
   },
   "tolerance_rule": {
     "formula": "tolerance = roundup(observed_band, 10000) + 10000, with a floor of 15000; budget = measured + tolerance",

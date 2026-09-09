@@ -39,12 +39,13 @@ copies diverge on the day one of them learns something. The witness expands to
 one row per budget entry, because "the campaign got more expensive" is useless
 unless it says which transaction.
 
-Five things are red, not just being over budget:
+Six things are red, not just being over the regression threshold:
 
 | verdict | what it means |
 |---|---|
-| `OVER` | the campaign consumed more than the budget. The row names the transaction and the delta. |
-| `CEILING` | the budget is **above 1,400,000**. The transaction has stopped fitting and no tolerance can be written for it. |
+| `OVER` | the campaign consumed more than the measured-plus-tolerance regression threshold while remaining within the chain allowance. The row names both margins. |
+| `EXHAUSTED` | finalized evidence records compute exhaustion at the configured chain allowance. |
+| `CHAIN` | recorded consumption exceeds the configured chain allowance, so the evidence cannot describe a successful transaction. |
 | `MISSING` | the budget matched no transaction in the campaign. A budget that matches nothing overstates coverage, the same rule `bindings.json` lives under. |
 | `AMBIGUOUS` | two transactions carry the label. A budget must name exactly one. |
 | `SCHEMA` | `budget` is not `measured + tolerance`, or an enforced entry has a scope that is neither `transaction` nor `stage`. A hand-edited budget cannot drift from its stated basis. |
@@ -734,9 +735,11 @@ honest sequence:
    re-authenticates the Registry once more per Found stage" is.
 3. Update `measured`, `tolerance` and `budget` together. The evaluator refuses
    `budget != measured + tolerance`, so they cannot drift apart silently.
-4. If `measured + tolerance` now exceeds 1,400,000 you are not re-pinning a
-   budget, you are recording that a transaction has stopped fitting. Do not
-   shrink the tolerance to make it fit; that is the alarm going off.
+4. If `measured + tolerance` exceeds 1,400,000, keep the measured tolerance.
+   The regression threshold is allowed to cross the chain allowance; the
+   measured draw still states whether the transaction fit, and finalized
+   exhaustion evidence receives its own `EXHAUSTED` verdict. Do not shrink the
+   tolerance merely to place the regression threshold below the allowance.
 
 ## The injected-red proof
 
