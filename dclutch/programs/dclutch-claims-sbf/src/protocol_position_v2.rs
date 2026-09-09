@@ -32,7 +32,13 @@ use dclutch_claims::{
 };
 use dclutch_market::{CoreState, rent::lifecycle_v2::LifecycleRentCreditV2};
 use dclutch_product::svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV3};
-use dclutch_registry::release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_registry::{
+    ActivatedExecutionReleaseSetViewV1,
+    activation_auth_v1::{
+        authenticate_activated_role_in_frame_v1, authenticate_activation_cache_identity_v1,
+    },
+    release_set::{CallerAuthoritySeedsV1, ExecutionRoleV1},
+};
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},
@@ -349,6 +355,7 @@ fn process_admit(
     instruction_data: &[u8],
     request: ProtocolPositionRequestV2,
 ) -> Result<(), ProgramError> {
+    crate::claims_cu_checkpoint!("position-admit-enter");
     authenticate_admit_privileges(program_id, accounts)?;
     let request_digest = hash(instruction_data).to_bytes();
     authenticate_authority(
@@ -357,7 +364,9 @@ fn process_admit(
         request,
         request_digest,
     )?;
+    crate::claims_cu_checkpoint!("position-admit-authority");
     authenticate_releases_admit(accounts, request)?;
+    crate::claims_cu_checkpoint!("position-admit-releases");
     let (market, market_digest) = authenticate_market(
         program_id,
         accounts.common.market,
@@ -382,6 +391,7 @@ fn process_admit(
         },
     )?;
 
+    crate::claims_cu_checkpoint!("position-admit-market-owner-rent");
     let product_digest = account_digest(accounts.product_record)?;
     let linked_digest = account_digest(accounts.basis_record)?;
     authenticate_runtime_product_basis_core_v3(
@@ -413,6 +423,7 @@ fn process_admit(
     )
     .map_err(|_| ProtocolPositionSbfErrorV2::ProductBasis)?;
     authenticate_core_rent_beneficiary(accounts.core_market, accounts.rent_credit)?;
+    crate::claims_cu_checkpoint!("position-admit-product-core");
 
     let rent =
         Rent::from_account_info(accounts.rent).map_err(|_| ProtocolPositionSbfErrorV2::Rent)?;
@@ -462,7 +473,9 @@ fn process_admit(
         .to_receipt_bytes()
         .map_err(|_| ProtocolPositionSbfErrorV2::Receipt)?;
 
+    crate::claims_cu_checkpoint!("position-admit-candidates");
     let position_bump = allocate_pair(program_id, accounts, request, position_width)?;
+    crate::claims_cu_checkpoint!("position-admit-allocated");
     // The Position records the bump this act signed it into existence with, so
     // every later reader reproduces its address instead of searching for it.
     // The bump is only known after `allocate_pair` derives it, and the body is
@@ -475,6 +488,7 @@ fn process_admit(
         return Err(ProtocolPositionSbfErrorV2::Commit.into());
     }
     set_return_data(&receipt);
+    crate::claims_cu_checkpoint!("position-admit-done");
     Ok(())
 }
 
@@ -880,6 +894,22 @@ fn authenticate_releases_admit(
     accounts: AdmitAccounts<'_, '_>,
     request: ProtocolPositionRequestV2,
 ) -> Result<(), ProgramError> {
+    // All three roles use one immutable cache. Decode the complete hostile
+    // projection and authenticate its owner/address/release once; each role
+    // still authenticates its own frame and current deployment below.
+    let bytes = accounts
+        .cache
+        .try_borrow_data()
+        .map_err(|_| ProtocolPositionSbfErrorV2::Release)?;
+    let activated = ActivatedExecutionReleaseSetViewV1::decode(&bytes)
+        .map_err(|_| ProtocolPositionSbfErrorV2::Release)?;
+    authenticate_activation_cache_identity_v1(
+        accounts.registry,
+        accounts.cache,
+        &request.release_set,
+        activated,
+    )
+    .map_err(|_| ProtocolPositionSbfErrorV2::Release)?;
     for (role, program, programdata) in [
         (
             ExecutionRoleV1::Trading,
@@ -897,13 +927,12 @@ fn authenticate_releases_admit(
             accounts.core_programdata,
         ),
     ] {
-        let receipt = authenticate_activated_role(
-            accounts.registry,
+        let receipt = authenticate_activated_role_in_frame_v1(
             accounts.cache,
+            activated,
             role,
             program,
             programdata,
-            &request.release_set,
         )
         .map_err(|_| ProtocolPositionSbfErrorV2::Release)?;
         if receipt.execution_release_set_id().as_bytes() != &request.release_set {
@@ -1424,6 +1453,167 @@ mod tests {
             Box::leak(Box::new(owner)),
             executable,
         )
+    }
+
+    /// Exercise the admission boundary itself, including all three roles, with
+    /// an authentic cache. The mutable deployment pins metadata; no fixture ELF
+    /// or content-commitment implementation is substituted into this control.
+    fn admit_release_fixture() -> (Vec<AccountInfo<'static>>, ProtocolPositionRequestV2) {
+        use dclutch_core_contract::ContentId;
+        use dclutch_registry::{
+            ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
+            ArtifactActivationInputV1, ArtifactReleaseV2, ArtifactUpgradePolicyV1,
+            DeploymentObservationV2, activate_execution_role_into_v1,
+            initialize_activation_cache_v1,
+            release_set::{
+                ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1,
+                ProgramIdentityV1,
+            },
+        };
+        use solana_sdk_ids::bpf_loader_upgradeable;
+        let (_, _, mut request, _) = parent_fixture();
+        let registry = Pubkey::new_from_array([90; 32]);
+        let program = Pubkey::new_from_array([91; 32]);
+        let programdata =
+            Pubkey::find_program_address(&[program.as_ref()], &bpf_loader_upgradeable::ID).0;
+        let authority = [92; 32];
+        let commitment = [93; 32];
+        let slot = 77_u64;
+        let release = ArtifactReleaseV2::new(
+            ProgramIdentityV1::new(program.to_bytes()).expect("program"),
+            ProgramIdentityV1::new(bpf_loader_upgradeable::ID.to_bytes()).expect("loader"),
+            programdata.to_bytes(),
+            ContentId::new([94; 32]).expect("semantic"),
+            commitment,
+            slot,
+            ArtifactUpgradePolicyV1::ExactAuthority,
+            Some(authority),
+        )
+        .expect("release");
+        let artifact =
+            ArtifactReleaseIdV1::new(hash(&release.to_bytes()).to_bytes()).expect("artifact");
+        let binding = ExecutionRoleBindingV1::new(release.program(), artifact);
+        let set =
+            ExecutionReleaseSetV1::new(binding, binding, binding, binding, binding).expect("set");
+        let id = ContentId::new(hash(&set.to_bytes()).to_bytes()).expect("id");
+        request.release_set = *id.as_bytes();
+        let observation = DeploymentObservationV2::new(
+            program.to_bytes(),
+            bpf_loader_upgradeable::ID.to_bytes(),
+            true,
+            programdata.to_bytes(),
+            bpf_loader_upgradeable::ID.to_bytes(),
+            false,
+            programdata.to_bytes(),
+            bpf_loader_upgradeable::ID.to_bytes(),
+            slot,
+            commitment,
+            Some(authority),
+        )
+        .expect("observation");
+        let input = ArtifactActivationInputV1::new(artifact, release, observation);
+        let mut bytes = vec![0; ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1];
+        initialize_activation_cache_v1(&mut bytes, id).expect("cache");
+        for role in [
+            ExecutionRoleV1::Core,
+            ExecutionRoleV1::Claims,
+            ExecutionRoleV1::Trading,
+            ExecutionRoleV1::Resolution,
+            ExecutionRoleV1::Custody,
+        ] {
+            activate_execution_role_into_v1(&mut bytes, id, &set, role, &input).expect("activate");
+        }
+        let cache =
+            Pubkey::find_program_address(&[ACTIVATION_PDA_DOMAIN_V1, id.as_bytes()], &registry).0;
+        let mut accounts: Vec<_> = (0..PROTOCOL_POSITION_ADMIT_ACCOUNT_COUNT_V2)
+            .map(|_| {
+                test_account(
+                    Pubkey::new_unique(),
+                    system_program::ID,
+                    false,
+                    false,
+                    false,
+                    vec![],
+                )
+            })
+            .collect();
+        accounts[ADMIT_REGISTRY] =
+            test_account(registry, system_program::ID, false, false, true, vec![]);
+        accounts[ADMIT_CACHE] = test_account(cache, registry, false, false, false, bytes);
+        for (program_index, data_index) in [
+            (ADMIT_TRADING_PROGRAM, ADMIT_TRADING_PROGRAMDATA),
+            (ADMIT_CLAIMS_PROGRAM, ADMIT_CLAIMS_PROGRAMDATA),
+            (ADMIT_CORE_PROGRAM, ADMIT_CORE_PROGRAMDATA),
+        ] {
+            let mut program_bytes = 2_u32.to_le_bytes().to_vec();
+            program_bytes.extend_from_slice(programdata.as_ref());
+            let mut data = 3_u32.to_le_bytes().to_vec();
+            data.extend_from_slice(&slot.to_le_bytes());
+            data.push(1);
+            data.extend_from_slice(&authority);
+            data.extend_from_slice(&[1; 32]);
+            accounts[program_index] = test_account(
+                program,
+                bpf_loader_upgradeable::ID,
+                false,
+                false,
+                true,
+                program_bytes,
+            );
+            accounts[data_index] = test_account(
+                programdata,
+                bpf_loader_upgradeable::ID,
+                false,
+                false,
+                false,
+                data,
+            );
+        }
+        (accounts, request)
+    }
+
+    #[test]
+    fn admit_release_cache_once_preserves_identity_and_each_role() {
+        let (accounts, request) = admit_release_fixture();
+        assert_eq!(
+            authenticate_releases_admit(AdmitAccounts::parse(&accounts).expect("frame"), request),
+            Ok(())
+        );
+        for mutation in 0..10 {
+            let (mut accounts, mut request) = admit_release_fixture();
+            match mutation {
+                0 => accounts[ADMIT_CACHE].key = Box::leak(Box::new(Pubkey::new_unique())),
+                1 => accounts[ADMIT_CACHE].owner = Box::leak(Box::new(Pubkey::new_unique())),
+                2 => accounts[ADMIT_CACHE].is_writable = true,
+                3 => request.release_set = [95; 32],
+                4..=6 => {
+                    let index = [
+                        ADMIT_TRADING_PROGRAMDATA,
+                        ADMIT_CLAIMS_PROGRAMDATA,
+                        ADMIT_CORE_PROGRAMDATA,
+                    ][mutation - 4];
+                    accounts[index].try_borrow_mut_data().expect("data")[4..12]
+                        .copy_from_slice(&78_u64.to_le_bytes());
+                }
+                7..=9 => {
+                    let index = [
+                        ADMIT_TRADING_PROGRAM,
+                        ADMIT_CLAIMS_PROGRAM,
+                        ADMIT_CORE_PROGRAM,
+                    ][mutation - 7];
+                    accounts[index].is_writable = true;
+                }
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                authenticate_releases_admit(
+                    AdmitAccounts::parse(&accounts).expect("frame"),
+                    request
+                ),
+                Err(ProtocolPositionSbfErrorV2::Release.into()),
+                "mutation {mutation}"
+            );
+        }
     }
 
     fn parent_fixture() -> (

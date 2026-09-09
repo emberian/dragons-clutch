@@ -5003,6 +5003,58 @@ fn authenticate_table_dispatch_prestate(
     Ok(())
 }
 
+/// An expired table packet may be re-planned only while it is still outside
+/// the permanently poll-only `Submitted` state and finalized history proves
+/// the exact signed packet absent.
+fn discardable_expired_table_attempt_v1(
+    rpc: &mut Rpc,
+    journal: &TableProvisionJournalV1,
+    expected_cluster: ExpectedClusterV1,
+) -> Result<bool> {
+    let Some(intent) = journal.intent.as_ref() else {
+        return Ok(false);
+    };
+    if matches!(
+        journal.phase,
+        DurablePhaseV1::Submitted | DurablePhaseV1::Finalized
+    ) {
+        return Ok(false);
+    }
+    let height = rpc
+        .call("getBlockHeight", &json!([{"commitment":"finalized"}]))?
+        .as_u64()
+        .ok_or_else(|| Error::new("getBlockHeight result was not a u64"))?;
+    if height <= intent.last_valid_block_height {
+        return Ok(false);
+    }
+    if journal.expected_signature.is_none() {
+        return Ok(true);
+    }
+    Ok(matches!(
+        table_transaction_status(rpc, journal, expected_cluster)?,
+        TableTransactionStatusV1::Pending
+    ))
+}
+
+fn discard_expired_table_attempt_v1(journal: &mut TableProvisionJournalV1) -> Result<()> {
+    if matches!(
+        journal.phase,
+        DurablePhaseV1::Submitted | DurablePhaseV1::Finalized
+    ) {
+        return Err(Error::new(
+            "a submitted or finalized table packet may not be discarded",
+        ));
+    }
+    journal.phase = DurablePhaseV1::Finalized;
+    journal.intent = None;
+    journal.intent_sha256 = None;
+    journal.signed_transaction_base64 = None;
+    journal.signed_transaction_sha256 = None;
+    journal.expected_signature = None;
+    journal.finalized = None;
+    Ok(())
+}
+
 fn reconcile_table_attempt(
     rpc: &mut Rpc,
     path: &Path,
@@ -5208,6 +5260,10 @@ fn run_table_provisioner(
         WritePolicyV1::ReadsOnly
     };
     let mut rpc = Rpc::connect_cluster(&origin, policy)?;
+    if discardable_expired_table_attempt_v1(&mut rpc, &journal, expected_cluster)? {
+        discard_expired_table_attempt_v1(&mut journal)?;
+        write_json(&journal_path, &journal)?;
+    }
     if journal.intent.is_some() {
         let intent = journal.intent.as_ref().expect("checked intent");
         validate_table_intent(&checkpoint, &selected, intent)?;
@@ -5283,7 +5339,15 @@ fn run_table_provisioner(
             let intent = journal.intent.as_ref().expect("checked intent");
             let message = validate_table_intent(&checkpoint, &selected, intent)?;
             authenticate_table_dispatch_prestate(&mut rpc, intent, &message, expected_cluster)?;
-            submit_journaled_table_transaction(&mut rpc, &journal)?;
+            if let Err(error) = submit_journaled_table_transaction(&mut rpc, &journal) {
+                if discardable_expired_table_attempt_v1(&mut rpc, &journal, expected_cluster)? {
+                    discard_expired_table_attempt_v1(&mut journal)?;
+                    write_json(&journal_path, &journal)?;
+                    println!("{}", serde_json::to_string_pretty(&journal)?);
+                    return Ok(());
+                }
+                return Err(error);
+            }
             journal.phase = DurablePhaseV1::Submitted;
             write_json(&journal_path, &journal)?;
             reconcile_table_attempt(
@@ -10201,6 +10265,45 @@ mod tests {
         assert!(authenticate_send_boundary(DurablePhaseV1::Dispatching).is_ok());
         assert!(authenticate_send_boundary(DurablePhaseV1::Submitted).is_err());
         assert!(authenticate_send_boundary(DurablePhaseV1::Finalized).is_err());
+    }
+
+    #[test]
+    fn expired_table_retry_can_discard_only_pre_submission_packet_state() {
+        for phase in [
+            DurablePhaseV1::Planned,
+            DurablePhaseV1::SignedNotSubmitted,
+            DurablePhaseV1::Dispatching,
+        ] {
+            let mut journal = TableProvisionJournalV1 {
+                format: TABLE_PROVISION_JOURNAL_FORMAT.to_owned(),
+                producer_identity_sha256: "11".repeat(32),
+                phase,
+                intent: None,
+                intent_sha256: None,
+                signed_transaction_base64: None,
+                signed_transaction_sha256: None,
+                expected_signature: None,
+                finalized: None,
+                receipts: Vec::new(),
+            };
+            discard_expired_table_attempt_v1(&mut journal).expect("pre-submission is discardable");
+            assert_eq!(journal.phase, DurablePhaseV1::Finalized);
+        }
+        for phase in [DurablePhaseV1::Submitted, DurablePhaseV1::Finalized] {
+            let mut journal = TableProvisionJournalV1 {
+                format: TABLE_PROVISION_JOURNAL_FORMAT.to_owned(),
+                producer_identity_sha256: "11".repeat(32),
+                phase,
+                intent: None,
+                intent_sha256: None,
+                signed_transaction_base64: None,
+                signed_transaction_sha256: None,
+                expected_signature: None,
+                finalized: None,
+                receipts: Vec::new(),
+            };
+            assert!(discard_expired_table_attempt_v1(&mut journal).is_err());
+        }
     }
 
     #[test]

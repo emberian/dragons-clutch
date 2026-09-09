@@ -14,8 +14,7 @@ use dclutch_claims::protocol_position_v2::{
     PROTOCOL_POSITION_ADMISSION_BYTES_V2, PROTOCOL_POSITION_CLOSE_RECEIPT_BYTES_V2,
     PROTOCOL_POSITION_REQUEST_BYTES_V2, ProtocolPositionActionV2, ProtocolPositionAdmissionSeedsV2,
     ProtocolPositionAdmissionV2, ProtocolPositionClaimsCapabilitySeedsV2,
-    ProtocolPositionCloseReceiptV2, ProtocolPositionOwnerKindV2, ProtocolPositionPresenceV2,
-    ProtocolPositionRequestV2, ProtocolPositionSeedsV2,
+    ProtocolPositionCloseReceiptV2, ProtocolPositionSeedsV2,
 };
 use dclutch_claims::rational::{
     RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2, RATIONAL_SHARD_MINT_SEED_V2,
@@ -857,14 +856,7 @@ fn activate_coordinate(
         ],
     )?;
     initialize_structured_custody(accounts)?;
-    let digest = execute_protocol_position(
-        program_id,
-        accounts,
-        request,
-        request_digest,
-        row,
-        ProtocolPositionActionV2::Admit,
-    )?;
+    let digest = execute_protocol_position(program_id, accounts, request, request_digest)?;
     authenticate_closeable_mint(accounts.common, accounts.shard_mint, 0)?;
     authenticate_structured_custody(accounts, 0)?;
     Ok(digest)
@@ -888,14 +880,7 @@ fn retire_coordinate(
     authenticate_structured_custody(accounts, row.expected_structured_amount)?;
     close_token_resource(program_id, accounts.common, accounts.shard_mint)?;
     close_token_resource(program_id, accounts.common, accounts.structured_custody)?;
-    let digest = execute_protocol_position(
-        program_id,
-        accounts,
-        request,
-        request_digest,
-        row,
-        ProtocolPositionActionV2::Close,
-    )?;
+    let digest = execute_protocol_position(program_id, accounts, request, request_digest)?;
     require_closed(accounts.shard_mint)?;
     require_closed(accounts.structured_custody)?;
     require_closed(accounts.position)?;
@@ -1009,37 +994,18 @@ fn execute_protocol_position(
     accounts: CoordinateAccounts<'_, '_>,
     lifecycle: LifecycleRequestV2<'_>,
     lifecycle_digest: [u8; 32],
-    row: LifecycleCoordinateV2,
-    action: ProtocolPositionActionV2,
 ) -> Result<[u8; 32], ProgramError> {
     let header = lifecycle.header();
     let owner = accounts.owner.key.to_bytes();
-    let request = ProtocolPositionRequestV2 {
-        action,
-        owner_kind: ProtocolPositionOwnerKindV2::ClaimsCapability,
-        presence: if action == ProtocolPositionActionV2::Admit {
-            ProtocolPositionPresenceV2::Vacant
-        } else {
-            ProtocolPositionPresenceV2::Existing
-        },
-        release_set: header.release_set,
-        market: header.market,
-        position_owner: owner,
-        parent_request_digest: lifecycle_digest,
-        rent_credit: header.rent_credit,
-        rent_program: header.rent_program,
-        generation: header.generation,
-        expected_market_revision: header.expected_claims_market_revision,
-        expected_position_revision: row.expected_position_revision,
-        observed_position_lamports: row.observed_position_lamports,
-        observed_admission_lamports: row.observed_admission_lamports,
-        position_rent_principal: row.position_rent_principal,
-        admission_rent_principal: row.admission_rent_principal,
-        capability_descriptor: header.descriptor_id,
-        capability_outcome: row.outcome,
+    let request = lifecycle
+        .protocol_position_request(lifecycle_digest)
+        .map_err(|error| {
+            solana_program::msg!("dclutch-claims:rational-position-request {:?}", error);
+            RationalLifecycleSbfErrorV2::Position
+        })?;
+    if request.position_owner != owner {
+        return Err(RationalLifecycleSbfErrorV2::Position.into());
     }
-    .new()
-    .map_err(|_| RationalLifecycleSbfErrorV2::Position)?;
     let request_bytes = request
         .to_bytes()
         .map_err(|_| RationalLifecycleSbfErrorV2::Position)?;
@@ -1063,6 +1029,7 @@ fn execute_protocol_position(
     if accounts.child_authority.key != &expected_authority {
         return Err(RationalLifecycleSbfErrorV2::Release.into());
     }
+    let action = request.action;
     let child_accounts = protocol_position_accounts(accounts, action);
     protocol_position_v2::process(program_id, &child_accounts, &request_bytes)
         .map_err(|_| RationalLifecycleSbfErrorV2::Position)?;

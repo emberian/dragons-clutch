@@ -4913,7 +4913,7 @@ pub(crate) fn publish_future_market_immutable_records_v1(
         registry,
         input,
         collateral_mint,
-        targets.open_market,
+        targets.found31_market,
         release_set,
         payer,
         transactions,
@@ -4922,18 +4922,21 @@ pub(crate) fn publish_future_market_immutable_records_v1(
     // but projected-Custody authenticates this lifecycle credit on every
     // operation.  Create it through Rent's real instruction now; it is the
     // prepaid lifecycle sink, not a preseeded Core or custody state.
-    let generation = open_market_generation_v1(input)?;
+    // This publisher names one future Market at the input generation.
+    // The ordinary campaign's open_market is generation + 1 because it first
+    // exercises a separate Found/Abort path; Series occurrence zero is one.
+    let generation = input.generation;
     let rent_program = pubkey(&plan.rent_credit.program_id)?;
     let credit = Pubkey::find_program_address(
         &[
             LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
-            targets.open_market.as_ref(),
+            targets.found31_market.as_ref(),
             &generation.to_le_bytes(),
         ],
         &rent_program,
     )
     .0;
-    let keys = found_snapshot_keys(plan, payer.pubkey(), targets.open_market, credit, &records)?;
+    let keys = found_snapshot_keys(plan, payer.pubkey(), targets.found31_market, credit, &records)?;
     let minimum_slot = transactions
         .last()
         .map(|transaction| transaction.slot)
@@ -4948,12 +4951,12 @@ pub(crate) fn publish_future_market_immutable_records_v1(
             plan,
             &snapshot,
             payer.pubkey(),
-            targets.open_market,
+            targets.found31_market,
             &records,
         )?,
     )
     .map_err(|error| Error::new(format!("future M0 ProjectFound projection: {error:?}")))?;
-    if projection.market_address != targets.open_market {
+    if projection.market_address != targets.found31_market {
         return Err(Error::new(
             "future M0 ProjectFound changed the canonical child Market",
         ));
@@ -4991,7 +4994,7 @@ pub(crate) fn publish_future_market_immutable_records_v1(
     let project_found = ordinary_project_found_snapshot_keys_v2(
         plan,
         payer.pubkey(),
-        targets.open_market,
+        targets.found31_market,
         credit,
         &records,
     )?;

@@ -29,6 +29,8 @@ pub mod compact_hot_v4;
 pub mod hot_v3;
 /// Market-neutral Hot V6 family specialization with descriptor-account equality.
 pub mod hot_v6;
+mod position_request;
+pub use position_request::CoordinatePositionRequestErrorV2;
 
 /// Exact fixed lifecycle request header width.
 pub const LIFECYCLE_HEADER_BYTES_V2: usize = 400;

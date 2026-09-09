@@ -447,7 +447,7 @@ fn fixture_for(campaign: CampaignV1) -> (ProgramTest, Fixture) {
     let cache = Pubkey::find_program_address(&[ACTIVATION_PDA_DOMAIN_V1, &release], &REGISTRY).0;
     add_account(&mut test, cache, REGISTRY, cache_bytes, 1);
     let wrong_owner = Pubkey::new_from_array([0xd2; 32]);
-    let graph = compile_product_lbv2_fixture_v2(ProductLbv2FixtureInputV2 {
+    let graph_input = ProductLbv2FixtureInputV2 {
         registry_program: REGISTRY,
         core_program: CORE,
         claims_program: CLAIMS,
@@ -457,8 +457,28 @@ fn fixture_for(campaign: CampaignV1) -> (ProgramTest, Fixture) {
         generation: GENERATION,
         source_owner: Pubkey::new_from_array([0xa1; 32]),
         destination_owner: Pubkey::new_from_array([0xa2; 32]),
+    };
+    let projected_graph = compile_product_lbv2_fixture_v2(graph_input)
+        .expect("project protocol Position Market before RentCredit creation");
+    let refund = RefundAuthority::new([0x71; 32]).expect("refund authority");
+    let (rent_credit, bump) = Pubkey::find_program_address(
+        &[
+            LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
+            projected_graph.core_market.as_ref(),
+            &GENERATION.to_le_bytes(),
+        ],
+        &RENT_PROGRAM,
+    );
+    // Core owns the canonical rent beneficiary.  Compile the final graph with
+    // that exact lifecycle RentCredit instead of leaving the provisional
+    // source owner in Core state; the latter is self-consistent fixture data
+    // but no protocol Position admission can authenticate it.
+    let graph = compile_product_lbv2_fixture_v2(ProductLbv2FixtureInputV2 {
+        source_owner: rent_credit,
+        ..graph_input
     })
-    .expect("Product/LBV2 fixture");
+    .expect("Product/LBV2 fixture with lifecycle RentCredit");
+    assert_eq!(graph.core_market, projected_graph.core_market);
     for record in [
         &graph.product,
         &graph.result_domain,
@@ -480,15 +500,6 @@ fn fixture_for(campaign: CampaignV1) -> (ProgramTest, Fixture) {
         CLAIMS,
         graph.claims_market_bytes.clone(),
         1,
-    );
-    let refund = RefundAuthority::new([0x71; 32]).expect("refund authority");
-    let (rent_credit, bump) = Pubkey::find_program_address(
-        &[
-            LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
-            graph.core_market.as_ref(),
-            &GENERATION.to_le_bytes(),
-        ],
-        &RENT_PROGRAM,
     );
     let rent_credit_data = LifecycleRentCreditV2::new(
         refund,

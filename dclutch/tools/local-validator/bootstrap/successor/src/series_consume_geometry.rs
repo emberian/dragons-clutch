@@ -196,7 +196,11 @@ pub(crate) fn m0_nonrecord_v1<'a>(
         .finalized_accounts
         .iter()
         .find(|account| account.address == address)
-        .ok_or_else(|| Error::new("Series Consume M0 omitted finalized non-record account"))?;
+        .ok_or_else(|| {
+            Error::new(format!(
+                "Series Consume M0 omitted finalized non-record account {address}"
+            ))
+        })?;
     Ok(final_source_v1(
         "finalized M0 account",
         address,

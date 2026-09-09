@@ -2931,6 +2931,11 @@ mod tests {
             AccountPrestateV2::AdapterAuthenticatedVariableDataAlias
         );
         assert_eq!(profile.representative(0, 14), Ok(4));
+        assert_eq!(
+            profile.representative_with_dynamic_spans(0, &[], 14),
+            Err(Error::InvalidDynamicSpan),
+            "zero spans do not grant an older profile the dynamic API",
+        );
 
         let mut state = [0_u8; 12];
         *state.get_mut(11).expect("bump") = 0xa5;
@@ -5529,6 +5534,21 @@ mod tests {
         .expect("fixed-topology profile13");
         let profile = AccountProfileV2::decode(&output).expect("decode fixed profile13");
         assert_eq!(profile.dynamic_fixed_span_count(), 0);
+        assert_eq!(profile.representative_with_dynamic_spans(99, &[], 0), Ok(0));
+        assert_eq!(
+            profile.representative_with_dynamic_spans(99, &[0], 0),
+            Err(Error::InvalidDynamicSpan),
+            "even a zero-valued undeclared span is forbidden",
+        );
+        assert_eq!(
+            profile.representative_with_dynamic_spans(
+                99,
+                &[],
+                usize::from(profile.fixed_account_count())
+            ),
+            Err(Error::InvalidCoordinate),
+            "Product tail width cannot extend a zero-span fixed frame",
+        );
         assert_eq!(
             profile.logical_account_count_with_dynamic_spans(99, &[]),
             Ok(2)

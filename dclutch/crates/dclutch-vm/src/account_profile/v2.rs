@@ -1484,6 +1484,13 @@ impl<'a> AccountProfileV2<'a> {
         span_counts: &[u32],
         coordinate: usize,
     ) -> Result<usize> {
+        // A retained Profile13/14 wire with no declared spans has fixed
+        // geometry. Check the supplied span bank before sharing the fixed
+        // representative owner; no dynamic rule-location replay is needed.
+        if self.dynamic_fixed_span_count == 0 {
+            require_dynamic_span_counts(self, span_counts)?;
+            return self.representative(tail_count, coordinate);
+        }
         dynamic_representative(self, tail_count, span_counts, coordinate)
     }
 
@@ -2630,7 +2637,13 @@ fn validate_accounts(
                 return Err(Error::InvalidAlias);
             }
             expanded_rule(profile, representative)?
-        } else if rule.prestate == AccountPrestateV2::AuthenticatedRouteAlias {
+        } else if matches!(
+            rule.prestate,
+            AccountPrestateV2::AuthenticatedRouteAlias
+                | AccountPrestateV2::AdapterAuthenticatedVariableDataAlias
+        ) {
+            // Profile9 variable-data aliases authenticate their representative's
+            // marker too, even though they retain their own readonly privileges.
             expanded_rule(profile, representative)?
         } else {
             rule
@@ -2750,6 +2763,14 @@ fn validate_accounts_with_dynamic_spans(
 ) -> Result<()> {
     if accounts.len() != dynamic_account_width(profile, tail_count, span_counts)? {
         return Err(Error::WidthMismatch);
+    }
+    // Zero declared spans preserves every fixed coordinate and alias. The
+    // checked dynamic width above also enforces an empty supplied span bank.
+    // Share the fixed validator, including privilege, prestate, data, alias,
+    // uniqueness and permission checks, instead of replaying zero-span lookup
+    // for each rule and representative.
+    if profile.dynamic_fixed_span_count == 0 {
+        return validate_accounts(profile, tail_count, accounts, permissions);
     }
     if let Some(bank) = permissions.as_deref()
         && bank.len() != accounts.len()

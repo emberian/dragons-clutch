@@ -753,6 +753,20 @@ fn observe_series_prepare_m0_accounts_v1(
             addresses.push(address);
         }
     }
+    // Custody consumes the Realm's Mint and Token program even though Core's
+    // ProjectFound frame authenticates their identities through the Realm.
+    let realm_record = records
+        .iter()
+        .find(|record| record.raw == publication.realm.raw)
+        .ok_or_else(|| Error::new("Series M0 publication omitted Realm record"))?;
+    let realm = dclutch_market::realm::RealmV1::decode(realm_record.body)
+        .map_err(|error| Error::new(format!("Series M0 Realm record: {error:?}")))?;
+    for key in [realm.collateral_mint(), realm.token_program()] {
+        let address = Pubkey::new_from_array(*key);
+        if !addresses.contains(&address) {
+            addresses.push(address);
+        }
+    }
     let (_, accounts) = rpc.finalized_accounts(&addresses, minimum_slot)?;
     addresses
         .into_iter()

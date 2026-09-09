@@ -425,3 +425,109 @@ fn compact_dynamic_retirement_derives_sparse_rows_and_preserves_output_on_wrong_
     assert_eq!(nonzero_bytes, before_header);
     assert_eq!(output, accepted);
 }
+
+#[test]
+fn nested_position_projection_preserves_exact_admit_and_close_bytes() {
+    use crate::protocol_position_v2::{
+        ProtocolPositionActionV2, ProtocolPositionOwnerKindV2, ProtocolPositionPresenceV2,
+        ProtocolPositionRequestV2,
+    };
+    for (action, position_action, presence) in [
+        (
+            LifecycleActionV2::ActivateCoordinate,
+            ProtocolPositionActionV2::Admit,
+            ProtocolPositionPresenceV2::Vacant,
+        ),
+        (
+            LifecycleActionV2::RetireCoordinate,
+            ProtocolPositionActionV2::Close,
+            ProtocolPositionPresenceV2::Existing,
+        ),
+    ] {
+        let mut row = coordinate(2, 7, false);
+        row.position_rent_principal = 91;
+        row.admission_rent_principal = 92;
+        let wire = request_bytes(header(action, 1), &[row]);
+        let request = LifecycleRequestV2::decode(&wire).expect("lifecycle");
+        // Independent expected wire, with unequal observed/principal coordinates
+        // so a swapped rent field cannot preserve this equality.
+        let expected = ProtocolPositionRequestV2 {
+            action: position_action,
+            owner_kind: ProtocolPositionOwnerKindV2::ClaimsCapability,
+            presence,
+            release_set: id(7),
+            market: id(6),
+            position_owner: id(38),
+            parent_request_digest: id(50),
+            rent_credit: id(12),
+            rent_program: id(13),
+            generation: 14,
+            expected_market_revision: 15,
+            expected_position_revision: 0,
+            observed_position_lamports: 130,
+            observed_admission_lamports: 100,
+            position_rent_principal: 91,
+            admission_rent_principal: 92,
+            capability_descriptor: id(9),
+            capability_outcome: 2,
+        }
+        .new()
+        .expect("independent expected request")
+        .to_bytes()
+        .expect("expected bytes");
+        assert_eq!(
+            request
+                .protocol_position_request(id(50))
+                .expect("projection")
+                .to_bytes()
+                .expect("projected bytes"),
+            expected
+        );
+        let changed_digest = request
+            .protocol_position_request(id(51))
+            .expect("new digest");
+        assert_eq!(changed_digest.parent_request_digest, id(51));
+        assert_ne!(changed_digest.to_bytes().expect("changed bytes"), expected);
+    }
+}
+
+#[test]
+fn nested_position_projection_refuses_receipt_actions_and_retains_position_causes() {
+    use crate::protocol_position_v2::ProtocolPositionErrorV2;
+    for action in [
+        LifecycleActionV2::ActivateReceipt,
+        LifecycleActionV2::RetireReceipt,
+    ] {
+        let wire = request_bytes(header(action, 0), &[]);
+        assert_eq!(
+            LifecycleRequestV2::decode(&wire)
+                .expect("receipt")
+                .protocol_position_request(id(50)),
+            Err(CoordinatePositionRequestErrorV2::Action)
+        );
+    }
+    let row = coordinate(2, 7, false);
+    let wire = request_bytes(header(LifecycleActionV2::ActivateCoordinate, 1), &[row]);
+    assert_eq!(
+        LifecycleRequestV2::decode(&wire)
+            .expect("coordinate")
+            .protocol_position_request([0; 32]),
+        Err(CoordinatePositionRequestErrorV2::Position(
+            ProtocolPositionErrorV2::InvalidIdentity
+        ))
+    );
+    let mut short_rent = row;
+    short_rent.position_rent_principal = row.observed_position_lamports + 1;
+    let wire = request_bytes(
+        header(LifecycleActionV2::ActivateCoordinate, 1),
+        &[short_rent],
+    );
+    assert_eq!(
+        LifecycleRequestV2::decode(&wire)
+            .expect("structural lifecycle")
+            .protocol_position_request(id(50)),
+        Err(CoordinatePositionRequestErrorV2::Position(
+            ProtocolPositionErrorV2::InvalidRent
+        ))
+    );
+}

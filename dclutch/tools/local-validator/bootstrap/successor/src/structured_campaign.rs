@@ -16,10 +16,8 @@ use dclutch_claims::{
         liability_basis_vector_width_v2,
     },
     protocol_position_v2::{
-        PROTOCOL_POSITION_ADMISSION_BYTES_V2, ProtocolPositionActionV2,
-        ProtocolPositionAdmissionSeedsV2, ProtocolPositionClaimsCapabilitySeedsV2,
-        ProtocolPositionOwnerKindV2, ProtocolPositionPresenceV2, ProtocolPositionRequestV2,
-        ProtocolPositionSeedsV2,
+        PROTOCOL_POSITION_ADMISSION_BYTES_V2, ProtocolPositionAdmissionSeedsV2,
+        ProtocolPositionClaimsCapabilitySeedsV2, ProtocolPositionSeedsV2,
     },
     rational::{RATIONAL_SHARD_MINT_SEED_V2, RATIONAL_STRUCTURED_CUSTODY_SEED_V2},
     rational_kernel::RepresentationDescriptorV2,
@@ -2822,38 +2820,14 @@ fn activate_structured_coordinates_v1(
                 Error::new(format!("Structured coordinate lifecycle encode: {error:?}"))
             })?;
         let lifecycle_digest = hash(&lifecycle_bytes).to_bytes();
-        let protocol = ProtocolPositionRequestV2 {
-            action: if retiring {
-                ProtocolPositionActionV2::Close
-            } else {
-                ProtocolPositionActionV2::Admit
-            },
-            owner_kind: ProtocolPositionOwnerKindV2::ClaimsCapability,
-            presence: if retiring {
-                ProtocolPositionPresenceV2::Existing
-            } else {
-                ProtocolPositionPresenceV2::Vacant
-            },
-            release_set: header.release_set,
-            market: header.market,
-            position_owner: owner.to_bytes(),
-            parent_request_digest: lifecycle_digest,
-            rent_credit: header.rent_credit,
-            rent_program: header.rent_program,
-            generation: header.generation,
-            expected_market_revision: header.expected_claims_market_revision,
-            expected_position_revision: row.expected_position_revision,
-            observed_position_lamports: row.observed_position_lamports,
-            observed_admission_lamports: row.observed_admission_lamports,
-            position_rent_principal: row.position_rent_principal,
-            admission_rent_principal: row.admission_rent_principal,
-            capability_descriptor: header.descriptor_id,
-            capability_outcome: row.outcome,
-        }
-        .new()
-        .map_err(|error| {
-            Error::new(format!("Structured coordinate Position request: {error:?}"))
-        })?;
+        let protocol = LifecycleRequestV2::decode(&lifecycle_bytes)
+            .map_err(|error| {
+                Error::new(format!("Structured coordinate lifecycle decode: {error:?}"))
+            })?
+            .protocol_position_request(lifecycle_digest)
+            .map_err(|error| {
+                Error::new(format!("Structured coordinate Position request: {error:?}"))
+            })?;
         let protocol_bytes = protocol.to_bytes().map_err(|error| {
             Error::new(format!("Structured coordinate Position encode: {error:?}"))
         })?;

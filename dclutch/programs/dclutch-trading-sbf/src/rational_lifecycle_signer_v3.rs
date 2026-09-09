@@ -1,10 +1,7 @@
 //! Trading's delegated protocol-Position signature for a Claims coordinate.
 use crate::TradingSbfError;
 use dclutch_claims::{
-    protocol_position_v2::{
-        ProtocolPositionActionV2, ProtocolPositionClaimsCapabilitySeedsV2,
-        ProtocolPositionOwnerKindV2, ProtocolPositionPresenceV2, ProtocolPositionRequestV2,
-    },
+    protocol_position_v2::ProtocolPositionClaimsCapabilitySeedsV2,
     rational_lifecycle::{
         LIFECYCLE_COORDINATE_ACCOUNT_COUNT_V2, LifecycleActionV2, LifecycleRequestV2,
     },
@@ -24,11 +21,12 @@ pub(super) fn rational_lifecycle_signer_v3(
 ) -> Result<Option<(CallerAuthoritySeedsV1, u8)>, ProgramError> {
     let request = LifecycleRequestV2::decode(wire).map_err(|_| TradingSbfError::Content)?;
     let header = request.header();
-    let action = match header.action {
-        LifecycleActionV2::ActivateCoordinate => ProtocolPositionActionV2::Admit,
-        LifecycleActionV2::RetireCoordinate => ProtocolPositionActionV2::Close,
-        LifecycleActionV2::ActivateReceipt | LifecycleActionV2::RetireReceipt => return Ok(None),
-    };
+    if !matches!(
+        header.action,
+        LifecycleActionV2::ActivateCoordinate | LifecycleActionV2::RetireCoordinate
+    ) {
+        return Ok(None);
+    }
     if accounts.len() != LIFECYCLE_COORDINATE_ACCOUNT_COUNT_V2 || metas.len() != accounts.len() {
         return Err(TradingSbfError::Content.into());
     }
@@ -48,32 +46,12 @@ pub(super) fn rational_lifecycle_signer_v3(
     }
     // This is the exact request Claims executes internally after authenticating
     // the coordinate. Its digest covers the specialized V2 wire, never V6.
-    let position = ProtocolPositionRequestV2 {
-        action,
-        owner_kind: ProtocolPositionOwnerKindV2::ClaimsCapability,
-        presence: if action == ProtocolPositionActionV2::Admit {
-            ProtocolPositionPresenceV2::Vacant
-        } else {
-            ProtocolPositionPresenceV2::Existing
-        },
-        release_set: header.release_set,
-        market: header.market,
-        position_owner: expected_owner.to_bytes(),
-        parent_request_digest: hash(wire).to_bytes(),
-        rent_credit: header.rent_credit,
-        rent_program: header.rent_program,
-        generation: header.generation,
-        expected_market_revision: header.expected_claims_market_revision,
-        expected_position_revision: row.expected_position_revision,
-        observed_position_lamports: row.observed_position_lamports,
-        observed_admission_lamports: row.observed_admission_lamports,
-        position_rent_principal: row.position_rent_principal,
-        admission_rent_principal: row.admission_rent_principal,
-        capability_descriptor: header.descriptor_id,
-        capability_outcome: row.outcome,
-    }
-    .new()
-    .map_err(|_| TradingSbfError::Content)?;
+    let position = request
+        .protocol_position_request(hash(wire).to_bytes())
+        .map_err(|error| {
+            solana_program::msg!("dclutch-hot:rational-position-request {:?}", error);
+            TradingSbfError::Content
+        })?;
     let bytes = position.to_bytes().map_err(|_| TradingSbfError::Content)?;
     let seeds = CallerAuthoritySeedsV1::from_bytes(
         header.release_set,
@@ -101,6 +79,10 @@ pub(super) fn rational_lifecycle_signer_v3(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dclutch_claims::protocol_position_v2::{
+        ProtocolPositionActionV2, ProtocolPositionOwnerKindV2, ProtocolPositionPresenceV2,
+        ProtocolPositionRequestV2,
+    };
     use dclutch_claims::rational_lifecycle::{
         LIFECYCLE_COORDINATE_BYTES_V2, LIFECYCLE_HEADER_BYTES_V2, LifecycleCoordinateV2,
         LifecycleHeaderV2,

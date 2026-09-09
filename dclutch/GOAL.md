@@ -59,6 +59,7 @@ the tail; the pre-2026-09-01 ledger starts at line 289), and before it
 
 | when | delta | ledger | store |
 | --- | --- | --- | --- |
+| 2026-09-09 | Exact source fd7e5fec builds and seals all eight production ELFs and the ArtifactRelease V2 genesis pack; two independent captures admit its complete production frame baseline | — | [V2 checked build and frame evidence](docs/evidence/STRICT_ALL_EIGHT_V2_FD7_FRAMES_2026_09_09.md) |
 | 2026-09-09 | Existing Pages renders Scoring Dealer redeem/close and the current Core retirement handler; the established workflow deploys the exact publication cut | — | [explorer publication](docs/evidence/PAGES_SCORING_EXPLORER_2026_09_09.md) |
 | 2026-09-09 | Local Structured genesis authenticates the captured external Token code with an explicitly immutable Loader account, correcting the native CLI helper counterexample | — | [Token genesis fidelity](docs/evidence/STRUCTURED_TOKEN_GENESIS_FIDELITY_2026_09_09.md) |
 | 2026-09-09 | Registry verifies a 4 MiB Loader payload in four bounded SBF transactions, rejects changed commitments and Loader extensions, and refunds aborted staging; exact-cohort execution remains owed | — | [chunked code verification](docs/evidence/REGISTRY_ARTIFACT_V2_CHUNKED_FINALIZATION_2026_09_09.md) |
