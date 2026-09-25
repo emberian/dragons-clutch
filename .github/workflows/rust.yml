@@ -114,7 +114,7 @@ jobs:
     # seeds already understated this route's worst draw by 7,659 CU once.
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Is the Rust tier in the published subtree yet?
         id: probe
@@ -132,7 +132,7 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         if: steps.probe.outputs.present == '1'
         with:
           path: |
@@ -220,7 +220,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Is the Rust tier in the published subtree yet?
         id: probe
@@ -232,7 +232,7 @@ jobs:
             echo "::warning::dclutch/tools/gate is not in the published subtree yet, so the journey compile check did not run."
           fi
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         if: steps.probe.outputs.present == '1'
         with:
           path: |
@@ -282,7 +282,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Is the Rust tier in the published subtree yet?
         id: probe
@@ -294,7 +294,7 @@ jobs:
             echo "::warning::dclutch/tools/gate is not in the published subtree yet, so no program-test suite ran."
           fi
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         if: steps.probe.outputs.present == '1'
         with:
           path: |
@@ -362,7 +362,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # The tool archives a revision out of the repository's own history,
           # so a depth-1 checkout cannot give it one.
@@ -416,7 +416,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Is the Rust tier in the published subtree yet?
         id: probe
@@ -463,7 +463,7 @@ jobs:
       # is what stops it lying when the step is missing. Both are wanted --
       # the runner is not the only host that can have a cold registry.
       # -------------------------------------------------------------------
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         if: steps.probe.outputs.present == '1'
         with:
           path: |

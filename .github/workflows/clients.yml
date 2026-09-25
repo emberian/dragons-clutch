@@ -99,7 +99,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Is the web tier in the published subtree yet?
         id: probe
@@ -112,7 +112,7 @@ jobs:
             echo "web tier: NOT RUN (not in the published subtree)" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         if: steps.probe.outputs.present == '1'
         with:
           node-version: 22
@@ -124,7 +124,7 @@ jobs:
       # `rust-toolchain.toml` pins the channel, so rustup resolves it from the
       # tree and this file states no version. The same rule rust.yml states
       # about the compute constant: the pin has one owner.
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         if: steps.probe.outputs.present == '1'
         with:
           path: |
@@ -223,7 +223,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Is the abi tier in the published subtree yet?
         id: probe
@@ -241,7 +241,7 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         if: steps.probe.outputs.present == '1'
         with:
           node-version: 22
@@ -250,7 +250,7 @@ jobs:
             dclutch/apps/dclutch-web/package-lock.json
             dclutch/packages/dclutch-sdk/package-lock.json
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         if: steps.probe.outputs.present == '1'
         with:
           path: |
@@ -347,7 +347,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Is the emission tier in the published subtree yet?
         id: probe
@@ -365,7 +365,7 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         if: steps.probe.outputs.present == '1'
         with:
           node-version: 22
@@ -374,7 +374,7 @@ jobs:
             dclutch/apps/dclutch-web/package-lock.json
             dclutch/packages/dclutch-sdk/package-lock.json
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         if: steps.probe.outputs.present == '1'
         with:
           path: |
