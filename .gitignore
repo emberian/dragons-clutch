@@ -9,6 +9,12 @@ target/
 *.profraw
 *.profdata
 *.so
+# tracked deliberately: the gen1 archive, dated evidence runs, and the
+# upstream Pyth program fixtures recorded in their PROVENANCE.md
+!/archive/gen1/**/*.log
+!/archive/gen1/**/*.so
+!/dclutch/docs/evidence/**/*.log
+!/dclutch/fixtures/pyth/**/*.so
 *.dylib
 *.dll
 *.exe
