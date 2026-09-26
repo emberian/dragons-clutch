@@ -26,6 +26,8 @@ members = ["cargo:dclutch/tools/dclutch-cli"]
 [dist]
 # Pinned. A release is reproducible only if the thing that builds it is.
 cargo-dist-version = "0.31.0"
+# The plan job holds contents: write; do not run it on pull requests.
+pr-run-mode = "skip"
 ci = ["github"]
 installers = ["shell"]
 targets = [
@@ -40,3 +42,10 @@ install-updater = false
 # `publish = false` and could not go to crates.io anyway: every protocol
 # dependency it has is a path dependency into the subtree.
 publish-jobs = []
+
+# Actions in the generated release.yml, pinned to the commit each tag named here pointed at.
+# Update by re-resolving the tag and re-running `dist generate`; never run pinact on release.yml.
+[dist.github-action-commits]
+"actions/checkout" = "d23441a48e516b6c34aea4fa41551a30e30af803" # v6
+"actions/download-artifact" = "37930b1c2abaa49bbe596cd826c3c89aef350131" # v7
+"actions/upload-artifact" = "b7c566a772e6b6bfb58ed0dc250532a479d7789f" # v6
